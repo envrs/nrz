@@ -16,16 +16,16 @@ The registry supports the npm web login flow. Point your client at
 your registry and log in:
 
 <Code
-  code="$ nrz login --registry=https://registry.nrz.io/acme/main/"
+  code="$ nrz login --registry=https://registry.nrz.khulnasoft.com/acme/main/"
   title="Terminal"
   lang="bash"
 />
 
-Your browser opens nrz.io to confirm the login, and the client stores
+Your browser opens nrz.khulnasoft.com to confirm the login, and the client stores
 the resulting token in the nrz keychain. npm works the same way:
 
 <Code
-  code="$ npm login --auth-type=web --registry=https://registry.nrz.io/acme/main/"
+  code="$ npm login --auth-type=web --registry=https://registry.nrz.khulnasoft.com/acme/main/"
   title="Terminal"
   lang="bash"
 />
@@ -68,7 +68,7 @@ request.
 ## Managing tokens
 
 Create, inspect, and revoke tokens from your account's token settings
-in the [dashboard](https://www.nrz.io/). Members can create and revoke
+in the [dashboard](https://www.nrz.khulnasoft.com/). Members can create and revoke
 their own personal tokens; owners and admins can also manage service
 tokens.
 
@@ -85,7 +85,7 @@ Provide a token through the environment rather than a config file. The
 portable form is `NRZ_TOKEN` alongside `NRZ_REGISTRY`:
 
 <Code
-  code={`NRZ_REGISTRY=https://registry.nrz.io/acme/main/ \\
+  code={`NRZ_REGISTRY=https://registry.nrz.khulnasoft.com/acme/main/ \\
 NRZ_TOKEN="<service token>" nrz install`}
   title="Terminal"
   lang="bash"
@@ -115,8 +115,8 @@ With npm, use the standard `.npmrc` auth entry, ideally referencing an
 environment variable:
 
 <Code
-  code={`@acme:registry=https://registry.nrz.io/acme/main/
-//registry.nrz.io/acme/main/:_authToken=\${NPM_TOKEN}`}
+  code={`@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
+//registry.nrz.khulnasoft.com/acme/main/:_authToken=\${NPM_TOKEN}`}
   title=".npmrc"
   lang="ini"
 />

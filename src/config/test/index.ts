@@ -225,7 +225,7 @@ t.test('get', async t => {
   t.test('npm-style @scope:registry', async t => {
     const mockOptions = {
       'scoped-registries': [
-        '@darcy=https://registry.nrz.io/darcy/main/',
+        '@darcy=https://registry.nrz.khulnasoft.com/darcy/main/',
       ],
     }
     const { result } = await run(
@@ -233,7 +233,7 @@ t.test('get', async t => {
       ['get', '@darcy:registry'],
       mockOptions,
     )
-    t.strictSame(result, 'https://registry.nrz.io/darcy/main/')
+    t.strictSame(result, 'https://registry.nrz.khulnasoft.com/darcy/main/')
   })
 
   t.test('dot-prop non-existent registry', async t => {
@@ -512,7 +512,7 @@ t.test('set', async t => {
         t,
         [
           'set',
-          '@darcy:registry=https://registry.nrz.io/darcy/main/',
+          '@darcy:registry=https://registry.nrz.khulnasoft.com/darcy/main/',
         ],
         { config: 'project' },
       )
@@ -520,7 +520,7 @@ t.test('set', async t => {
       const [which, configData] = conf.addedConfig!
       t.equal(which, 'project')
       t.strictSame(configData['scoped-registries'], {
-        '@darcy': 'https://registry.nrz.io/darcy/main/',
+        '@darcy': 'https://registry.nrz.khulnasoft.com/darcy/main/',
       })
     })
 

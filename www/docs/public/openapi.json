@@ -4,7 +4,7 @@
     "title": "nrz docs",
     "version": "1.0.0",
     "summary": "Read-only HTTP API of the nrz documentation site.",
-    "description": "Search the nrz docs and fetch pages as Markdown. Every endpoint is public and needs no authentication. This describes the documentation site only, not the nrz.io registry (which speaks the npm registry protocol at https://registry.nrz.io). Versioned in the URL path (`/api/v1/`). Breaking changes ship under a new version. A version being retired answers with a `Deprecation` header (RFC 9745) and a `Link` to its successor, then a `Sunset` header (RFC 8594) with the removal date before it is removed.",
+    "description": "Search the nrz docs and fetch pages as Markdown. Every endpoint is public and needs no authentication. This describes the documentation site only, not the nrz.khulnasoft.com registry (which speaks the npm registry protocol at https://registry.nrz.khulnasoft.com). Versioned in the URL path (`/api/v1/`). Breaking changes ship under a new version. A version being retired answers with a `Deprecation` header (RFC 9745) and a `Link` to its successor, then a `Sunset` header (RFC 8594) with the removal date before it is removed.",
     "license": {
       "name": "BSD-2-Clause-Patent",
       "identifier": "BSD-2-Clause-Patent"
@@ -196,7 +196,12 @@
     "schemas": {
       "SearchResult": {
         "type": "object",
-        "required": ["id", "url", "type", "content"],
+        "required": [
+          "id",
+          "url",
+          "type",
+          "content"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -206,7 +211,11 @@
             "description": "Site-relative URL of the page, with a #fragment for heading and text hits."
           },
           "type": {
-            "enum": ["page", "heading", "text"]
+            "enum": [
+              "page",
+              "heading",
+              "text"
+            ]
           },
           "content": {
             "type": "string",
@@ -223,11 +232,17 @@
       "Error": {
         "description": "Returned with a 404 by any /api path that is not listed here.",
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message", "hint"],
+            "required": [
+              "code",
+              "message",
+              "hint"
+            ],
             "properties": {
               "code": {
                 "type": "string",

@@ -11,7 +11,7 @@ one with [`nrz registry <alias> <command>`](/client/commands/registry)
 (for example `nrz registry main whoami`). See
 [Targeting a specific registry](/client/registries#targeting-a-specific-registry).
 
-If you're setting up a nrz.io account for the first time, start with
+If you're setting up a nrz.khulnasoft.com account for the first time, start with
 [`nrz setup`](/client/registries#getting-started-with-nrz-setup) — it
 authenticates and configures your account's registry aliases in one
 step. The commands below cover logging into individual registries
@@ -67,7 +67,7 @@ NRZ_TOKEN="helloworldtokendeadbeef" nrz install
 To provide a token for other registries, set a `NRZ_TOKEN_{...}`
 variable named after the registry URL: drop the trailing `/` and
 replace each run of non-alphanumeric characters with `_`. The path is
-part of the name, e.g. `https://registry.nrz.io/acme/main/` becomes
+part of the name, e.g. `https://registry.nrz.khulnasoft.com/acme/main/` becomes
 `NRZ_TOKEN_https_registry_nrz_io_acme_main`.
 
 ```
@@ -89,7 +89,7 @@ exchanges it with the registry for a short-lived publish token.
 Everything happens behind the scenes.
 
 Note that this requires a registry that supports OIDC trusted
-publishing. The nrz.io registry currently does not — use a
+publishing. The nrz.khulnasoft.com registry currently does not — use a
 [service token](/registry/publishing/ci) there.
 
 ### Supported Providers

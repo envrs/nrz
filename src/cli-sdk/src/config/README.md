@@ -79,7 +79,7 @@ Bare specifiers (`foo`, `foo@latest`) and transitive dependencies
 without an explicit registry protocol resolve through the registry
 alias named by `--default-registry-alias` (`npm` by default). The
 `npm` alias itself has **no** built-in URL -- run `nrz setup` (which
-points it at your nrz.io account registry) or configure
+points it at your nrz.khulnasoft.com account registry) or configure
 `registries.npm` yourself. Only the `gh:` and `jsr:` aliases (and the
 `@jsr` scope mapping) keep built-in URLs; all aliases are
 user-overridable within their own map. A name in more than one of

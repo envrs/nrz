@@ -158,7 +158,7 @@ const registry = createServer((req, res) => {
     }
   }
 
-  // a login against a registry path that does not exist, eg a nrz.io
+  // a login against a registry path that does not exist, eg a nrz.khulnasoft.com
   // account slug that was mistyped
   if (/^\/nope\/-\/v1\/login$/.test(url)) {
     res.statusCode = loginFailStatus

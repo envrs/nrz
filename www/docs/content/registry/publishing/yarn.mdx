@@ -1,7 +1,7 @@
 ---
 title: yarn
 description:
-  Configure Yarn for your nrz.io registries, and publish to main.
+  Configure Yarn for your nrz.khulnasoft.com registries, and publish to main.
 sidebar:
   label: yarn
   order: 4
@@ -15,7 +15,7 @@ Verified against **Yarn 4.18** (Yarn Modern / Berry). For Yarn Classic
 ```sh
 export NRZ_TOKEN=<your token>
 
-yarn config set npmRegistryServer "https://registry.nrz.io/acme/npm/"
+yarn config set npmRegistryServer "https://registry.nrz.khulnasoft.com/acme/npm/"
 yarn config set npmAlwaysAuth true
 yarn config set npmAuthToken "\${NRZ_TOKEN}"
 ```
@@ -28,15 +28,15 @@ Yarn keeps everything in `.yarnrc.yml` in your project root:
 
 ```yaml
 # all public npm packages come from your account mirror
-npmRegistryServer: 'https://registry.nrz.io/acme/npm/'
+npmRegistryServer: 'https://registry.nrz.khulnasoft.com/acme/npm/'
 npmAlwaysAuth: true
 npmAuthToken: '${NRZ_TOKEN}'
 
 # your own packages come from your main registry
 npmScopes:
   acme:
-    npmRegistryServer: 'https://registry.nrz.io/acme/main/'
-    npmPublishRegistry: 'https://registry.nrz.io/acme/main/'
+    npmRegistryServer: 'https://registry.nrz.khulnasoft.com/acme/main/'
+    npmPublishRegistry: 'https://registry.nrz.khulnasoft.com/acme/main/'
     npmAlwaysAuth: true
     npmAuthToken: '${NRZ_TOKEN}'
     npmMinimalAgeGate: 0
@@ -84,7 +84,7 @@ is enough, with no `npmAuthToken` or `npmAlwaysAuth`:
 ```yaml
 npmScopes:
   acme:
-    npmRegistryServer: 'https://registry.nrz.io/acme/main/'
+    npmRegistryServer: 'https://registry.nrz.khulnasoft.com/acme/main/'
     npmMinimalAgeGate: 0
 ```
 
@@ -108,7 +108,7 @@ present in your lockfile; run "yarn install" to update the lockfile
 ```
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.io` URL — open it, approve, re-run. A **service
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
 token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
@@ -120,7 +120,7 @@ You can also target the registry from `package.json` instead of
   "name": "@acme/my-package",
   "version": "1.0.0",
   "publishConfig": {
-    "registry": "https://registry.nrz.io/acme/main/"
+    "registry": "https://registry.nrz.khulnasoft.com/acme/main/"
   }
 }
 ```
@@ -224,7 +224,7 @@ is the current release; there is no Yarn 5.
   writing nested `npmRegistries[...]` keys. The file is written
   correctly — the message is just wrong.
 - Yarn blocks plain `http://` registries unless listed in
-  `unsafeHttpWhitelist`. Not an issue for `https://registry.nrz.io/`,
+  `unsafeHttpWhitelist`. Not an issue for `https://registry.nrz.khulnasoft.com/`,
   but it will bite you against a local registry.
 - Scope keys in `npmScopes` omit the leading `@`.
 
@@ -233,13 +233,13 @@ is the current release; there is no Yarn 5.
 Yarn 1 is end-of-life; prefer Yarn 4. If you must:
 
 ```sh
-yarn config set registry https://registry.nrz.io/acme/npm/
-yarn config set @acme:registry https://registry.nrz.io/acme/main/
+yarn config set registry https://registry.nrz.khulnasoft.com/acme/npm/
+yarn config set @acme:registry https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 Yarn Classic reads auth tokens from `.npmrc`, so add:
 
 ```ini
-//registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
-//registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/main/:_authToken=${NRZ_TOKEN}
 ```

@@ -250,7 +250,7 @@ export const components: MDXComponents = {
       {children}
     </div>
   ),
-  // Starlight's <Steps> wraps a markdown ordered list; each item becomes a nrz.io stepper step
+  // Starlight's <Steps> wraps a markdown ordered list; each item becomes a nrz.khulnasoft.com stepper step
   Steps: ({ children }: Children) => {
     const list = Children.toArray(children).find(
       isValidElement<Children>,

@@ -175,7 +175,7 @@ Object {
     "description": String(
       The name of the registry alias (a key in \`--registries\`) that bare specifiers (e.g. \`express@latest\`) and transitive dependencies without an explicit registry protocol resolve through, when neither \`--registry\` nor a matching \`--scoped-registries\` entry applies.
 
-      Defaults to \`npm\`. Note that the \`npm\` alias has **no** built-in URL -- it must be configured (for example via \`nrz setup\`, which points it at your nrz.io registry), otherwise bare specifiers will have no registry to resolve against.
+      Defaults to \`npm\`. Note that the \`npm\` alias has **no** built-in URL -- it must be configured (for example via \`nrz setup\`, which points it at your nrz.khulnasoft.com registry), otherwise bare specifiers will have no registry to resolve against.
     ),
     "hint": "name",
     "type": "string",

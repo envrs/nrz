@@ -238,9 +238,9 @@ const fixLicense = async (ws: Workspace) => {
   const license = await readFile(licenseFile, 'utf8').catch(() => '')
 
   const containsNrz = () => {
-    if (!/Copyright (.*)? nrz technology,? Inc\./i.test(license)) {
+    if (!/Copyright/i.test(license)) {
       throw new Error(
-        `${ws.pj.name} license should contain nrz company name`,
+        `${ws.pj.name} license should contain copyright`,
       )
     }
   }

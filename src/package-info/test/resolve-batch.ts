@@ -4,7 +4,7 @@ import type { RegistryClient } from '@nrz/registry-client'
 import { fetchResolve } from '../src/resolve-batch.ts'
 import type { ResolveRecord } from '../src/resolve-batch.ts'
 
-const registry = 'https://registry.nrz.io/acme/npm/'
+const registry = 'https://registry.nrz.khulnasoft.com/acme/npm/'
 
 /** A RegistryClient stub that answers whatever the test hands it. */
 const client = (

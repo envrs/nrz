@@ -27,19 +27,19 @@ defaults to `npm`.
 
 Because `npm` has no built-in URL, a **fresh/unconfigured** install
 (`nrz install`/`nrx`) does **not** "just work" — it errors with an
-actionable message pointing to https://www.nrz.io and `nrz setup`. This
+actionable message pointing to https://www.nrz.khulnasoft.com and `nrz setup`. This
 is the intended trade-off; a per-account nrz mirror URL isn't known ahead
 of time.
 
 ## `nrz setup`
 
 Onboarding wizard (`src/cli-sdk/src/commands/setup.ts`). Authenticates
-against a nrz.io account (reusing `RegistryClient.login()` web auth) and
+against a nrz.khulnasoft.com account (reusing `RegistryClient.login()` web auth) and
 writes the account's registry aliases to `nrz.json` via
 `conf.addConfigToFile`:
 
-- `registries.npm  = https://registry.nrz.io/<account>/npm/`
-- `registries.main = https://registry.nrz.io/<account>/main/`
+- `registries.npm  = https://registry.nrz.khulnasoft.com/<account>/npm/`
+- `registries.main = https://registry.nrz.khulnasoft.com/<account>/main/`
 
 The account token must be in the keychain under **both** of those
 URLs (path-scoped keys do not match sibling registries). Login writes
@@ -70,8 +70,8 @@ Child deps inherit parent's registry by default. If `foo` comes from registry X,
 ```json
 {
   "registries": {
-    "npm": "https://registry.nrz.io/my-account/npm/",
-    "main": "https://registry.nrz.io/my-account/main/",
+    "npm": "https://registry.nrz.khulnasoft.com/my-account/npm/",
+    "main": "https://registry.nrz.khulnasoft.com/my-account/main/",
     "internal": "https://npm.internal.co/"
   },
   "default-registry-alias": "npm",

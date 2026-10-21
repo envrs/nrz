@@ -101,7 +101,7 @@ const refusals: Record<string, 'expired' | 'revoked'> = {
   TokenRevokedError: 'revoked',
 }
 
-/** nrz.io account and organization slugs, as the registry mints them. */
+/** nrz.khulnasoft.com account and organization slugs, as the registry mints them. */
 const accountSlug = /^(?=.{3,63}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 /** How a 401 says the token it refused died, if it does. */

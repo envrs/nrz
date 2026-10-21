@@ -52,7 +52,7 @@ const renderItem = (
   )
 }
 
-// nrz.io's mobile drawer, as a bottom sheet (vaul isn't a dependency here); no auth or socials
+// nrz.khulnasoft.com's mobile drawer, as a bottom sheet (vaul isn't a dependency here); no auth or socials
 export const MobileMenu = ({ menuData }: MobileMenuProps) => {
   const [open, setOpen] = useState(false)
   const close = () => setOpen(false)

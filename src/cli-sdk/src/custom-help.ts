@@ -214,7 +214,7 @@ const commandHelp = {
   },
   setup: {
     args: '[<account>]',
-    desc: 'Configure your nrz.io account registries',
+    desc: 'Configure your nrz.khulnasoft.com account registries',
     defaultOrder: 0,
   },
   skills: {

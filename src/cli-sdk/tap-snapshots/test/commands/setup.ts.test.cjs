@@ -12,9 +12,9 @@ Usage:
 nrz setup [<account>]
 \`\`\`
 
-Configure the registry aliases for your nrz.io account so that \`nrz install\` and \`nrx\` work out of the box.
+Configure the registry aliases for your nrz.khulnasoft.com account so that \`nrz install\` and \`nrx\` work out of the box.
 
-Sign up or log in at https://www.nrz.io first. The wizard authenticates against your account, stores the token for both the \`npm\` and \`main\` registries, and writes those aliases (and any additional aliases you add) to your user \`nrz.json\`.
+Sign up or log in at https://www.nrz.khulnasoft.com first. The wizard authenticates against your account, stores the token for both the \`npm\` and \`main\` registries, and writes those aliases (and any additional aliases you add) to your user \`nrz.json\`.
 
 ## Options
 

@@ -15,5 +15,5 @@ jobs:
       - name: Add to GitHub Project
         uses: actions/add-to-project@v1.0.2
         with:
-          project-url: https://github.com/orgs/nrz/projects/3
+          project-url: https://github.com/orgs/khulnasoft/projects/3
           github-token: ${{ secrets.PROJECT_PAT }}

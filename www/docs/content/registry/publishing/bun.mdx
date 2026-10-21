@@ -1,7 +1,7 @@
 ---
 title: bun
 description:
-  Configure bun for your nrz.io registries, and publish to main.
+  Configure bun for your nrz.khulnasoft.com registries, and publish to main.
 sidebar:
   label: bun
   order: 5
@@ -19,10 +19,10 @@ Create `bunfig.toml` in your project root:
 
 ```toml
 [install]
-registry = { url = "https://registry.nrz.io/acme/npm/", token = "$NRZ_TOKEN" }
+registry = { url = "https://registry.nrz.khulnasoft.com/acme/npm/", token = "$NRZ_TOKEN" }
 
 [install.scopes]
-acme = { url = "https://registry.nrz.io/acme/main/", token = "$NRZ_TOKEN" }
+acme = { url = "https://registry.nrz.khulnasoft.com/acme/main/", token = "$NRZ_TOKEN" }
 ```
 
 Then `bun install` as usual.
@@ -48,7 +48,7 @@ Because the token is a `$VAR` reference rather than a literal,
 
   ```toml
   [install.scopes.acme]
-  url = "https://registry.nrz.io/acme/main/"
+  url = "https://registry.nrz.khulnasoft.com/acme/main/"
   token = "$NRZ_TOKEN"
   ```
 
@@ -60,11 +60,11 @@ bun also reads `.npmrc`, which is handy if you want one file that npm,
 pnpm, deno and bun all share:
 
 ```ini
-registry=https://registry.nrz.io/acme/npm/
-@acme:registry=https://registry.nrz.io/acme/main/
+registry=https://registry.nrz.khulnasoft.com/acme/npm/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 
-//registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
-//registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/main/:_authToken=${NRZ_TOKEN}
 ```
 
 In `.npmrc` the braced `${NRZ_TOKEN}` form **is** expanded.
@@ -100,7 +100,7 @@ enough, with no `token`:
 
 ```toml
 [install.scopes]
-acme = { url = "https://registry.nrz.io/acme/main/" }
+acme = { url = "https://registry.nrz.khulnasoft.com/acme/main/" }
 ```
 
 ## Publish to `main`
@@ -117,7 +117,7 @@ Add `--access public` for a package anyone can install, and
 `--dry-run` to preview.
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.io` URL — open it, approve, re-run. A **service
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
 token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
@@ -125,8 +125,8 @@ token** skips the prompt and is what you want in CI; see
 
 - **Never omit the trailing slash.** In bun 1.4, a registry URL that
   has a path and no trailing slash **silently loses its last path
-  segment** — `https://registry.nrz.io/acme/npm` resolves against
-  `https://registry.nrz.io/acme/`, and you get confusing 401s or 404s.
+  segment** — `https://registry.nrz.khulnasoft.com/acme/npm` resolves against
+  `https://registry.nrz.khulnasoft.com/acme/`, and you get confusing 401s or 404s.
   This affects `bunfig.toml`, `.npmrc` and `[install.scopes]` alike.
   Our URLs all have paths, so this matters every time.
 - **`$NRZ_TOKEN` in `bunfig.toml`, `${NRZ_TOKEN}` in `.npmrc`.**
@@ -142,7 +142,7 @@ token** skips the prompt and is what you want in CI; see
   registry in `bunfig.toml` (or as `registry=` in `.npmrc`) so the
   token travels with it.
 - **Auth paths must match exactly.** A host-wide
-  `//registry.nrz.io/:_authToken=...` works in npm and deno but
+  `//registry.nrz.khulnasoft.com/:_authToken=...` works in npm and deno but
   **not** in bun — bun needs the full registry path, trailing slash
   included.
 - bun has no `login` command. Authentication comes from `bunfig.toml`,

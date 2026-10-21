@@ -29,11 +29,11 @@ sidebar:
 Every nrz account comes by default with two registries:
 
 - **`main`** — your account's private registry, served at
-  `https://registry.nrz.io/<account>/main/`. Packages published here
+  `https://registry.nrz.khulnasoft.com/<account>/main/`. Packages published here
   are scoped to your account slug (`@<account>/...`) and readable only
   by account members. See [Publishing Packages](/registry/publishing).
 - **`npm`** — a secure mirror of the public npm registry, served at
-  `https://registry.nrz.io/<account>/npm/`. It is read-only and
+  `https://registry.nrz.khulnasoft.com/<account>/npm/`. It is read-only and
   populated from `registry.npmjs.org`, giving your installs and CI a
   consistent, fast source for public packages.
 
@@ -62,8 +62,8 @@ account scope to your private registry:
 managers; [find out how](/registry#set-up-your-package-manager)
 
 <Code
-  code={`$ nrz config set registry=https://registry.nrz.io/acme/npm/
-$ nrz config set scoped-registries=@acme=https://registry.nrz.io/acme/main/`}
+  code={`$ nrz config set registry=https://registry.nrz.khulnasoft.com/acme/npm/
+$ nrz config set scoped-registries=@acme=https://registry.nrz.khulnasoft.com/acme/main/`}
   title="Terminal"
   lang="bash"
 />
@@ -71,8 +71,8 @@ $ nrz config set scoped-registries=@acme=https://registry.nrz.io/acme/main/`}
 The npm equivalent:
 
 <Code
-  code={`registry=https://registry.nrz.io/acme/npm/
-@acme:registry=https://registry.nrz.io/acme/main/`}
+  code={`registry=https://registry.nrz.khulnasoft.com/acme/npm/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/`}
   title=".npmrc"
   lang="ini"
 />

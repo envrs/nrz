@@ -21,7 +21,7 @@ t.test(
   'custom registry survives save -> load -> save round-trip',
   async t => {
     const specOptions: SpecOptions = {
-      registry: 'https://registry.nrz.io/npm/',
+      registry: 'https://registry.nrz.khulnasoft.com/npm/',
     }
     const mainManifest = {
       name: 'my-project',
@@ -121,7 +121,7 @@ t.test(
     t.chdir(projectRoot)
     unload('project')
 
-    const customRegistry = 'https://registry.nrz.io/npm/'
+    const customRegistry = 'https://registry.nrz.khulnasoft.com/npm/'
 
     const options = {
       projectRoot,

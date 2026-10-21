@@ -2,11 +2,11 @@
 name: nrz-registry-migration
 description:
   Moves a JavaScript repository (single package or monorepo) onto a
-  nrz.io registry. Routes installs through the account's npm mirror
+  nrz.khulnasoft.com registry. Routes installs through the account's npm mirror
   and private `main` registry, handles the lockfile, and sets up auth
   for npm, pnpm, yarn, bun, deno and the nrz CLI on laptops, CI,
   Vercel and coding-agent sandboxes. Use when the user wants to switch
-  a repo or pipeline to registry.nrz.io, set up nrz.io tokens, or fix
+  a repo or pipeline to registry.nrz.khulnasoft.com, set up nrz.khulnasoft.com tokens, or fix
   401s or missing auth after switching.
 ---
 
@@ -37,9 +37,9 @@ it with the user's.
 
 Each account has two registries:
 
-- `https://registry.nrz.io/acme/npm/`: npm mirror. Make it the default
+- `https://registry.nrz.khulnasoft.com/acme/npm/`: npm mirror. Make it the default
   registry. Always needs a token, even for public packages.
-- `https://registry.nrz.io/acme/main/`: the account's own packages.
+- `https://registry.nrz.khulnasoft.com/acme/main/`: the account's own packages.
   Map the scope to it.
 
 Accounts
@@ -116,10 +116,10 @@ alone sends no credentials.
   literally, which fails like a bad token.
 - pnpm: commit routing only. In CI use one of
   ([pnpm in CI](https://docs.nrz.khulnasoft.com/registry/publishing/ci.md#pnpm-needs-a-different-approach)):
-  - `env "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN" pnpm install --frozen-lockfile`
+  - `env "pnpm_config_//registry.nrz.khulnasoft.com/acme/npm/:_authToken=$NRZ_TOKEN" pnpm install --frozen-lockfile`
     (pnpm 11.6.0+; one var per registry URL);
   - a step appending
-    `//registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}` and the same
+    `//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}` and the same
     `main` line to user-level `~/.npmrc` with a quoted heredoc
     (`<<'EOF'` keeps `${NRZ_TOKEN}` literal; pnpm expands it there);
   - `PNPM_CONFIG_NPMRC_AUTH_FILE=<auth file outside the repo>`.

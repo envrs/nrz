@@ -56,7 +56,7 @@ COMMANDS
   r, run-script, run          <script>         Run a script defined in package.json
   rx,            run-exec     <script>         Run a script &/or fallback to executing a binary
 
-                 setup        [<account>]      Configure your nrz.io account registries
+                 setup        [<account>]      Configure your nrz.khulnasoft.com account registries
                  skills       [list|link]      Manage agent skills from installed packages
 
                  token        [add|rm]         Manage authentication tokens
@@ -100,7 +100,7 @@ USAGE
 
 COMMON COMMANDS
 
-       setup     [<account>]      Configure your nrz.io account registries
+       setup     [<account>]      Configure your nrz.khulnasoft.com account registries
        init                       Initialize a new project
   i,   install   [<package>...]   Install dependencies
   q,   query     <selector>       Query for packages in the project

@@ -19,7 +19,7 @@ export const specOptions = getOptions({
 
 export const mirrorSpecOptions = getOptions({
   registries: {
-    npm: 'https://registry.nrz.io/acct/npm/',
+    npm: 'https://registry.nrz.khulnasoft.com/acct/npm/',
     custom: 'http://example.com',
   },
 })

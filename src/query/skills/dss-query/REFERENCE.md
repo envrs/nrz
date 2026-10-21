@@ -1,6 +1,6 @@
 # DSS Reference
 
-Compiled from https://docs.nrz.io/cli/selectors/ (source:
+Compiled from https://docs.nrz.khulnasoft.com/cli/selectors/ (source:
 `www/docs/src/content/docs/cli/selectors/`). When in doubt, check
 those docs — they are canonical.
 

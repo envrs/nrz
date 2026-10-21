@@ -297,7 +297,7 @@ const View = ({
   )
 }
 
-// from nrz.io's content/marketing/socials.ts; GitHub points at this repo rather than the org
+// from nrz.khulnasoft.com's content/marketing/socials.ts; GitHub points at this repo rather than the org
 const socials = [
   {
     href: 'https://github.com/khulnasoft/nrz',

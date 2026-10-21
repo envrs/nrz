@@ -86,7 +86,7 @@ export const retrieveRemoteVersions = async (
   }
 
   // resolve against the registry as a base so that any path prefix
-  // (e.g: https://registry.nrz.io/nrz/npm/) is preserved
+  // (e.g: https://registry.nrz.khulnasoft.com/nrz/npm/) is preserved
   const base =
     spec.registry.endsWith('/') ? spec.registry : `${spec.registry}/`
   const url = new URL(node.name, base)

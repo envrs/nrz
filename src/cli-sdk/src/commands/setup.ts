@@ -15,13 +15,13 @@ import { stdout } from '../output.ts'
 import type { CommandFn, CommandUsage } from '../index.ts'
 import type { Views } from '../view.ts'
 
-/** Where users sign up for / log into a nrz.io account. */
-export const NRZ_SIGNUP_URL = 'https://www.nrz.io'
+/** Where users sign up for / log into a nrz.khulnasoft.com account. */
+export const NRZ_SIGNUP_URL = 'https://www.nrz.khulnasoft.com'
 /** Base URL that per-account registries live under. */
-export const NRZ_REGISTRY_BASE = 'https://registry.nrz.io'
+export const NRZ_REGISTRY_BASE = 'https://registry.nrz.khulnasoft.com'
 
 /**
- * The registry aliases that every nrz.io account is provisioned with.
+ * The registry aliases that every nrz.khulnasoft.com account is provisioned with.
  * `npm` is the {@link https://docs.nrz.khulnasoft.com | default bare-spec alias}.
  */
 export const accountRegistries = ['npm', 'main'] as const
@@ -72,7 +72,7 @@ const accountAuthError = (account: string, er: unknown): Error =>
   ) ?
     error(
       [
-        `No nrz.io account or organization named "${account}".`,
+        `No nrz.khulnasoft.com account or organization named "${account}".`,
         '',
         `Looked for it at ${accountRegistryURL(account, accountRegistries[0])}`,
         '',
@@ -130,7 +130,7 @@ export const usage: CommandUsage = () =>
   commandUsage({
     command: 'setup',
     usage: '[<account>]',
-    description: `Configure the registry aliases for your nrz.io account so
+    description: `Configure the registry aliases for your nrz.khulnasoft.com account so
                   that \`nrz install\` and \`nrx\` work out of the box.
 
                   Sign up or log in at ${NRZ_SIGNUP_URL} first. The wizard
@@ -184,7 +184,7 @@ export const command: CommandFn<SetupResult> = async conf => {
           { code: 'ECONFIG' },
         )
       }
-      account = await ask('nrz.io account or organization slug: ')
+      account = await ask('nrz.khulnasoft.com account or organization slug: ')
       if (!account) {
         throw error('No account slug provided.', { code: 'ECONFIG' })
       }
@@ -220,7 +220,7 @@ export const command: CommandFn<SetupResult> = async conf => {
     // 4. authenticate against the account registries (interactive only)
     if (!yes) {
       const doAuth = await ask(
-        'Authenticate with your nrz.io account now? (Y/n) ',
+        'Authenticate with your nrz.khulnasoft.com account now? (Y/n) ',
       )
       if (!/^n/i.test(doAuth)) {
         // one login covers both account registries; the token is stored

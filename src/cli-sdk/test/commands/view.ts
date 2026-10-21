@@ -312,7 +312,7 @@ t.test('command', async t => {
       mockSecurityResult = mockSecurity
 
       const registries = {
-        npm: 'https://registry.nrz.io/acct/npm/',
+        npm: 'https://registry.nrz.khulnasoft.com/acct/npm/',
       }
       const config = makeConfig(['test-pkg'])
       config.options.registries = registries

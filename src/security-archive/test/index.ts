@@ -172,7 +172,7 @@ t.test('usesNpmRegistry', async t => {
     usesNpmRegistry(
       nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
         registries: {
-          npm: 'https://registry.nrz.io/acct/npm/',
+          npm: 'https://registry.nrz.khulnasoft.com/acct/npm/',
         },
       }),
     ),
@@ -209,12 +209,12 @@ t.test('usesNpmRegistry', async t => {
       nodeWith(
         joinDepIDTuple([
           'registry',
-          'https://registry.nrz.io/acct/npm/',
+          'https://registry.nrz.khulnasoft.com/acct/npm/',
           'foo@1.0.0',
         ]),
         {
           registries: {
-            npm: 'https://registry.nrz.io/acct/npm/',
+            npm: 'https://registry.nrz.khulnasoft.com/acct/npm/',
           },
         },
       ),
@@ -225,7 +225,7 @@ t.test('usesNpmRegistry', async t => {
   t.equal(
     usesNpmRegistry(
       nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
-        registries: { npm: 'https://registry.nrz.io/acct/npm' },
+        registries: { npm: 'https://registry.nrz.khulnasoft.com/acct/npm' },
       }),
     ),
     true,
@@ -249,7 +249,7 @@ t.test('usesNpmRegistry', async t => {
       nodeWith(
         joinDepIDTuple([
           'registry',
-          'https://registry.nrz.io/acct/npm/',
+          'https://registry.nrz.khulnasoft.com/acct/npm/',
           'foo@1.0.0',
         ]),
       ),

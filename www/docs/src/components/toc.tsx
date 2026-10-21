@@ -108,7 +108,7 @@ export const Toc = ({
       {/* -mx-5 hangs the padding outside the column so the copy lines up with the links */}
       <div className="bg-muted/60 dark:bg-card -mx-5 shrink-0 rounded-2xl p-5">
         <p className="text-body font-semibold text-balance">
-          Deploy your package on nrz.io
+          Deploy your package on nrz.khulnasoft.com
         </p>
         <p className="text-muted-foreground mt-2 text-[0.8125rem] leading-5 text-pretty">
           Publish scoped and private packages, manage organizations
@@ -117,7 +117,7 @@ export const Toc = ({
           dependencies.
         </p>
         <Button asChild variant="outline" size="sm" className="mt-4">
-          <a href="https://www.nrz.io">Publish now</a>
+          <a href="https://www.nrz.khulnasoft.com">Publish now</a>
         </Button>
       </div>
     </aside>

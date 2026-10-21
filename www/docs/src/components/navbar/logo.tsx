@@ -5,7 +5,7 @@ import { cn } from 'cn'
 
 import type { ComponentProps } from 'react'
 
-// nrz.io's logo without its brand-kit context menu; links to the docs home
+// nrz.khulnasoft.com's logo without its brand-kit context menu; links to the docs home
 export const Logo = ({
   className,
   ...rest

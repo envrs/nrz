@@ -24,7 +24,7 @@ const isExternalLink = (href: string) => {
 
 const menuContent = getMenuContent()
 
-// nrz.io's marketing header in its flat `disableScrollEffect` form: no float-on-scroll, auth, or package search
+// nrz.khulnasoft.com's marketing header in its flat `disableScrollEffect` form: no float-on-scroll, auth, or package search
 export const Navbar = ({
   className,
   ...props

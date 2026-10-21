@@ -53,7 +53,7 @@ Example answer shape:
 > - `nrz query ':outdated(major)'` — whole graph, not just direct
 >
 > Add `--view=json` for machine-readable output. More:
-> <https://docs.nrz.io/cli/selectors/>
+> <https://docs.nrz.khulnasoft.com/cli/selectors/>
 
 ## Workflow
 
@@ -182,9 +182,9 @@ Canonical docs — deep-link the section that matches the query
 
 | Query topic                               | Link                                                         |
 | ----------------------------------------- | ------------------------------------------------------------ |
-| syntax, composition, anything structural  | <https://docs.nrz.io/cli/selectors/>                         |
-| malware / typosquats / obfuscation        | <https://docs.nrz.io/cli/security#malware-detection>         |
-| CVEs / CWEs / severity                    | <https://docs.nrz.io/cli/security#vulnerability-detection>   |
-| capabilities (`:eval` `:network` `:fs` …) | <https://docs.nrz.io/cli/security#behavioral-security-risks> |
-| license compliance                        | <https://docs.nrz.io/cli/security#license-compliance>        |
-| security scores                           | <https://docs.nrz.io/cli/security#security-scoring>          |
+| syntax, composition, anything structural  | <https://docs.nrz.khulnasoft.com/cli/selectors/>                         |
+| malware / typosquats / obfuscation        | <https://docs.nrz.khulnasoft.com/cli/security#malware-detection>         |
+| CVEs / CWEs / severity                    | <https://docs.nrz.khulnasoft.com/cli/security#vulnerability-detection>   |
+| capabilities (`:eval` `:network` `:fs` …) | <https://docs.nrz.khulnasoft.com/cli/security#behavioral-security-risks> |
+| license compliance                        | <https://docs.nrz.khulnasoft.com/cli/security#license-compliance>        |
+| security scores                           | <https://docs.nrz.khulnasoft.com/cli/security#security-scoring>          |

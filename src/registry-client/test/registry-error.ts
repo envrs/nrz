@@ -406,7 +406,7 @@ t.test('token refusal', t => {
   })
   const revoked =
     '{"code":"TokenRevokedError","message":"Token revoked."}'
-  const account = 'https://registry.nrz.io/acme/npm/react'
+  const account = 'https://registry.nrz.khulnasoft.com/acme/npm/react'
   const setup = (gone: string) =>
     `Your token for the "acme" account ${gone}. Run \`nrz setup acme\` to ` +
     'log in again.'
@@ -452,12 +452,12 @@ t.test('token refusal', t => {
       [
         'no account in the path',
         entry(401, expired),
-        'https://registry.nrz.io/',
+        'https://registry.nrz.khulnasoft.com/',
       ],
       [
         'a path that is not an account',
         entry(401, expired),
-        'https://registry.nrz.io/-/ping',
+        'https://registry.nrz.khulnasoft.com/-/ping',
       ],
     ] as [string, unknown, string | undefined][]) {
       t.equal(tokenRefusalAdvice(response, url), undefined, label)

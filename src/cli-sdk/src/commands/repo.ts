@@ -104,9 +104,9 @@ const getUrlFromManifest = (
     url = homepage
   }
 
-  // Fallback to nrz.io package page
+  // Fallback to nrz.khulnasoft.com package page
   if (!url) {
-    url = `https://nrz.io/explore/npm/${name}/overview`
+    url = `https://nrz.khulnasoft.com/explore/npm/${name}/overview`
   }
 
   return url

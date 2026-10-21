@@ -1,7 +1,7 @@
 ---
 title: deno
 description:
-  Configure Deno for your nrz.io registries, and publish to main.
+  Configure Deno for your nrz.khulnasoft.com registries, and publish to main.
 sidebar:
   label: deno
   order: 6
@@ -24,11 +24,11 @@ export NRZ_TOKEN=<your token>
 Create `.npmrc` in your project root:
 
 ```ini
-registry=https://registry.nrz.io/acme/npm/
-@acme:registry=https://registry.nrz.io/acme/main/
+registry=https://registry.nrz.khulnasoft.com/acme/npm/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 
-//registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
-//registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}
+//registry.nrz.khulnasoft.com/acme/main/:_authToken=${NRZ_TOKEN}
 ```
 
 Then install as usual:
@@ -73,7 +73,7 @@ Public packages on `main` install without a token — the registry line
 alone is enough, with no auth line:
 
 ```ini
-@acme:registry=https://registry.nrz.io/acme/main/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 ## Brand-new versions are hidden for 24 hours
@@ -216,7 +216,7 @@ unless you keep a `package.json` too.
   registries.
 - Trailing slashes must match between the registry URL and the auth
   line.
-- A host-wide `//registry.nrz.io/:_authToken=${NRZ_TOKEN}` also works
+- A host-wide `//registry.nrz.khulnasoft.com/:_authToken=${NRZ_TOKEN}` also works
   in deno and covers both registries, but the explicit per-registry
   lines above stay portable if you later add bun to the project.
 - **Registry and auth settings go in `.npmrc`; the age gate goes in

@@ -271,7 +271,7 @@ t.test('homepage fallback when no repository', async t => {
 })
 
 t.test(
-  'fallback to nrz.io when no repository or homepage',
+  'fallback to nrz.khulnasoft.com when no repository or homepage',
   async t => {
     mockManifest = {
       name: 'no-repo-pkg',
@@ -294,14 +294,14 @@ t.test(
       result,
       {
         name: 'no-repo-pkg',
-        url: 'https://nrz.io/explore/npm/no-repo-pkg/overview',
+        url: 'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
       },
-      'opens default nrz.io URL',
+      'opens default nrz.khulnasoft.com URL',
     )
     t.equal(
       openedUrl,
-      'https://nrz.io/explore/npm/no-repo-pkg/overview',
-      'opens default nrz.io URL',
+      'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
+      'opens default nrz.khulnasoft.com URL',
     )
   },
 )

@@ -329,7 +329,7 @@ t.test('git+ prefix stripped from repository url', async t => {
   t.strictSame(fromUrlCalls, ['https://github.com/user/repo'])
 })
 
-t.test('fallback to nrz.io when no bugs or repository', async t => {
+t.test('fallback to nrz.khulnasoft.com when no bugs or repository', async t => {
   mockManifest = {
     name: 'no-bugs-pkg',
   }
@@ -351,18 +351,18 @@ t.test('fallback to nrz.io when no bugs or repository', async t => {
     result,
     {
       name: 'no-bugs-pkg',
-      url: 'https://nrz.io/explore/npm/no-bugs-pkg/overview',
+      url: 'https://nrz.khulnasoft.com/explore/npm/no-bugs-pkg/overview',
     },
-    'opens default nrz.io URL',
+    'opens default nrz.khulnasoft.com URL',
   )
   t.equal(
     openedUrl,
-    'https://nrz.io/explore/npm/no-bugs-pkg/overview',
-    'opens default nrz.io URL',
+    'https://nrz.khulnasoft.com/explore/npm/no-bugs-pkg/overview',
+    'opens default nrz.khulnasoft.com URL',
   )
 })
 
-t.test('fallback to nrz.io when hosted-git-info fails', async t => {
+t.test('fallback to nrz.khulnasoft.com when hosted-git-info fails', async t => {
   mockManifest = {
     name: 'unknown-host-pkg',
     repository: 'https://unknown-git-host.com/user/repo',
@@ -385,7 +385,7 @@ t.test('fallback to nrz.io when hosted-git-info fails', async t => {
 
   t.strictSame(result, {
     name: 'unknown-host-pkg',
-    url: 'https://nrz.io/explore/npm/unknown-host-pkg/overview',
+    url: 'https://nrz.khulnasoft.com/explore/npm/unknown-host-pkg/overview',
   })
 })
 

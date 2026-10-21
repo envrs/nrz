@@ -1,7 +1,7 @@
 ---
 title: pnpm
 description:
-  Configure pnpm for your nrz.io registries, and publish to main.
+  Configure pnpm for your nrz.khulnasoft.com registries, and publish to main.
 sidebar:
   label: pnpm
   order: 3
@@ -49,15 +49,15 @@ This is a bug on our side, not yours, and a fix is in progress.
 ```sh
 export NRZ_TOKEN=<your token>
 
-pnpm config set registry https://registry.nrz.io/acme/npm/ --location=project
-pnpm config set @acme:registry https://registry.nrz.io/acme/main/ --location=project
+pnpm config set registry https://registry.nrz.khulnasoft.com/acme/npm/ --location=project
+pnpm config set @acme:registry https://registry.nrz.khulnasoft.com/acme/main/ --location=project
 ```
 
 Then add auth by logging in through the browser:
 
 ```sh
-pnpm login --registry=https://registry.nrz.io/acme/npm/
-pnpm login --registry=https://registry.nrz.io/acme/main/ --scope=@acme
+pnpm login --registry=https://registry.nrz.khulnasoft.com/acme/npm/
+pnpm login --registry=https://registry.nrz.khulnasoft.com/acme/main/ --scope=@acme
 ```
 
 Now `pnpm install` works.
@@ -68,8 +68,8 @@ pnpm reads registry and auth settings from `.npmrc`, same keys as npm.
 Commit the **routing** only, with no credentials:
 
 ```ini
-registry=https://registry.nrz.io/acme/npm/
-@acme:registry=https://registry.nrz.io/acme/main/
+registry=https://registry.nrz.khulnasoft.com/acme/npm/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 Registry and auth keys belong in `.npmrc`; every other pnpm setting
@@ -81,7 +81,7 @@ now lives in `pnpm-workspace.yaml`. pnpm before 11.10 ignores
 Unlike npm, yarn, bun and deno, pnpm **deliberately ignores `${...}`
 placeholders** in a repository `.npmrc` for registry, proxy and
 credential values. A file containing
-`//registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}` sends no
+`//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}` sends no
 `Authorization` header at all — you get a `401` that looks like a bad
 token, with no warning explaining why.
 
@@ -106,8 +106,8 @@ variable — never a placeholder in the project file.
 ### Option 1 — log in (recommended for laptops)
 
 ```sh
-pnpm login --registry=https://registry.nrz.io/acme/npm/
-pnpm login --registry=https://registry.nrz.io/acme/main/ --scope=@acme
+pnpm login --registry=https://registry.nrz.khulnasoft.com/acme/npm/
+pnpm login --registry=https://registry.nrz.khulnasoft.com/acme/main/ --scope=@acme
 ```
 
 Browser-based, and the credential is stored in your global pnpm config
@@ -119,7 +119,7 @@ pnpm accepts any config key as a `pnpm_config_`-prefixed variable,
 which sidesteps the placeholder restriction entirely:
 
 ```sh
-env "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN" pnpm install
+env "pnpm_config_//registry.nrz.khulnasoft.com/acme/npm/:_authToken=$NRZ_TOKEN" pnpm install
 ```
 
 Two notes:
@@ -159,7 +159,7 @@ Public packages on `main` install without a token — the registry line
 alone is enough, with no auth line:
 
 ```ini
-@acme:registry=https://registry.nrz.io/acme/main/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 ## Publish to `main`
@@ -169,7 +169,7 @@ alone is enough, with no auth line:
   "name": "@acme/my-package",
   "version": "1.0.0",
   "publishConfig": {
-    "registry": "https://registry.nrz.io/acme/main/"
+    "registry": "https://registry.nrz.khulnasoft.com/acme/main/"
   }
 }
 ```
@@ -193,14 +193,14 @@ Two flags you will probably want:
 - `--dry-run` — pack and report without uploading.
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.io` URL — open it, approve, re-run. A **service
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
 token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
 ## Log in
 
 ```sh
-pnpm login --registry=https://registry.nrz.io/acme/main/ --scope=@acme
+pnpm login --registry=https://registry.nrz.khulnasoft.com/acme/main/ --scope=@acme
 ```
 
 This uses the browser login flow and prints an authentication URL.
@@ -210,7 +210,7 @@ to `.npmrc`.
 
 `pnpm token` is not implemented in pnpm — it reports
 `Not implemented in pnpm. Use the npm CLI directly`. Manage tokens at
-[nrz.io](https://www.nrz.io) or with `npm token`.
+[nrz.khulnasoft.com](https://www.nrz.khulnasoft.com) or with `npm token`.
 
 ## Gotchas
 

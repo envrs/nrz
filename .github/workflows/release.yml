@@ -477,7 +477,7 @@ jobs:
           # NRZ_REGISTRY sets the publish target and NRZ_TOKEN is used for
           # auth when NRZ_REGISTRY matches the request origin (see auth.ts)
           NRZ_TOKEN: ${{ secrets.NRZ_REGISTRY_PUBLISH_TOKEN }}
-          NRZ_REGISTRY: https://registry.nrz.io/nrz/main/
+          NRZ_REGISTRY: https://registry.nrz.khulnasoft.com/nrz/main/
 
   on-publish-nrz-registry:
     name: Notify nrz Registry Publish
@@ -499,7 +499,7 @@ jobs:
           SLACKIFY_MARKDOWN: true
           SLACK_TITLE: Release ${{ needs.publish.outputs.version }} nrz Registry Publish Failed
           SLACK_MESSAGE: |
-            :x: Publishing to the nrz registry (`https://registry.nrz.io/nrz/main/`) failed.
+            :x: Publishing to the nrz registry (`https://registry.nrz.khulnasoft.com/nrz/main/`) failed.
             This is best-effort and does not affect the main npm publish.
             It is safe to manually rerun the workflow if the errors were transient.
 

@@ -1,6 +1,6 @@
 ![nrz](https://github.com/user-attachments/assets/aec7c817-b83f-4d71-b34a-4e480b97e82c)
 
-# nrz /vōlt/
+# nrz
 
 ![nrz Version](https://img.shields.io/npm/v/nrz?logo=npm&label=Version)
 ![Package Downloads](https://img.shields.io/npm/dm/nrz?logo=npm&label=Downloads)
@@ -10,7 +10,7 @@
 
 **Develop. Run. Distribute.**
 
-This is the source monorepo for the [nrz](https://www.nrz.io) package
+This is the source monorepo for the [nrz](https://www.nrz.khulnasoft.com) package
 manager.
 
 ### Documentation
@@ -45,7 +45,7 @@ xvn --recursive prepare
 ```
 
 `nrz setup` is not required for this repository. That command connects
-the CLI to a nrz.io account; this repository's checked-in
+the CLI to a nrz.khulnasoft.com account; this repository's checked-in
 [`nrz.json`](./nrz.json) already configures the registry used to
 bootstrap its dependencies.
 

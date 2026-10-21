@@ -241,7 +241,7 @@ export const definition = j
 
                     Defaults to \`npm\`. Note that the \`npm\` alias has **no**
                     built-in URL -- it must be configured (for example via
-                    \`nrz setup\`, which points it at your nrz.io registry),
+                    \`nrz setup\`, which points it at your nrz.khulnasoft.com registry),
                     otherwise bare specifiers will have no registry to resolve
                     against.
       `,

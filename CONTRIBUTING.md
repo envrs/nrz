@@ -27,7 +27,7 @@ xvn --recursive prepare
 ```
 
 You do not need to run `nrz setup` to work on this repository. That
-command configures registry aliases and authentication for a nrz.io
+command configures registry aliases and authentication for a nrz.khulnasoft.com
 account. The checked-in [`nrz.json`](./nrz.json) already points this
 project at the public registry used to install its dependencies.
 

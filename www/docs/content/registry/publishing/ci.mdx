@@ -2,7 +2,7 @@
 title: CI & automation
 description:
   Install and publish from CI, Vercel and coding-agent sandboxes with
-  a nrz.io service token.
+  a nrz.khulnasoft.com service token.
 sidebar:
   label: CI & Automation
   order: 7
@@ -73,7 +73,7 @@ CI (pnpm: see [below](#pnpm-needs-a-different-approach)).
 npm ci
 
 # pnpm — pin to 11.26.0, and pass the token as a config env var (see below)
-env "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN" \
+env "pnpm_config_//registry.nrz.khulnasoft.com/acme/npm/:_authToken=$NRZ_TOKEN" \
   pnpm install --frozen-lockfile
 
 # yarn — commit .yarnrc.yml with ${NRZ_TOKEN}
@@ -98,10 +98,10 @@ If you would rather not commit the file, write it in a step:
 ```yaml
 - run: |
     cat > .npmrc <<'EOF'
-    registry=https://registry.nrz.io/acme/npm/
-    @acme:registry=https://registry.nrz.io/acme/main/
-    //registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
-    //registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+    registry=https://registry.nrz.khulnasoft.com/acme/npm/
+    @acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
+    //registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}
+    //registry.nrz.khulnasoft.com/acme/main/:_authToken=${NRZ_TOKEN}
     EOF
 ```
 
@@ -119,7 +119,7 @@ variable:
 ```yaml
 - run:
     env
-    "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN"
+    "pnpm_config_//registry.nrz.khulnasoft.com/acme/npm/:_authToken=$NRZ_TOKEN"
     pnpm install --frozen-lockfile
 ```
 
@@ -135,8 +135,8 @@ expands `${NRZ_TOKEN}`:
 ```yaml
 - run: |
     cat >> ~/.npmrc <<'EOF'
-    //registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
-    //registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+    //registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}
+    //registry.nrz.khulnasoft.com/acme/main/:_authToken=${NRZ_TOKEN}
     EOF
 - run: pnpm install --frozen-lockfile
 ```
@@ -194,7 +194,7 @@ CI runner:
 ## Publishing from CI
 
 **Use a service token.** When you create the token at
-[nrz.io → Tokens](https://www.nrz.io), choose _This is a service
+[nrz.khulnasoft.com → Tokens](https://www.nrz.khulnasoft.com), choose _This is a service
 token_ rather than _This token is for myself_, and give it
 `package:read` and `package:write`.
 
@@ -245,7 +245,7 @@ A job that installs only public packages from `main` needs no secret
 at all — just the registry URL:
 
 ```ini
-@acme:registry=https://registry.nrz.io/acme/main/
+@acme:registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 The npm mirror always requires a token, so this only helps if every

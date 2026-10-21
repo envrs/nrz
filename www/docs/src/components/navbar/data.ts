@@ -16,8 +16,8 @@ import {
 } from 'lucide-react'
 import type { MenuData, MenuGroup } from './types'
 
-// nrz.io's marketing paths are site-relative; the docs live on another host
-const NRZ = 'https://www.nrz.io'
+// nrz.khulnasoft.com's marketing paths are site-relative; the docs live on another host
+const NRZ = 'https://www.nrz.khulnasoft.com'
 
 export const getMenuContent = (): MenuData[] => {
   const openSourceGroup: MenuGroup = {

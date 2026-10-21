@@ -13,16 +13,16 @@ const abs = (path: string) => new URL(path, siteUrl).href
 // the llms.txt shape: a title, a one-line summary, how to use the docs, then the page index
 const intro = `# nrz docs
 
-> Documentation for nrz, the package registry built for JavaScript: the nrz.io registry (private packages, npm mirrors, access control, tokens) and the \`nrz\` client, an npm-compatible package manager.
+> Documentation for nrz, the package registry built for JavaScript: the nrz.khulnasoft.com registry (private packages, npm mirrors, access control, tokens) and the \`nrz\` client, an npm-compatible package manager.
 
 Every page is available as Markdown: append \`.md\` to its URL, or request the page with an \`Accept: text/markdown\` header. The links below point at the Markdown versions. [llms-full.txt](${abs('/llms-full.txt')}) holds every page except the generated API reference, plus the ${registryMigrationSkill.name} skill, in one file.
 
 ## Using these docs
 
-- New to the registry: start at [Quick Start](${md('/registry')}). New to the client: start at [Getting Started with the nrz CLI](${md('/client')}). Moving an existing repository onto a nrz.io registry: follow the [${registryMigrationSkill.name} skill](${abs(registryMigrationSkill.url)}).
+- New to the registry: start at [Quick Start](${md('/registry')}). New to the client: start at [Getting Started with the nrz CLI](${md('/client')}). Moving an existing repository onto a nrz.khulnasoft.com registry: follow the [${registryMigrationSkill.name} skill](${abs(registryMigrationSkill.url)}).
 - Commands and config: [CLI Commands](${md('/client/commands')}) links every command's page; [Configuring the nrz CLI](${md('/client/configuring')}) covers options and config files. [Reference](${md('/reference')}) is a glossary of terms.
 - The site's own HTTP API (search, Markdown pages) is described at [openapi.json](${abs('/openapi.json')}).
-- Before running anything that changes a nrz.io account (publishing, unpublishing, deprecating packages, changing access, or creating and revoking tokens), confirm with the user first.
+- Before running anything that changes a nrz.khulnasoft.com account (publishing, unpublishing, deprecating packages, changing access, or creating and revoking tokens), confirm with the user first.
 
 ## Agent skills
 

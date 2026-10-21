@@ -15,8 +15,10 @@
   },
   "dependencies": {
     "@nrz/cli-sdk": "workspace:*",
-    "@nrz/xdg": "workspace:*",
-    "esbuild": "^0.27.1"
+    "@nrz/xdg": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.1"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

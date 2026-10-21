@@ -108,11 +108,11 @@ t.test('url + view helpers', async t => {
   const { mod } = await loadSetup([])
   t.equal(
     mod.accountRegistryURL('acme', 'npm'),
-    'https://registry.nrz.io/acme/npm/',
+    'https://registry.nrz.khulnasoft.com/acme/npm/',
   )
   t.equal(
     mod.accountRegistryURL('a/b', 'main'),
-    'https://registry.nrz.io/a%2Fb/main/',
+    'https://registry.nrz.khulnasoft.com/a%2Fb/main/',
   )
   t.match(
     mod.views.human({
@@ -170,8 +170,8 @@ t.test('non-interactive with account + extras', async t => {
   t.equal(added[0]?.[0], 'user')
   t.strictSame(added[0]?.[1], {
     registries: {
-      npm: 'https://registry.nrz.io/acme/npm/',
-      main: 'https://registry.nrz.io/acme/main/',
+      npm: 'https://registry.nrz.khulnasoft.com/acme/npm/',
+      main: 'https://registry.nrz.khulnasoft.com/acme/main/',
       loc: 'http://reg.local/',
       slashed: 'http://slash.local/',
     },
@@ -214,8 +214,8 @@ t.test(
     t.strictSame(
       result.registries,
       {
-        npm: 'https://registry.nrz.io/acme/npm/',
-        main: 'https://registry.nrz.io/acme/main/',
+        npm: 'https://registry.nrz.khulnasoft.com/acme/npm/',
+        main: 'https://registry.nrz.khulnasoft.com/acme/main/',
         moved: 'https://cli-override/',
         fromCli: 'https://from-cli/',
       },
@@ -268,8 +268,8 @@ t.test('interactive: prompt account, auth, add alias', async t => {
     loginCalls,
     [
       [
-        'https://registry.nrz.io/acme/npm/',
-        'https://registry.nrz.io/acme/main/',
+        'https://registry.nrz.khulnasoft.com/acme/npm/',
+        'https://registry.nrz.khulnasoft.com/acme/main/',
       ],
       'https://partner.example.com/',
     ],
@@ -278,16 +278,16 @@ t.test('interactive: prompt account, auth, add alias', async t => {
   t.strictSame(
     Object.fromEntries(stored),
     {
-      'https://registry.nrz.io/acme/npm': 'Bearer from-login',
-      'https://registry.nrz.io/acme/main': 'Bearer from-login',
+      'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer from-login',
+      'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer from-login',
       'https://partner.example.com': 'Bearer from-login',
     },
     'login token stored for both account registries',
   )
   t.strictSame(kcWrites, [], 'nothing left for setup to copy')
   t.strictSame(result.registries, {
-    npm: 'https://registry.nrz.io/acme/npm/',
-    main: 'https://registry.nrz.io/acme/main/',
+    npm: 'https://registry.nrz.khulnasoft.com/acme/npm/',
+    main: 'https://registry.nrz.khulnasoft.com/acme/main/',
     partner: 'https://partner.example.com/',
   })
   t.equal(added[0]?.[0], 'user')
@@ -322,8 +322,8 @@ t.test(
     )
     t.strictSame(loginCalls, [], 'never authenticated')
     t.strictSame(result.registries, {
-      npm: 'https://registry.nrz.io/acme/npm/',
-      main: 'https://registry.nrz.io/acme/main/',
+      npm: 'https://registry.nrz.khulnasoft.com/acme/npm/',
+      main: 'https://registry.nrz.khulnasoft.com/acme/main/',
       good: 'http://good.example/',
     })
   },
@@ -343,7 +343,7 @@ t.test('interactive: unknown account slug', async t => {
   await t.rejects(
     mod.command(makeConf({}, added)),
     {
-      message: /No nrz.io account or organization named "nope"/,
+      message: /No nrz.khulnasoft.com account or organization named "nope"/,
       cause: { code: 'ECONFIG' },
     },
     'names the slug rather than the HTTP failure',
@@ -382,14 +382,14 @@ t.test(
   async t => {
     const added: Added[] = []
     const { mod, kcWrites } = await loadSetup([], undefined, {
-      'https://registry.nrz.io/acme/main': 'Bearer existing-main',
+      'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main',
     })
     await mod.command(
       makeConf({ yes: true, positionals: ['acme'] }, added),
     )
     t.strictSame(kcWrites, [
       [
-        'https://registry.nrz.io/acme/npm',
+        'https://registry.nrz.khulnasoft.com/acme/npm',
         'Bearer existing-main',
         '',
       ],
@@ -402,14 +402,14 @@ t.test(
   async t => {
     const added: Added[] = []
     const { mod, kcWrites } = await loadSetup([], undefined, {
-      'https://registry.nrz.io/acme/npm': 'Bearer existing-npm',
+      'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer existing-npm',
     })
     await mod.command(
       makeConf({ yes: true, positionals: ['acme'] }, added),
     )
     t.strictSame(kcWrites, [
       [
-        'https://registry.nrz.io/acme/main',
+        'https://registry.nrz.khulnasoft.com/acme/main',
         'Bearer existing-npm',
         '',
       ],
@@ -425,7 +425,7 @@ t.test(
       ['n', 'n'],
       undefined,
       {
-        'https://registry.nrz.io/acme/main': 'Bearer existing-main',
+        'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main',
       },
     )
     await mod.command(
@@ -434,7 +434,7 @@ t.test(
     t.strictSame(loginCalls, [], 'auth was skipped')
     t.strictSame(kcWrites, [
       [
-        'https://registry.nrz.io/acme/npm',
+        'https://registry.nrz.khulnasoft.com/acme/npm',
         'Bearer existing-main',
         'corp',
       ],
@@ -445,8 +445,8 @@ t.test(
 t.test('--yes keeps differing npm and main tokens', async t => {
   const added: Added[] = []
   const { mod, kcWrites } = await loadSetup([], undefined, {
-    'https://registry.nrz.io/acme/npm': 'Bearer stale-npm',
-    'https://registry.nrz.io/acme/main': 'Bearer fresh-main',
+    'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer stale-npm',
+    'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer fresh-main',
   })
   await mod.command(
     makeConf({ yes: true, positionals: ['acme'] }, added),
@@ -461,7 +461,7 @@ t.test(
     const { mod } = await loadSetup(
       [],
       undefined,
-      { 'https://registry.nrz.io/acme/main': 'Bearer existing-main' },
+      { 'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main' },
       Object.assign(new Error('EACCES'), { code: 'EACCES' }),
     )
     await t.rejects(

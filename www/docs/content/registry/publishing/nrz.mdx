@@ -1,7 +1,7 @@
 ---
 title: nrz
 description:
-  Configure the nrz client for your nrz.io registries, and publish to
+  Configure the nrz client for your nrz.khulnasoft.com registries, and publish to
   main.
 sidebar:
   label: nrz
@@ -32,10 +32,10 @@ If you would rather not use the wizard, or you are scripting it, see
 ## Manual configuration
 
 ```sh
-nrz config set registry=https://registry.nrz.io/acme/npm/ \
-  registries.npm=https://registry.nrz.io/acme/npm/ \
-  registries.main=https://registry.nrz.io/acme/main/ \
-  scoped-registries.@acme=https://registry.nrz.io/acme/main/
+nrz config set registry=https://registry.nrz.khulnasoft.com/acme/npm/ \
+  registries.npm=https://registry.nrz.khulnasoft.com/acme/npm/ \
+  registries.main=https://registry.nrz.khulnasoft.com/acme/main/ \
+  scoped-registries.@acme=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 That writes `nrz.json`. Add `--config=user` to apply it to every
@@ -44,13 +44,13 @@ project instead of just this one:
 ```json
 {
   "config": {
-    "registry": "https://registry.nrz.io/acme/npm/",
+    "registry": "https://registry.nrz.khulnasoft.com/acme/npm/",
     "registries": {
-      "npm": "https://registry.nrz.io/acme/npm/",
-      "main": "https://registry.nrz.io/acme/main/"
+      "npm": "https://registry.nrz.khulnasoft.com/acme/npm/",
+      "main": "https://registry.nrz.khulnasoft.com/acme/main/"
     },
     "scoped-registries": {
-      "@acme": "https://registry.nrz.io/acme/main/"
+      "@acme": "https://registry.nrz.khulnasoft.com/acme/main/"
     }
   }
 }
@@ -71,7 +71,7 @@ What each field does:
 The wizard stores a token in your system keychain. To add one by hand:
 
 ```sh
-nrz login --registry=https://registry.nrz.io/acme/main/
+nrz login --registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 Or set it in the environment, which is what you want for scripts and
@@ -79,7 +79,7 @@ CI:
 
 ```sh
 export NRZ_TOKEN=<your token>
-export NRZ_REGISTRY=https://registry.nrz.io/acme/npm/
+export NRZ_REGISTRY=https://registry.nrz.khulnasoft.com/acme/npm/
 ```
 
 `NRZ_TOKEN` with `NRZ_REGISTRY` covers the default registry. For
@@ -137,7 +137,7 @@ mapping alone is enough, with no token in the environment or keychain:
 {
   "config": {
     "scoped-registries": {
-      "@acme": "https://registry.nrz.io/acme/main/"
+      "@acme": "https://registry.nrz.khulnasoft.com/acme/main/"
     }
   }
 }
@@ -146,7 +146,7 @@ mapping alone is enough, with no token in the environment or keychain:
 ## Publish to `main`
 
 ```sh
-nrz publish --registry=https://registry.nrz.io/acme/main/
+nrz publish --registry=https://registry.nrz.khulnasoft.com/acme/main/
 ```
 
 Or set `registry` in the project `nrz.json` (or
@@ -155,7 +155,7 @@ Or set `registry` in the project `nrz.json` (or
 and `--recursive` to publish every workspace in a monorepo.
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.io` URL. Open it, approve, and re-run — or pass
+challenge with a `nrz.khulnasoft.com` URL. Open it, approve, and re-run — or pass
 the code through the environment:
 
 ```sh

@@ -1,6 +1,6 @@
 // the deployment's own origin, mirroring next's social-image fallback (next/dist/lib/metadata/resolvers/resolve-url):
 // dev → localhost, preview deploys → the preview url, production → the project's primary domain
-// (docs.nrz.khulnasoft.com / docs.nrz.io both serve that deployment, so either host's pages point at the primary).
+// (docs.nrz.khulnasoft.com / docs.nrz.khulnasoft.com both serve that deployment, so either host's pages point at the primary).
 // SITE_URL overrides it for any other host.
 const https = (host?: string) =>
   host ? `https://${host}` : undefined

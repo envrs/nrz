@@ -540,7 +540,7 @@ export class RegistryClient {
    * When a list of registries is provided, the web login flow runs once
    * against the first of them, and the token it returns is saved for all
    * of them. This is for registries that share credentials -- like the
-   * ones under a single nrz.io account -- where opening the browser once
+   * ones under a single nrz.khulnasoft.com account -- where opening the browser once
    * per registry would just be asking for the same token again.
    *
    * Does not return the token or expose it, just saves to the auth keychain

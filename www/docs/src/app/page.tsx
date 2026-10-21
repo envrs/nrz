@@ -42,10 +42,10 @@ const docs = 'https://docs.nrz.khulnasoft.com'
 // sameAs mirrors the sidebar's social links; the client is free and BSD-2-Clause-Patent licensed
 const org = {
   '@type': 'Organization',
-  '@id': 'https://www.nrz.io/#organization',
+  '@id': 'https://www.nrz.khulnasoft.com/#organization',
   name: 'nrz',
   legalName: 'KhulnaSoft, Ltd',
-  url: 'https://www.nrz.io',
+  url: 'https://www.nrz.khulnasoft.com',
   logo: new URL('/icon1.png', siteUrl).href,
   contactPoint: {
     '@type': 'ContactPoint',
@@ -74,7 +74,7 @@ const jsonLd = {
       '@type': 'SoftwareApplication',
       name: 'nrz',
       description:
-        'An npm-compatible package manager for JavaScript, and the client for nrz.io registries.',
+        'An npm-compatible package manager for JavaScript, and the client for nrz.khulnasoft.com registries.',
       applicationCategory: 'DeveloperApplication',
       url: siteUrl.href,
       downloadUrl: 'https://www.npmjs.com/package/nrz',
@@ -88,7 +88,7 @@ const jsonLd = {
 const prompt = `Help me use nrz in this project. Start by reading ${docs}/llms.txt, which lists every page of the nrz docs. Any page is available as Markdown by adding .md to its URL (for example ${docs}/client/auth.md), and ${docs}/llms-full.txt has the whole site in one file.
 
 1. Install the nrz CLI with \`curl -fsSL https://install.nrz.khulnasoft.com | bash\` (it requires Node.js 22.22 or later), then run \`nrz install\`.
-2. To use nrz.io registries, run \`nrz setup\`. It authenticates and configures the account's registry aliases in one step. To move an existing repository (and its CI) onto a nrz.io registry, follow ${docs}${registryMigrationSkill.url}.
+2. To use nrz.khulnasoft.com registries, run \`nrz setup\`. It authenticates and configures the account's registry aliases in one step. To move an existing repository (and its CI) onto a nrz.khulnasoft.com registry, follow ${docs}${registryMigrationSkill.url}.
 3. To answer questions about dependencies, write Dependency Selector Syntax queries and run them with \`nrz query '<selector>'\`. The syntax is documented at ${docs}/client/selectors.md. If you support Agent Skills, the dss-query skill at ${dssQuerySkill.github} covers it.
 
 Only use commands and flags that appear in the docs.`
@@ -119,7 +119,7 @@ const cards: Card[] = [
     icon: ArrowRightLeftIcon,
     title: 'Registry migration skill',
     description:
-      'An agent skill that moves a repository, its CI, and its agents onto your nrz.io registry.',
+      'An agent skill that moves a repository, its CI, and its agents onto your nrz.khulnasoft.com registry.',
     href: registryMigrationSkill.github,
   },
 ]
