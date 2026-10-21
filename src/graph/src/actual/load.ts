@@ -1,19 +1,37 @@
 import {
   asDepID,
-  type DepID,
   hydrate,
   joinDepIDTuple,
+  joinExtra,
+  splitDepID,
+  splitExtra,
 } from '@nrz/dep-id'
-import { type PackageJson } from '@nrz/package-json'
-import { Spec, type SpecOptions } from '@nrz/spec'
-import { type Manifest, longDependencyTypes } from '@nrz/types'
-import { type Monorepo } from '@nrz/workspaces'
-import { type Path, type PathScurry } from 'path-scurry'
-import { type RawDependency, shorten } from '../dependencies.ts'
+import { Spec } from '@nrz/spec'
+import { graphStep } from '@nrz/output'
+import { isObject } from '@nrz/types'
+import {
+  shorten,
+  getRawDependencies,
+  getDependencies,
+  asDependencySpecError,
+} from '../dependencies.ts'
 import { Graph } from '../graph.ts'
 import { loadHidden } from '../lockfile/load.ts'
-import { type Node } from '../node.ts'
-import { graphStep } from '@nrz/output'
+import { saveHidden } from '../lockfile/save.ts'
+import type { DepID } from '@nrz/dep-id'
+import type { PackageJson } from '@nrz/package-json'
+import type { SpecOptions } from '@nrz/spec'
+import type { NormalizedManifest } from '@nrz/types'
+import type { LockfileData, SpecCache } from '../lockfile/types.ts'
+import type { Monorepo } from '@nrz/workspaces'
+import type { Path, PathScurry } from 'path-scurry'
+import type { Node } from '../node.ts'
+import type {
+  GraphModifier,
+  ModifierActiveEntry,
+} from '../modifiers.ts'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 export type LoadOptions = SpecOptions & {
   /**
@@ -23,7 +41,11 @@ export type LoadOptions = SpecOptions & {
   /**
    * The project root manifest.
    */
-  mainManifest?: Manifest
+  mainManifest?: NormalizedManifest
+  /**
+   * The graph modifiers helper object.
+   */
+  modifiers?: GraphModifier
   /**
    * A {@link Monorepo} object, for managing workspaces
    */
@@ -50,6 +72,35 @@ export type LoadOptions = SpecOptions & {
    * hidden lockfile at `node_modules/.nrz-lock.json`
    */
   skipHiddenLockfile?: boolean
+  /**
+   * Load only importers into the graph if the modifiers have changed.
+   */
+  skipLoadingNodesOnModifiersChange?: boolean
+  // TODO: move the lockfile-related options to a separate type file
+  /**
+   * If set to `true`, fail if lockfile is missing or out of date.
+   * Used by ci command to enforce lockfile integrity.
+   */
+  expectLockfile?: boolean
+  /**
+   * If set to `true`, fail if lockfile is missing or out of sync with package.json.
+   * Prevents any lockfile modifications and is stricter than expectLockfile.
+   */
+  frozenLockfile?: boolean
+  /**
+   * If set to `true`, only update the lockfile without performing any node_modules
+   * operations. Skips package extraction, filesystem operations, and hidden lockfile saves.
+   */
+  lockfileOnly?: boolean
+  /**
+   * Shared intern cache for parsed lockfile specs.
+   */
+  specCache?: SpecCache
+  /**
+   * Already-parsed main lockfile data. When set, ideal build skips
+   * re-reading `nrz-lock.json`.
+   */
+  lockfileData?: LockfileData
 }
 
 export type ReadEntry = {
@@ -58,17 +109,55 @@ export type ReadEntry = {
   realpath: Path
 }
 
+/**
+ * The configuration object type as it is saved in the `.nrz/nrz.json`
+ */
+export type StoreConfigObject = {
+  modifiers: Record<string, string> | undefined
+}
+
+/**
+ * Checks if a given object is a {@link StoreConfigObject}.
+ */
+export const isStoreConfigObject = (
+  obj: unknown,
+): obj is StoreConfigObject =>
+  isObject(obj) &&
+  Object.prototype.hasOwnProperty.call(obj, 'modifiers') &&
+  isObject(obj.modifiers)
+
+/**
+ * Returns a {@link StoreConfigObject} from a given object.
+ * Throws a TypeError if the object can't be converted.
+ */
+export const asStoreConfigObject = (
+  obj: unknown,
+): StoreConfigObject => {
+  if (!isStoreConfigObject(obj)) {
+    throw new TypeError(`Expected a store config object, got ${obj}`)
+  }
+  return obj
+}
+
+// path-based refer to the types of dependencies that are directly linked to
+// their real location in the file system and thus will not have an entry
+// in the `node_modules/.nrz` store
 const pathBasedType = new Set(['file', 'workspace'])
 const isPathBasedType = (
   type: string,
 ): type is 'file' | 'workspace' => pathBasedType.has(type)
-const getPathBasedId = (
+
+/**
+ * Returns a {@link DepID} for a given spec and path, if the spec is
+ * path-based or a registry spec, otherwise returns `undefined`.
+ */
+export const getPathBasedId = (
   spec: Spec,
-  path: string,
+  path: Path,
 ): DepID | undefined =>
   isPathBasedType(spec.type) ?
-    joinDepIDTuple([spec.type, path])
-  : undefined
+    joinDepIDTuple([spec.type, path.relativePosix()])
+  : findDepID(path)
 
 /**
  * Retrieve the {@link DepID} for a given package from its location.
@@ -96,54 +185,34 @@ const findNodeModules = ({
 const findName = ({ parent, name }: Path): string =>
   parent?.name.startsWith('@') ? `${parent.name}/${name}` : name
 
-const isStringArray = (a: unknown): a is string[] =>
-  Array.isArray(a) && !a.some(b => typeof b !== 'string')
-
-/*
- * Retrieves a map of all dependencies, of all types, that can be iterated
- * on and consulted when parsing the directory contents of the current node.
+/**
+ * Helper function that gets a modified {@link Spec} when finding a modifier
+ * that applies to a given dependency. Otherwise returns the original spec
+ * value and no queryModifier.
  */
-const getDeps = (node: Node) => {
-  const dependencies = new Map<string, RawDependency>()
-  const bundleDeps: unknown = node.manifest?.bundleDependencies ?? []
-  // if it's an importer, bundleDeps are just normal. if it's a dep,
-  // then they're ignored entirely.
-  const bundled =
-    (
-      !node.importer &&
-      !node.id.startsWith('git') &&
-      isStringArray(bundleDeps)
-    ) ?
-      new Set(bundleDeps)
-    : new Set<string>()
-  for (const depType of longDependencyTypes) {
-    const obj: Record<string, string> | undefined =
-      node.manifest?.[depType]
-    // only care about devDeps for importers and git or symlink deps
-    // technically this will also include devDeps for tarball file: specs,
-    // but that is likely rare enough to not worry about too much.
-    if (
-      depType === 'devDependencies' &&
-      !node.importer &&
-      !node.id.startsWith('git') &&
-      !node.id.startsWith('file')
-    ) {
-      continue
-    }
-    if (obj) {
-      for (const [name, bareSpec] of Object.entries(obj)) {
-        // if it's a bundled dependency, we just ignore it entirely.
-        if (bundled.has(name)) continue
-        dependencies.set(name, {
-          name,
-          type: depType,
-          bareSpec,
-          registry: node.registry,
-        })
-      }
-    }
+const maybeApplyModifierToSpec = (
+  spec: Spec,
+  depName: string,
+  modifierRefs?: Map<string, ModifierActiveEntry>,
+): { spec: Spec; queryModifier?: string } => {
+  const activeModifier = modifierRefs?.get(depName)
+  const queryModifier = activeModifier?.modifier.query
+  const completeModifier =
+    activeModifier &&
+    activeModifier.interactiveBreadcrumb.current ===
+      activeModifier.modifier.breadcrumb.last
+
+  if (
+    queryModifier &&
+    completeModifier &&
+    'spec' in activeModifier.modifier
+  ) {
+    const modifiedSpec = activeModifier.modifier.spec
+    modifiedSpec.overridden = true
+    return { spec: modifiedSpec, queryModifier }
   }
-  return dependencies
+
+  return { spec, queryModifier }
 }
 
 /**
@@ -208,14 +277,19 @@ const parseDir = (
   fromNode: Node,
   currDir: Path,
 ) => {
-  const { loadManifests } = options
-  const dependencies = getDeps(fromNode)
+  const { loadManifests, modifiers } = options
+  const dependencies = getRawDependencies(fromNode)
   const seenDeps = new Set<string>()
   const readItems: Set<ReadEntry> = readDir(
     scurry,
     currDir,
     fromNode.name,
   )
+
+  // Get modifier references for this node's dependencies
+  const modifierRefs = modifiers?.tryDependencies(fromNode, [
+    ...getDependencies(fromNode, options).values(),
+  ])
 
   for (const { alias, name, realpath } of readItems) {
     let node
@@ -230,10 +304,21 @@ const parseDir = (
       const depId = findDepID(realpath)
 
       if (depId) {
-        const h = hydrate(depId, alias, {
-          ...options,
-          registry: fromNode.registry,
-        })
+        let h = hydrate(depId, alias, options)
+        // if the parsed registry value is using the default value, then
+        // the node should inherit the registry value from its parent node
+        if (
+          h.type === 'registry' &&
+          h.registry === h.options.registry &&
+          fromNode.registry
+        ) {
+          h.registry = fromNode.registry
+        }
+
+        // Check for active modifiers and replace spec even when not loading manifests
+        const { spec: modifiedSpec, queryModifier } =
+          maybeApplyModifierToSpec(h, alias, modifierRefs)
+        h = modifiedSpec
 
         // graphs build with no manifest have no notion of
         // dependency types and or spec definitions since those
@@ -244,12 +329,16 @@ const parseDir = (
           h, // uses spec from hydrated id
           {
             name,
-            ...(h.registrySpec ?
-              { version: h.registrySpec } // adds version if available
-            : null),
           },
           depId,
+          joinExtra({ modifier: queryModifier }),
         )
+
+        // Update active entry after placing package
+        const activeModifier = modifierRefs?.get(alias)
+        if (activeModifier && node) {
+          modifiers?.updateActiveEntry(node, activeModifier)
+        }
       }
     }
 
@@ -270,18 +359,55 @@ const parseDir = (
       const bareSpec = deps?.bareSpec || '*'
 
       const depType = shorten(type, alias, fromNode.manifest)
-      const spec = Spec.parse(alias, bareSpec, {
-        ...options,
-        registry: fromNode.registry,
-      })
-      const maybeId = getPathBasedId(spec, realpath.relativePosix())
+      let spec: Spec
+      try {
+        spec = Spec.parse(alias, bareSpec, {
+          ...options,
+          // fall back to options.registry (which the lockfile merges into)
+          // so importer-level edges don't silently revert to the default
+          // npm registry. see nrz/nrz#1580.
+          registry: fromNode.registry ?? options.registry,
+        })
+      } catch (er) {
+        throw asDependencySpecError(er, fromNode, depType)
+      }
+
+      // Check for active modifiers and replace spec if a modifier is complete
+      const { spec: modifiedSpec, queryModifier } =
+        maybeApplyModifierToSpec(spec, alias, modifierRefs)
+      spec = modifiedSpec
+
+      const maybeId = getPathBasedId(spec, realpath)
+      let peerSetHash: string | undefined
+      if (maybeId) {
+        // parses extra info from depID to retrieve peerSetHash
+        try {
+          const tuple = splitDepID(maybeId)
+          const type = tuple[0]
+          const extra =
+            type === 'registry' || type === 'git' ?
+              tuple[3]
+            : tuple[2]
+
+          peerSetHash =
+            extra ? splitExtra(extra).peerSetHash : undefined
+          /* c8 ignore next - impossible: getPathBasedId asserts valid dep id */
+        } catch {}
+      }
       node = graph.placePackage(
         fromNode,
         depType,
         spec,
         mani,
         maybeId,
+        joinExtra({ modifier: queryModifier, peerSetHash }),
       )
+
+      // Update active entry after placing package
+      const activeModifier = modifierRefs?.get(alias)
+      if (activeModifier && node) {
+        modifiers?.updateActiveEntry(node, activeModifier)
+      }
     }
 
     if (node) {
@@ -316,11 +442,68 @@ const parseDir = (
   for (const { name, type, bareSpec } of dependencies.values()) {
     if (!seenDeps.has(name)) {
       const depType = shorten(type, name, fromNode.manifest)
-      const spec = Spec.parse(name, bareSpec, {
-        ...options,
-        registry: fromNode.registry,
-      })
-      graph.placePackage(fromNode, depType, spec)
+      let spec: Spec
+      try {
+        spec = Spec.parse(name, bareSpec, {
+          ...options,
+          registry: fromNode.registry ?? options.registry,
+        })
+      } catch (er) {
+        throw asDependencySpecError(er, fromNode, depType)
+      }
+
+      // Check for active modifiers and replace spec for missing dependencies
+      const { spec: modifiedSpec, queryModifier } =
+        maybeApplyModifierToSpec(spec, name, modifierRefs)
+      // a `-` modifier removes the dependency, so it is not missing
+      if (modifiedSpec !== spec && modifiedSpec.bareSpec === '-') {
+        continue
+      }
+      spec = modifiedSpec
+
+      graph.placePackage(
+        fromNode,
+        depType,
+        spec,
+        undefined,
+        undefined,
+        joinExtra({ modifier: queryModifier }),
+      )
+    }
+  }
+}
+
+/**
+ * Verify that importer node_modules directories exist on disk.
+ * The hidden lockfile may report deps as installed even when a
+ * workspace's node_modules has been manually deleted. Throws if
+ * an importer with at least one resolved edgeOut is missing
+ * node_modules, causing the caller to fall through to
+ * filesystem-based graph loading.
+ *
+ * Importers with no resolved edgesOut (dep-less / types-only
+ * workspaces) never get a node_modules from reify, so they are
+ * skipped — requiring one would discard the hidden lockfile on
+ * every install.
+ */
+export const verifyImporterNodeModules = (
+  graph: Graph,
+  projectRoot: string,
+): void => {
+  for (const importer of graph.importers) {
+    let linked = false
+    for (const { to } of importer.edgesOut.values()) {
+      if (to) {
+        linked = true
+        break
+      }
+    }
+    if (!linked) continue
+    const nm = resolve(projectRoot, importer.location, 'node_modules')
+    if (!existsSync(nm)) {
+      throw new Error(
+        `Missing node_modules for importer: ${importer.location}`,
+      )
     }
   }
 }
@@ -332,57 +515,115 @@ const parseDir = (
  */
 export const load = (options: LoadOptions): Graph => {
   const done = graphStep('actual')
-  // TODO: once hidden lockfile is more reliable, default to false here
   const {
-    skipHiddenLockfile = true,
+    modifiers,
+    monorepo,
     projectRoot,
     packageJson,
     scurry,
-    monorepo,
+    skipHiddenLockfile = false,
+    skipLoadingNodesOnModifiersChange = false,
   } = options
   const mainManifest =
     options.mainManifest ?? packageJson.read(projectRoot)
 
   if (!skipHiddenLockfile) {
     try {
+      // if we reach here, the hidden lockfile is valid
       const graph = loadHidden({
+        ...options,
         projectRoot,
         mainManifest,
         packageJson,
         monorepo,
         scurry,
       })
-      // TODO: check mtime of lockfile vs .nrz folder
+      verifyImporterNodeModules(graph, projectRoot)
+      done()
       return graph
-    } catch {}
+    } catch {
+      // Hidden lockfile is cache-only, safe to regenerate on any error
+      // as it will fall back to filesystem traversal. Deliberately also
+      // swallows EINVALIDNAME, unlike ideal/build.ts: this cache lives
+      // inside node_modules and regenerating it is the right response,
+      // whereas failing loud would let it brick installs.
+      // TODO: Warn version mismatch to @nrz/output for debugging
+    }
   }
 
   const graph = new Graph({ ...options, mainManifest })
-  const depsFound = new Map<Node, Path>()
 
-  // starts the list of initial folders to parse using the importer nodes
-  for (const importer of graph.importers) {
-    depsFound.set(
-      importer,
-      scurry.cwd.resolve(`${importer.location}/node_modules`),
+  // retrieve the configuration object from the store
+  let storeConfig: StoreConfigObject = { modifiers: undefined }
+  try {
+    storeConfig = asStoreConfigObject(
+      JSON.parse(
+        readFileSync(
+          scurry.resolve('node_modules/.nrz/nrz.json'),
+          'utf8',
+        ),
+      ),
     )
+  } catch {}
+  const storeModifiers = JSON.stringify(storeConfig.modifiers ?? {})
+  const optionsModifiers = JSON.stringify(modifiers?.config)
+  const modifiersChanged = storeModifiers !== optionsModifiers
+  const shouldLoadDependencies = !(
+    skipLoadingNodesOnModifiersChange && modifiersChanged
+  )
+
+  // will only skip loading dependencies if the
+  // skipLoadingNodesOnModifiersChange option is set to true
+  // and the current modifiers have not changed when compared
+  // to the modifiers stored in the `node_modules/.nrz/nrz.json` store config
+  if (shouldLoadDependencies) {
+    const depsFound = new Map<Node, Path>()
+
+    // starts the list of initial folders to parse using the importer nodes
+    for (const importer of graph.importers) {
+      modifiers?.tryImporter(importer)
+      depsFound.set(
+        importer,
+        scurry.cwd.resolve(`${importer.location}/node_modules`),
+      )
+    }
+
+    // breadth-first traversal of the file system tree reading deps found
+    // starting from the node_modules folder of every importer in order to
+    // find the actual installed dependencies at each location
+    for (const [node, path] of depsFound.entries()) {
+      parseDir(
+        options,
+        scurry,
+        packageJson,
+        depsFound,
+        graph,
+        node,
+        path,
+      )
+    }
+
+    // Clean up any pending modifier entries that were never completed
+    modifiers?.rollbackActiveEntries()
+
+    // caches the load result to the hidden lockfile, but only when the
+    // store exists, i.e. this node_modules was built by nrz. a walk over
+    // a node_modules installed by another client finds nothing, and
+    // must not leave a file behind that makes it look like a nrz install.
+    if (
+      scurry.cwd
+        .resolve('node_modules/.nrz')
+        .lstatSync()
+        ?.isDirectory()
+    ) {
+      saveHidden({
+        ...options,
+        graph,
+      })
+    }
   }
 
-  // breadth-first traversal of the file system tree reading deps found
-  // starting from the node_modules folder of every importer in order to
-  // find the actual installed dependencies at each location
-  for (const [node, path] of depsFound.entries()) {
-    parseDir(
-      options,
-      scurry,
-      packageJson,
-      depsFound,
-      graph,
-      node,
-      path,
-    )
-  }
-
+  graph.sortNodes()
   done()
 
   return graph

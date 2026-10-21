@@ -1,10 +1,18 @@
 import { delimiter, getId, joinDepIDTuple } from '@nrz/dep-id'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import { resolve } from 'node:path'
 import { inspect } from 'node:util'
 import t from 'tap'
 import { Edge } from '../src/edge.ts'
-import { Node } from '../src/node.ts'
-import { type GraphLike } from '../src/types.ts'
+import { getFlagNumFromNode } from '../src/lockfile/types.ts'
+import {
+  asNode,
+  copyPackageMetadata,
+  isNode,
+  Node,
+} from '../src/node.ts'
+import type { Dist, GraphLike } from '@nrz/types'
 import { PathScurry } from 'path-scurry'
 
 t.cleanSnapshot = s =>
@@ -14,6 +22,9 @@ t.cleanSnapshot = s =>
       '$1"projectRoot": "{ROOT}"',
     )
     .replace(/^(\s+)projectRoot: .*$/gm, '$1projectRoot: #')
+    // node 26+ omits the constructor name from the inspect prefix
+    // when the toStringTag already includes it
+    .replace(/^Node \[(@nrz\/graph\.Node)\] \{/gm, '$1 {')
 
 const options = {
   registry: 'https://registry.npmjs.org/',
@@ -56,6 +67,7 @@ t.test('Node', async t => {
     './path/to/importer',
     'should return the expected location value for importers',
   )
+  t.strictSame(root.options, opts, 'should have the options')
   t.matchSnapshot(
     inspect(root, { depth: 0 }),
     'should print with special tag name',
@@ -84,6 +96,11 @@ t.test('Node', async t => {
 
   t.matchSnapshot(String(foo), 'should stringify registry node')
 
+  t.strictSame(
+    foo.rawManifest,
+    fooMani,
+    'should have the raw manifest',
+  )
   t.strictSame(
     foo.location,
     './arbitrary',
@@ -162,11 +179,12 @@ t.test('Node', async t => {
   const unnamedMani = {
     version: '0.0.0',
   }
-  const unnamedSpec = Spec.parse('', '0.0.0')
+  // the spec still needs a usable name, only the manifest lacks one
+  const unnamedSpec = Spec.parse('unnamed', '0.0.0')
   const unnamed = new Node(opts, undefined, unnamedMani, unnamedSpec)
   t.strictSame(
     unnamed.location,
-    `./node_modules/.nrz/${delimiter}${delimiter}@0.0.0/node_modules/${delimiter}${delimiter}@0.0.0`,
+    `./node_modules/.nrz/${delimiter}npm${delimiter}unnamed@0.0.0/node_modules/${delimiter}npm${delimiter}unnamed@0.0.0`,
     'should have a location for unnamed manifests',
   )
 
@@ -183,6 +201,32 @@ t.test('Node', async t => {
   t.matchSnapshot(
     String(file),
     'should stringify file node with no manifest',
+  )
+
+  // test resolved for remote packages
+  const remotePkg = new Node(
+    opts,
+    joinDepIDTuple(['remote', 'https://example.com/x.tgz']),
+  )
+  remotePkg.setResolved()
+  t.strictSame(
+    remotePkg.resolved,
+    'https://example.com/x.tgz',
+    'should set expected resolved value for a remote file type',
+  )
+  t.matchSnapshot(
+    String(remotePkg),
+    'should stringify remote node as expected',
+  )
+
+  // now let's resolve again with an integrity value available
+  remotePkg.manifest = {
+    dist: { integrity: 'sha512-deadbeef' },
+  }
+  remotePkg.setResolved()
+  t.matchSnapshot(
+    remotePkg.toJSON(),
+    'should stringify remote node with integrity',
   )
 
   const fileMani = new Node(
@@ -251,6 +295,204 @@ t.test('Node', async t => {
   t.matchSnapshot(
     String(regNoManifest),
     'should stringify manifest-less registry node',
+  )
+
+  const brotli = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+  )
+  t.equal(brotli.brotli, false, 'defaults off before resolving')
+  brotli.brotli = true
+  t.equal(
+    brotli.brotli,
+    true,
+    'the lockfile bit answers until there is a url',
+  )
+  brotli.setResolved()
+  t.strictSame(
+    brotli.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br',
+    'should rebuild the .tar.br url from the lockfile flag alone',
+  )
+  t.equal(brotli.brotli, true, 'stays brotli once resolved')
+
+  // the manifest's own alternate is what a real install goes on: the
+  // node has to settle this at construction, before `integrity` is
+  // filled in from dist.integrity (which is the .tgz hash)
+  const fromManifest = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        tarball: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+        integrity: 'sha512-deadbeef',
+        alternates: [{ kind: 'tar.br', tarball: 'foo-1.0.0.tar.br' }],
+      },
+    },
+  )
+  t.equal(fromManifest.brotli, true, 'picked up dist.alternates')
+  fromManifest.setResolved()
+  t.strictSame(
+    fromManifest.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br',
+    'resolved from the alternate reference',
+  )
+  t.equal(fromManifest.integrity, undefined)
+
+  const negatives: [string, Dist['alternates']][] = [
+    [
+      'another kind',
+      [{ kind: 'tar.zst', tarball: 'foo-1.0.0.tzst' }],
+    ],
+    ['an empty reference', [{ kind: 'tar.br', tarball: '' }]],
+    ['no alternates at all', undefined],
+    // the protocol allows these; this client does not use them,
+    // because setResolved() rebuilds the url from the .tgz by
+    // convention and could not reproduce either one
+    [
+      'a reference with no .tar.br suffix',
+      [{ kind: 'tar.br', tarball: './artifact' }],
+    ],
+    [
+      'a .tar.br somewhere else',
+      [
+        {
+          kind: 'tar.br',
+          tarball: 'https://cdn.example.com/foo-1.0.0.tar.br',
+        },
+      ],
+    ],
+  ]
+  for (const [what, alternates] of negatives) {
+    const n = new Node(
+      opts,
+      joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dist: {
+          tarball: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+          integrity: 'sha512-deadbeef',
+          ...(alternates && { alternates }),
+        },
+      },
+    )
+    n.setResolved()
+    t.equal(n.brotli, false, what)
+    t.strictSame(
+      n.resolved,
+      'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+      `${what}: stays on the .tgz`,
+    )
+    t.equal(n.integrity, 'sha512-deadbeef', `${what}: keeps its hash`)
+  }
+
+  // a dist with alternates but no tarball of its own has no base to
+  // resolve them against
+  const noTarball = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        alternates: [{ kind: 'tar.br', tarball: 'foo-1.0.0.tar.br' }],
+      },
+    },
+  )
+  t.equal(noTarball.brotli, false, 'no base url, no alternate')
+
+  const disabled = new Node(
+    { ...opts, 'brotli-tarballs': false },
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        tarball: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+        integrity: 'sha512-deadbeef',
+        alternates: [{ kind: 'tar.br', tarball: 'foo-1.0.0.tar.br' }],
+      },
+    },
+  )
+  disabled.setResolved()
+  t.equal(disabled.brotli, false, '--no-brotli-tarballs')
+  t.strictSame(
+    disabled.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+  )
+  t.equal(disabled.integrity, 'sha512-deadbeef')
+
+  const brotliMani = new Node(
+    opts,
+    joinDepIDTuple(['registry', 'custom', 'foo@1.0.0']),
+    {
+      dist: {
+        tarball: 'https://c.io/foo/-/foo-1.0.0.tgz',
+        // describes the .tgz, so it must not be carried onto the
+        // .tar.br, which is a different artifact with a different hash
+        integrity: 'sha512-deadbeef',
+      },
+    },
+  )
+  brotliMani.brotli = true
+  brotliMani.setResolved()
+  t.strictSame(
+    brotliMani.resolved,
+    'https://c.io/foo/-/foo-1.0.0.tar.br',
+    'derives the alternate from the manifest tarball',
+  )
+  t.equal(
+    brotliMani.integrity,
+    undefined,
+    'does not inherit the .tgz integrity',
+  )
+
+  // A hash the registry sent for the alternate is pinned onto the node.
+  // The `.tgz`'s own integrity is still never copied across.
+  const pinnedAlt = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        tarball: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+        integrity: 'sha512-deadbeef',
+        alternates: [
+          {
+            kind: 'tar.br',
+            tarball: 'foo-1.0.0.tar.br',
+            integrity: `sha512-${'a'.repeat(86)}==`,
+          },
+        ],
+      },
+    },
+  )
+  pinnedAlt.setResolved()
+  t.strictSame(
+    pinnedAlt.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br',
+  )
+  t.equal(
+    pinnedAlt.integrity,
+    `sha512-${'a'.repeat(86)}==`,
+    "the alternate's own hash, not the .tgz's",
+  )
+
+  const notBrotli = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+  )
+  notBrotli.resolved =
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz'
+  notBrotli.brotli = true
+  t.equal(
+    notBrotli.brotli,
+    false,
+    'a set resolved url outranks the stored bit',
   )
 
   const remote = new Node(
@@ -361,6 +603,67 @@ t.test('nodeModules path and inNrzStore flag', t => {
   t.end()
 })
 
+t.test('resolvedLocation memo', async t => {
+  const projectRoot = t.testdir()
+  const opts = { ...options, projectRoot, graph: {} as GraphLike }
+  const scurry = new PathScurry(projectRoot)
+  const id = joinDepIDTuple(['registry', '', 'foo@1.2.3'])
+  const node = new Node(opts, id, { name: 'foo', version: '1.2.3' })
+  const expect = (loc: string, s = scurry) =>
+    s.cwd.resolve(loc).fullpath()
+  const def = expect(node.location)
+  const calls = t.capture(scurry.cwd, 'resolve', scurry.cwd.resolve)
+  t.equal(node.resolvedLocation(scurry), def)
+  t.equal(node.resolvedLocation(scurry), def, 'memoized')
+  t.equal(calls().length, 1, 'resolved once')
+  calls.restore()
+
+  node.location = './node_modules/other'
+  t.equal(
+    node.resolvedLocation(scurry),
+    expect('./node_modules/other'),
+    'location setter',
+  )
+  node.setDefaultLocation()
+  t.equal(node.resolvedLocation(scurry), def, 'setDefaultLocation')
+
+  const peerId = joinDepIDTuple([
+    'registry',
+    '',
+    'foo@1.2.3',
+    'peer.aaaaaaaaaaaaaaaa',
+  ])
+  node.setPeerIdentity(peerId, 'peer.aaaaaaaaaaaaaaaa')
+  t.equal(
+    node.resolvedLocation(scurry),
+    expect(`./node_modules/.nrz/${peerId}/node_modules/foo`),
+    'setPeerIdentity',
+  )
+
+  node.setImporterLocation('./ws')
+  t.equal(
+    node.resolvedLocation(scurry),
+    expect('./ws'),
+    'setImporterLocation',
+  )
+
+  const other = new PathScurry(resolve(projectRoot, 'other'))
+  t.equal(
+    node.resolvedLocation(other),
+    expect('./ws', other),
+    'other scurry',
+  )
+  t.equal(node.resolvedLocation(scurry), expect('./ws'))
+
+  const root = scurry.cwd.root.fullpath()
+  node.location = root
+  t.equal(
+    node.nodeModules(scurry),
+    scurry.resolve(root, 'node_modules'),
+    'nodeModules at fs root',
+  )
+})
+
 t.test('optional flag is contagious', t => {
   const opts = {
     ...options,
@@ -452,4 +755,287 @@ t.test('dev flag is contagious', t => {
   t.equal(dd.isDev(), false)
 
   t.end()
+})
+
+t.test('rawManifest getter and setter', t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const mani = {
+    name: 'test',
+    version: '1.0.0',
+  }
+  const spec = Spec.parse('foo', '^1.0.0')
+  const node = new Node(opts, undefined, mani, spec)
+
+  // set a confused manifest if that's the case
+  node.maybeSetConfusedManifest(spec, mani)
+
+  t.strictSame(node.rawManifest?.name, 'test')
+  t.equal(node.confused, true)
+
+  // the manifest should have a fixed up name when the package name is confused
+  t.strictSame(node.manifest?.name, 'foo')
+
+  t.matchSnapshot(node.toJSON(), 'should serialize node to JSON')
+
+  // string representation
+  t.strictSame(node.toString(), 'npm:foo@1.0.0')
+
+  t.end()
+})
+
+t.test('isNode', async t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const mani = {
+    name: 'test',
+    version: '1.0.0',
+  }
+  const spec = Spec.parse('foo', '^1.0.0')
+  const node = new Node(opts, undefined, mani, spec)
+  t.ok(isNode(node), 'should be ok if object is a valid node')
+  node[Symbol.toStringTag] === 'something else'
+  t.ok(
+    isNode(node),
+    "should not be ok if the object string tag won't match",
+  )
+  t.notOk(
+    isNode({}),
+    'should not be ok if object does not have a valid obj',
+  )
+  t.notOk(
+    isNode(undefined),
+    "should not be ok if it's an undefined value",
+  )
+})
+
+t.test('asNode', async t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const mani = {
+    name: 'test',
+    version: '1.0.0',
+  }
+  const spec = Spec.parse('foo', '^1.0.0')
+  const node = new Node(opts, undefined, mani, spec)
+  t.ok(
+    asNode(node),
+    'should return typed object if a valid dependency shaped obj is found',
+  )
+  t.throws(
+    () => asNode({}),
+    /Expected a node/,
+    'should throw if object is not a node',
+  )
+})
+
+t.test('node with peerSetHash', async t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const mani = {
+    name: 'test-peer',
+    version: '2.0.0',
+  }
+  const nodeWithPeer = new Node(
+    opts,
+    joinDepIDTuple([
+      'registry',
+      '',
+      'test-peer@2.0.0',
+      'peer.abc123',
+    ]),
+    mani,
+  )
+  nodeWithPeer.peerSetHash = 'peer.abc123'
+  t.matchSnapshot(
+    nodeWithPeer.toJSON(),
+    'should serialize node with peerSetHash',
+  )
+})
+
+t.test('setPeerIdentity updates id and default location', async t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const node = new Node(
+    opts,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0', 'peer.1']),
+    { name: 'foo', version: '1.0.0' },
+  )
+  node.peerSetHash = 'peer.1'
+  t.match(
+    node.location,
+    /peer\.1/,
+    'default location uses the old id',
+  )
+  const next = joinDepIDTuple([
+    'registry',
+    '',
+    'foo@1.0.0',
+    'peer.aaaaaaaaaaaaaaaa',
+  ])
+  node.setPeerIdentity(next, 'peer.aaaaaaaaaaaaaaaa')
+  t.equal(node.id, next)
+  t.equal(node.peerSetHash, 'peer.aaaaaaaaaaaaaaaa')
+  t.equal(node.name, 'foo')
+  t.equal(
+    node.location,
+    `./node_modules/.nrz/${next}/node_modules/foo`,
+  )
+})
+
+t.test(
+  'setPeerIdentity rekeys nodesByName when name was id',
+  async t => {
+    const nodesByName = new Map<string, Set<Node>>()
+    const opts = {
+      ...options,
+      projectRoot: t.testdirName,
+      graph: { nodesByName } as unknown as GraphLike,
+    }
+    const oldId = joinDepIDTuple([
+      'registry',
+      '',
+      'anon@1.0.0',
+      'peer.1',
+    ])
+    const node = new Node(opts, oldId)
+    t.equal(node.name, oldId)
+    nodesByName.set(oldId, new Set([node]))
+    const next = joinDepIDTuple([
+      'registry',
+      '',
+      'anon@1.0.0',
+      'peer.aaaaaaaaaaaaaaaa',
+    ])
+    node.setPeerIdentity(next, 'peer.aaaaaaaaaaaaaaaa')
+    t.notOk(nodesByName.has(oldId))
+    t.ok(nodesByName.get(next)?.has(node))
+    t.equal(node.name, next)
+  },
+)
+
+t.test(
+  'setPeerIdentity handles missing nodesByName entry',
+  async t => {
+    const nodesByName = new Map<string, Set<Node>>()
+    const opts = {
+      ...options,
+      projectRoot: t.testdirName,
+      graph: { nodesByName } as unknown as GraphLike,
+    }
+    const oldId = joinDepIDTuple([
+      'registry',
+      '',
+      'anon@1.0.0',
+      'peer.1',
+    ])
+    const node = new Node(opts, oldId)
+    t.equal(node.name, oldId)
+    const next = joinDepIDTuple([
+      'registry',
+      '',
+      'anon@1.0.0',
+      'peer.bbbbbbbbbbbbbbbb',
+    ])
+    const preexisting = new Node(
+      opts,
+      joinDepIDTuple(['registry', '', 'other@1.0.0']),
+      { name: 'other', version: '1.0.0' },
+    )
+    nodesByName.set(next, new Set([preexisting]))
+    node.setPeerIdentity(next, 'peer.bbbbbbbbbbbbbbbb')
+    t.ok(nodesByName.get(next)?.has(node))
+    t.ok(nodesByName.get(next)?.has(preexisting))
+  },
+)
+
+t.test('copyPackageMetadata', async t => {
+  const opts = {
+    ...options,
+    projectRoot: t.testdirName,
+    graph: {} as GraphLike,
+  }
+  const id = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+  const mk = (extra: Partial<Node> = {}) =>
+    Object.assign(new Node(opts, id), extra)
+
+  const to = mk()
+  copyPackageMetadata(
+    to,
+    mk({
+      integrity: 'sha512-x',
+      resolved: 'https://x/foo.tgz',
+      resolvedFromLockfile: true,
+    }),
+  )
+  t.equal(to.integrity, 'sha512-x', 'fills in a missing integrity')
+  t.equal(to.resolved, 'https://x/foo.tgz', 'fills in a missing url')
+  t.ok(to.resolvedFromLockfile, 'provenance carries over')
+
+  const kept = mk({ integrity: 'sha512-mine' })
+  copyPackageMetadata(kept, mk({ integrity: 'sha512-other' }))
+  t.equal(kept.integrity, 'sha512-mine', 'existing values win')
+  t.notOk(kept.resolvedFromLockfile, 'no provenance without a source')
+
+  const partial = mk()
+  copyPackageMetadata(
+    partial,
+    mk({ integrity: 'sha512-x', resolvedFromLockfile: true }),
+  )
+  t.notOk(
+    partial.resolvedFromLockfile,
+    'provenance needs integrity and resolved',
+  )
+
+  // a lockfile node for the .tar.br, with its hash but no url, next to
+  // a copy of the same version built from a manifest without alternates
+  const locked = mk({ brotli: true, integrity: 'sha512-br' })
+  const fromDisk = new Node(opts, id, {
+    name: 'foo',
+    version: '1.0.0',
+  })
+  t.equal(fromDisk.brotli, false, 'no alternate in the manifest')
+  copyPackageMetadata(fromDisk, locked)
+  t.equal(fromDisk.integrity, 'sha512-br', 'takes the hash')
+  t.equal(fromDisk.brotli, true, 'and the kind of tarball it is for')
+  fromDisk.setResolved()
+  t.equal(
+    fromDisk.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br',
+    'resolves to the artifact the hash belongs to',
+  )
+  t.equal(getFlagNumFromNode(fromDisk) & 4, 4, 'saves the brotli bit')
+
+  const gz = mk({ resolved: 'https://x/foo.tgz' })
+  copyPackageMetadata(gz, locked)
+  t.equal(
+    gz.integrity,
+    undefined,
+    'a .tgz url never takes a .tar.br hash',
+  )
+  t.equal(gz.brotli, false, 'and keeps its kind')
+
+  const untouched = mk()
+  untouched.brotli = true
+  copyPackageMetadata(untouched, mk())
+  t.equal(
+    untouched.brotli,
+    true,
+    'nothing to copy leaves the kind alone',
+  )
 })

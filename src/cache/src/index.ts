@@ -1,19 +1,20 @@
 import { error } from '@nrz/error-cause'
-import { type Integrity } from '@nrz/types'
-import { XDG } from '@nrz/xdg'
-import { createHash, randomBytes } from 'crypto'
-import { type Dirent, opendirSync, readFileSync } from 'fs'
+import { integrityHex, integrityRE } from '@nrz/types'
+import type { Integrity } from '@nrz/types'
+import { createHash, randomBytes } from 'node:crypto'
+import { opendirSync, readFileSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import {
   link,
   mkdir,
   opendir,
   readFile,
   rename,
+  stat,
   writeFile,
-} from 'fs/promises'
+} from 'node:fs/promises'
 import { LRUCache } from 'lru-cache'
-import { resolve } from 'node:path'
-import { basename, dirname } from 'path'
+import { resolve, dirname } from 'node:path'
 import { rimraf } from 'rimraf'
 
 export type CacheFetchContext =
@@ -23,11 +24,9 @@ export type CacheFetchContext =
   | undefined
 
 export type CacheOptions = {
-  [k in keyof LRUCache.Options<
-    string,
-    Buffer,
-    CacheFetchContext
-  >]?: LRUCache.Options<string, Buffer, CacheFetchContext>[k]
+  [
+    k in keyof LRUCache.Options<string, Buffer, CacheFetchContext>
+  ]?: LRUCache.Options<string, Buffer, CacheFetchContext>[k]
 } & {
   /**
    * fetchMethod may not be provided, because this cache forces its own
@@ -39,6 +38,12 @@ export type CacheOptions = {
    */
   path: string
   /**
+   * global store root. Deleting an entry from disk with its integrity
+   * also removes the store entry, sidecar index and copied marker for
+   * that integrity.
+   */
+  store?: string
+  /**
    * called whenever an item is written to disk.
    */
   onDiskWrite?: (path: string, key: string, data: Buffer) => any
@@ -49,11 +54,18 @@ export type CacheOptions = {
   onDiskDelete?: (path: string, key: string, deleted: boolean) => any
 }
 
-// eslint-disable-next-line @typescript-eslint/no-invalid-void-type
 export type BooleanOrVoid = boolean | void
 
 const hash = (s: string) =>
   createHash('sha512').update(s).digest('hex')
+
+const FAILURE = null
+
+const success = <T>(p: Promise<T>): Promise<T | typeof FAILURE> =>
+  p.then(
+    result => result,
+    () => FAILURE,
+  )
 
 export class Cache extends LRUCache<
   string,
@@ -62,20 +74,12 @@ export class Cache extends LRUCache<
 > {
   #path: string;
   [Symbol.toStringTag] = '@nrz/cache.Cache'
-  #random: string = randomBytes(6).toString('hex')
+  #random = randomBytes(6).toString('hex')
   #i = 0
   #pending = new Set<Promise<BooleanOrVoid>>()
   onDiskWrite?: CacheOptions['onDiskWrite']
   onDiskDelete?: CacheOptions['onDiskDelete']
-
-  /**
-   * ensure we get a different random key for every write,
-   * just in case the same file tries to write multiple times,
-   * it'll still be atomic.
-   */
-  get random(): string {
-    return this.#random + '.' + String(this.#i++)
-  }
+  store?: string
 
   /**
    * A list of the actions currently happening in the background
@@ -96,7 +100,8 @@ export class Cache extends LRUCache<
     const {
       onDiskWrite,
       onDiskDelete,
-      path = new XDG('nrz').cache(),
+      path,
+      store,
       fetchMethod: _,
       sizeCalculation = options.maxSize || options.maxEntrySize ?
         (v: Buffer, k: string) => v.length + k.length
@@ -116,12 +121,15 @@ export class Cache extends LRUCache<
         return this.#diskRead(k, v, opts.context?.integrity)
       },
       allowStaleOnFetchRejection: true,
-      allowStaleOnFetchAbort: true,
+      // Eviction aborts in-flight fetch() placeholders. Resolving those
+      // as undefined is treated as a cache miss and re-downloads tarballs.
+      ignoreFetchAbort: true,
       allowStale: true,
       noDeleteOnStaleGet: true,
     })
     this.onDiskWrite = onDiskWrite
     this.onDiskDelete = onDiskDelete
+    this.store = store
     this.#path = path
   }
 
@@ -181,6 +189,7 @@ export class Cache extends LRUCache<
     }
     dir.closeSync()
   }
+
   [Symbol.iterator](): Generator<[string, Buffer], void> {
     return this.walkSync()
   }
@@ -202,12 +211,17 @@ export class Cache extends LRUCache<
    * Pass `true` as second argument to delete not just from the in-memory
    * cache, but the disk backing as well.
    */
-  delete(key: string, fromDisk = false): boolean {
+  delete(
+    key: string,
+    fromDisk = false,
+    integrity?: Integrity,
+  ): boolean {
     const ret = super.delete(key)
     if (fromDisk) {
       const path = this.path(key)
-      const p: Promise<void> = this.#diskDelete(path).then(deleted =>
-        this.#unpend(p, this.onDiskDelete, path, key, deleted),
+      const p: Promise<void> = this.#diskDelete(path, integrity).then(
+        deleted =>
+          this.#unpend(p, this.onDiskDelete, path, key, deleted),
       )
       this.#pend(p)
     }
@@ -274,8 +288,8 @@ export class Cache extends LRUCache<
   /**
    * given a key, figure out the path on disk where it lives
    */
-  path(key: string) {
-    return resolve(this.#path, hash(key))
+  path(key?: string) {
+    return key ? resolve(this.#path, hash(key)) : this.#path
   }
   /**
    * given an SRI sha512 integrity string, get the path on disk that
@@ -283,16 +297,14 @@ export class Cache extends LRUCache<
    */
   integrityPath(integrity?: Integrity) {
     if (!integrity) return undefined
-    const m = /^sha512-([a-zA-Z0-9/+]{86}==)$/.exec(integrity)
-    const hash = m?.[1]
-    if (!hash) {
+    const hex = integrityHex(integrity)
+    if (!hex) {
       throw error('invalid integrity value', {
         found: integrity,
-        wanted: /^sha512-([a-zA-Z0-9/+]{86}==)$/,
+        wanted: integrityRE,
       })
     }
-    const base = Buffer.from(hash, 'base64').toString('hex')
-    return resolve(this.#path, base)
+    return resolve(this.#path, hex)
   }
 
   /**
@@ -326,10 +338,25 @@ export class Cache extends LRUCache<
   /* c8 ignore stop */
 
   /**
-   * Delete path and path + '.key'
+   * Delete path and path + '.key', and with an integrity, its
+   * integrity link and global store entry
    */
-  async #diskDelete(path: string): Promise<boolean> {
-    return rimraf([path, path + '.key'])
+  async #diskDelete(
+    path: string,
+    integrity?: Integrity,
+  ): Promise<boolean> {
+    const paths = [path, path + '.key']
+    const hex = integrityHex(integrity)
+    if (hex) paths.push(resolve(this.#path, hex))
+    const deleted = await rimraf(paths)
+    if (hex && this.store) {
+      // dir first: a sidecar without its dir is a plain store miss,
+      // a dir without its sidecar is never re-exploded
+      const entry = resolve(this.store, hex)
+      await rimraf(entry)
+      await rimraf([entry + '.json', entry + '.copied'])
+    }
+    return deleted
   }
 
   #maybeIntegrityPath(i?: Integrity) {
@@ -337,36 +364,98 @@ export class Cache extends LRUCache<
       return this.integrityPath(i)
     } catch {}
   }
+
+  async #writeFileAtomic(file: string, data: Buffer | string) {
+    // ensure we get a different random key for every write,
+    // just in case the same file tries to write multiple times,
+    // it'll still be atomic.
+    const tmp = `${file}.${this.#random}.${this.#i++}`
+    await writeFile(tmp, data)
+    await rename(tmp, file)
+  }
+
+  async #linkAtomic(src: string, dest: string) {
+    const tmp = `${dest}.${this.#random}.${this.#i++}`
+    await link(src, tmp)
+    await rename(tmp, dest)
+  }
+
   async #diskWrite(
-    path: string,
+    valFile: string,
     key: string,
     val: Buffer,
     integrity?: Integrity,
-  ) {
-    const dir = dirname(path)
-    await mkdir(dir, { recursive: true })
+  ): Promise<void> {
+    const dir = dirname(valFile)
     const intFile = this.#maybeIntegrityPath(integrity)
-    const base = basename(path)
-    const keyFile = base + '.key'
-    const tmp = dir + '/.' + base + '.' + this.random
-    const keyTmp = dir + '/.' + keyFile + '.' + this.random
-    const writeData =
-      intFile ?
-        // try to just link into the temp location, rather than write
-        // may fail with ENOENT or EEXIST, in which case, write normally
-        link(intFile, tmp).catch(() => writeFile(tmp, val))
-        // don't have it by integrity, write the new entry
-      : writeFile(tmp, val)
-    return Promise.all([
-      writeData.then(() => rename(tmp, path)),
-      writeFile(keyTmp, key).then(() =>
-        rename(keyTmp, path + '.key'),
-      ),
-    ]).then(() => {
-      if (intFile) {
-        return link(path, intFile)
-      }
-    })
+
+    // Create the directory if it doesn't exist and save the promise
+    // to ensure any write file operations happen after the dir is created.
+    const mkdirP = mkdir(dir, { recursive: true })
+
+    // Helper to atomically write a file to the cache directory, waiting for the dir
+    // to be created first.
+    const writeCacheFile = (file: string, data: Buffer | string) =>
+      mkdirP.then(() => this.#writeFileAtomic(file, data))
+
+    // Always write the key file as early as possible
+    const writeKeyP = writeCacheFile(`${valFile}.key`, key)
+
+    // Helper to wait for the operations we always want to run (write the key file)
+    // combined with any other operations passed in.
+    const finish = async (ops: Promise<void>[]) => {
+      await Promise.all([writeKeyP, ...ops])
+    }
+
+    if (!intFile) {
+      // No integrity provided, just write the value and key files
+      return finish([writeCacheFile(valFile, val)])
+    }
+
+    // Now we know that we have been passed an integrity value
+    // that we should attempt to use...somehow.
+
+    const intStats = await success(stat(intFile))
+    if (!intStats) {
+      // Integrity file doesn't exist yet
+      // Write the value file and then link that to a new integrity file
+      return finish([
+        writeCacheFile(valFile, val).then(() =>
+          link(valFile, intFile),
+        ),
+      ])
+    }
+
+    const valStats = await success(stat(valFile))
+    if (!valStats) {
+      // Value file doesn't exist but integrity does, we know they are the same
+      // because we trust the integrity file, so attempt to link and be done.
+      return finish([link(intFile, valFile)])
+    }
+
+    // We now know that both the value and integrity files exist.
+
+    if (
+      intStats.ino === valStats.ino &&
+      intStats.dev === valStats.dev
+    ) {
+      // Integrity and val file are already linked. If the are the same value
+      // then we can be done, otherwise we are probably unzipping and we should
+      // write the new integrity value and then link the value file to it.
+      return finish(
+        val.length === valStats.size ?
+          []
+        : [
+            writeCacheFile(intFile, val).then(() =>
+              this.#linkAtomic(intFile, valFile),
+            ),
+          ],
+      )
+    }
+
+    // By this point we know that the files are not linked, so
+    // we atomic link them because they should be the same entry.
+    return finish([this.#linkAtomic(intFile, valFile)])
   }
 
   async #diskRead(

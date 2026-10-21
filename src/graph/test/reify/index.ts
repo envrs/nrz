@@ -1,41 +1,142 @@
-import { type DepID, joinDepIDTuple } from '@nrz/dep-id'
-import {
-  type PackageInfoClient,
-  type PackageInfoClientRequestOptions,
-  type Resolution,
+import type { DepID } from '@nrz/dep-id'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type {
+  PackageInfoClient,
+  PackageInfoClientRequestOptions,
+  Resolution,
 } from '@nrz/package-info'
 import { PackageJson } from '@nrz/package-json'
 import { Spec } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import {
+  existsSync,
   lstatSync,
   readdirSync,
   readFileSync,
+  rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
-} from 'fs'
-import { statSync } from 'node:fs'
+} from 'node:fs'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { resolve } from 'path'
+import { inspect } from 'node:util'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { inspect } from 'util'
-import {
-  actual,
-  ideal,
-  type LockfileData,
-  type LockfileEdges,
-  type LockfileNode,
-  reify,
+import type { Test } from 'tap'
+import type {
+  AddImportersDependenciesMap,
+  RemoveImportersDependenciesMap,
+} from '../../src/dependencies.ts'
+import { asDependency } from '../../src/dependencies.ts'
+import { Graph } from '../../src/graph.ts'
+import { RollbackRemove } from '@nrz/rollback-remove'
+import type {
+  LockfileData,
+  LockfileEdges,
+  LockfileNode,
 } from '../../src/index.ts'
+import { actual, ideal, reify } from '../../src/index.ts'
 import {
   fixtureManifest,
-  mockPackageInfo,
+  mockPackageInfo as mockPackageInfoBase,
 } from '../fixtures/reify.ts'
-import {
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
+
+const createMockPackageInfo = (
+  overrides: Partial<typeof mockPackageInfoBase> = {},
+) =>
+  ({
+    ...mockPackageInfoBase,
+    ...overrides,
+  }) as unknown as PackageInfoClient
+
+const mockPackageInfo = createMockPackageInfo()
+
+// the `npm` alias is no longer a built-in default; configure it so bare
+// specs resolve and default-registry DepIDs canonicalize to `~npm~...`.
+const registries = { npm: 'https://registry.npmjs.org/' }
+
+t.test('integrity learned while extracting is pinned', async t => {
+  // a nrz packument carries no dist.integrity; the tarball response
+  // carries a digest instead, which extract() verifies and hands back
+  const integrity =
+    'sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg=='
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.0.0',
+        dependencies: {
+          lodash: '4',
+        },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const packageInfo = createMockPackageInfo({
+    async manifest(
+      spec: Spec | string,
+      options: PackageInfoClientRequestOptions = {},
+    ) {
+      const mani = await mockPackageInfoBase.manifest(spec, options)
+      if (mani.dist) delete mani.dist.integrity
+      return mani
+    },
+    async resolve(
+      spec: Spec | string,
+      options: PackageInfoClientRequestOptions = {},
+    ): Promise<Resolution> {
+      const res = await mockPackageInfoBase.resolve(spec, options)
+      return { ...res, integrity: undefined, digestRequired: true }
+    },
+    async extract(
+      spec: Spec | string,
+      target: string,
+      options: PackageInfoClientRequestOptions = {},
+    ): Promise<Resolution> {
+      const res = await mockPackageInfoBase.extract(
+        spec,
+        target,
+        options,
+      )
+      return { ...res, integrity }
+    },
+  })
+  const opts = {
+    projectRoot,
+    registry: 'https://registry.npmjs.org/',
+    packageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    remover: new RollbackRemove(),
+  }
+  const graph = await ideal.build(opts)
+  const lodash = graph.mainImporter.edgesOut.get('lodash')?.to
+  t.equal(lodash?.integrity, undefined, 'none known before extract')
+  await reify({ ...opts, graph, allowScripts: ':not(*)' })
+  t.equal(
+    lodash?.integrity,
+    integrity,
+    'node learned it from extract',
+  )
+  const lockfile = JSON.parse(
+    readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+  ) as LockfileData
+  t.equal(
+    lockfile.nodes[
+      joinDepIDTuple(['registry', '', 'lodash@4.17.21'])
+    ]?.[2],
+    integrity,
+    'nrz-lock.json pins it',
+  )
+})
 
 t.test('super basic reification', async t => {
   const dir = t.testdir({
@@ -57,18 +158,25 @@ t.test('super basic reification', async t => {
   const packageJson = new PackageJson()
   const graph = await ideal.build({
     projectRoot,
+    registry: 'https://registry.npmjs.org/',
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson,
+    remover: new RollbackRemove(),
   })
   await reify({
     projectRoot,
+    registry: 'https://registry.npmjs.org/',
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
     graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
 
   t.strictSame(
@@ -84,7 +192,11 @@ t.test('super basic reification', async t => {
   )
 
   const expectLockfileData: LockfileData = {
-    options: {},
+    lockfileVersion: 1,
+    options: {
+      registry: 'https://registry.npmjs.org/',
+      registries: { npm: 'https://registry.npmjs.org/' },
+    },
     nodes: {
       [joinDepIDTuple(['registry', '', 'lodash@4.17.21'])]: [
         0,
@@ -116,11 +228,14 @@ t.test('super basic reification', async t => {
     graph.mainImporter.manifest.dependencies.underscore = '1'
   }
   graph.mainImporter.edgesOut.delete('lodash')
-  graph.removeNode(
-    graph.nodes.get(
-      joinDepIDTuple(['registry', '', 'lodash@4.17.21']),
-    )!,
+  const ldNode = graph.nodes.get(
+    joinDepIDTuple(['registry', '', 'lodash@4.17.21']),
   )
+  if (!ldNode) {
+    throw new Error('expected lodash node to be present')
+  }
+
+  graph.removeNode(ldNode)
   graph.addNode(
     joinDepIDTuple(['registry', '', 'underscore@1.13.7']),
     fixtureManifest('underscore-1.13.7'),
@@ -148,10 +263,13 @@ t.test('super basic reification', async t => {
   await reify({
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
     graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
 
   t.throws(() => statSync(ldPath))
@@ -192,10 +310,13 @@ t.test('super basic reification', async t => {
     add,
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson,
     graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
   t.match(
     JSON.parse(
@@ -215,10 +336,13 @@ t.test('super basic reification', async t => {
     remove,
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson,
     graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
   t.match(
     JSON.parse(
@@ -253,14 +377,19 @@ t.test('reify with a bin', async t => {
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
     packageInfo: mockPackageInfo,
+    registries,
+    remover: new RollbackRemove(),
   })
   await reify({
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     graph,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
   t.equal(
     // note: not lstat, since this is going to be a shim on windows,
@@ -299,12 +428,16 @@ t.test('failure rolls back', async t => {
   const graph = await ideal.build({
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
+    remover: new RollbackRemove(),
   })
-  const { reify } = await t.mockImport('../../src/reify/index.ts', {
-    '../../src/reify/build.js': {
+  const { reify } = await t.mockImport<
+    typeof import('../../src/reify/index.ts')
+  >('../../src/reify/index.ts', {
+    '../../src/reify/build.ts': {
       build: () =>
         Promise.reject(new Error('expected failure, roll back')),
     },
@@ -314,7 +447,12 @@ t.test('failure rolls back', async t => {
     reify({
       projectRoot,
       packageInfo: mockPackageInfo,
+      registries,
       graph,
+      allowScripts: '*',
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(projectRoot),
+      remover: new RollbackRemove(),
     }),
   )
 
@@ -325,7 +463,11 @@ t.test('failure rolls back', async t => {
     packageJson: new PackageJson(),
   })
 
-  t.strictSame(before, after, 'no changes to actual graph')
+  t.strictSame(
+    before.toJSON(),
+    after.toJSON(),
+    'no changes to actual graph',
+  )
 
   t.throws(
     // note: not lstat, since this is going to be a shim on windows,
@@ -355,6 +497,7 @@ t.test('failure of optional node just deletes it', async t => {
 
   const before = actual.load({
     projectRoot,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
@@ -362,9 +505,11 @@ t.test('failure of optional node just deletes it', async t => {
   const graph = await ideal.build({
     projectRoot,
     packageInfo: mockPackageInfo,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
+    remover: new RollbackRemove(),
   })
   const globEdge = graph.mainImporter.edgesOut.get('glob')
   t.ok(globEdge, 'main importer depends on glob')
@@ -376,12 +521,11 @@ t.test('failure of optional node just deletes it', async t => {
 
   await reify({
     projectRoot,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
-    packageInfo: {
-      // eslint-disable-next-line @typescript-eslint/no-misused-spread
-      ...mockPackageInfo,
+    packageInfo: createMockPackageInfo({
       async extract(
         spec: Spec | string,
         target: string,
@@ -393,12 +537,15 @@ t.test('failure of optional node just deletes it', async t => {
         }
         return mockPackageInfo.extract(spec, target, options)
       },
-    } as unknown as PackageInfoClient,
+    }),
     graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
   })
 
   const after = actual.load({
     projectRoot,
+    registries,
     monorepo: Monorepo.maybeLoad(projectRoot),
     scurry: new PathScurry(projectRoot),
     packageJson: new PackageJson(),
@@ -410,9 +557,1488 @@ t.test('failure of optional node just deletes it', async t => {
     'ultimately no changes to actual graph',
   )
 
-  t.throws(
-    // note: not lstat, since this is going to be a shim on windows,
-    // but a symlink on posix
-    () => statSync(resolve(projectRoot, 'node_modules/.bin/glob')),
+  const expectGone = [
+    'node_modules/.bin/glob',
+    'node_modules/.bin/glob.cmd',
+    'node_modules/.bin/glob.ps1',
+    'node_modules/glob',
+  ]
+  for (const path of expectGone) {
+    t.throws(() => lstatSync(resolve(projectRoot, path)))
+  }
+
+  // Second install: lockfile still has the failed optional subtree,
+  // hidden lockfile / actual graph do not. Prod edges inside that
+  // subtree must not defeat optionalOnly, or reify never converges.
+  const lockfile = resolve(projectRoot, 'nrz-lock.json')
+  const hiddenLockfile = resolve(
+    projectRoot,
+    'node_modules/.nrz-lock.json',
+  )
+  t.ok(
+    existsSync(lockfile),
+    'lockfile written after optional failure',
+  )
+  t.ok(
+    existsSync(hiddenLockfile),
+    'hidden lockfile written after optional failure',
+  )
+  const lockfileMtime = statSync(lockfile).mtimeMs
+  const hiddenMtime = statSync(hiddenLockfile).mtimeMs
+
+  const actual2 = actual.load({
+    projectRoot,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+  })
+  const graph2 = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    remover: new RollbackRemove(),
+  })
+  const glob2 = graph2.mainImporter.edgesOut.get('glob')?.to
+  t.ok(glob2, 'ideal rebuilt glob from lockfile')
+  t.ok(
+    glob2?.edgesOut.get('path-scurry')?.type === 'prod',
+    'glob has a prod edge to path-scurry',
+  )
+
+  let extractCalled = false
+  const res = await reify({
+    projectRoot,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    packageInfo: createMockPackageInfo({
+      async extract(): Promise<Resolution> {
+        extractCalled = true
+        throw new Error('extract should not be called')
+      },
+    }),
+    graph: graph2,
+    actual: actual2,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  t.ok(res.diff.hasChanges(), 'diff still has optional subtree adds')
+  t.equal(
+    res.diff.optionalOnly,
+    true,
+    'prod edges inside optional subtree keep optionalOnly',
+  )
+  t.equal(extractCalled, false, 'skippable reify must not extract')
+  t.equal(
+    statSync(lockfile).mtimeMs,
+    lockfileMtime,
+    'nrz-lock.json mtime unchanged',
+  )
+  t.equal(
+    statSync(hiddenLockfile).mtimeMs,
+    hiddenMtime,
+    'hidden lockfile mtime unchanged',
+  )
+
+  // a stale edge spec still has to reach nrz-lock.json, but the hidden
+  // lockfile must keep describing what is actually on disk
+  writeFileSync(
+    lockfile,
+    JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+  )
+  const hiddenBefore = readFileSync(hiddenLockfile, 'utf8')
+  graph2.lockfileStale = true
+  await reify({
+    projectRoot,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    packageInfo: createMockPackageInfo({
+      async extract(): Promise<Resolution> {
+        extractCalled = true
+        throw new Error('extract should not be called')
+      },
+    }),
+    graph: graph2,
+    actual: actual2,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+  const rewritten = JSON.parse(
+    readFileSync(lockfile, 'utf8'),
+  ) as LockfileData
+  t.ok(
+    Object.keys(rewritten.edges).length > 0,
+    'stale lockfile rewritten from the early return',
+  )
+  t.equal(
+    readFileSync(hiddenLockfile, 'utf8'),
+    hiddenBefore,
+    'hidden lockfile untouched by a skipped optional diff',
+  )
+  t.equal(extractCalled, false, 'still no extraction')
+})
+
+t.test('a deletion-only diff is not skipped', async t => {
+  // no adds means optionalOnly, but the optional-only skip must not
+  // swallow a removal (e.g. a `-` modifier added later)
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.0.0',
+        dependencies: { abbrev: '2.0.0' },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const common = () => ({
+    projectRoot,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    allowScripts: ':not(*)',
+    // moved-aside dirs are left for tap to sweep
+    remover: new (class extends RollbackRemove {
+      confirm() {}
+    })(),
+  })
+  const exists = (f: string) => existsSync(resolve(projectRoot, f))
+  const store = `node_modules/.nrz/${joinDepIDTuple(['registry', 'npm', 'abbrev@2.0.0'])}`
+
+  const graph = await ideal.build({
+    ...common(),
+    packageInfo: mockPackageInfo,
+  })
+  await reify({ ...common(), packageInfo: mockPackageInfo, graph })
+  t.ok(exists('node_modules/abbrev'), 'abbrev installed')
+  t.ok(exists('node_modules/.nrz-lock.json'), 'lockfiles written')
+
+  // drop abbrev from the ideal graph, package.json keeps it
+  const edge = graph.mainImporter.edgesOut.get('abbrev')
+  graph.mainImporter.edgesOut.delete('abbrev')
+  if (edge) edge.to?.edgesIn.delete(edge)
+  graph.gc()
+
+  const res = await reify({
+    ...common(),
+    packageInfo: createMockPackageInfo({
+      async extract(): Promise<Resolution> {
+        throw new Error('nothing to extract')
+      },
+    }),
+    graph,
+    actual: actual.load({ ...common(), loadManifests: true }),
+  })
+  t.equal(res.diff.optionalOnly, true, 'no adds, so optionalOnly')
+  t.equal(res.diff.nodes.delete.size, 1, 'abbrev node deleted')
+  t.notOk(exists('node_modules/abbrev'), 'link removed')
+  t.notOk(exists(store), 'store dir removed')
+  t.notMatch(
+    readFileSync(
+      resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+      'utf8',
+    ),
+    /abbrev/,
+    'hidden lockfile updated',
   )
 })
+
+t.test('unsupported optional subtree is never placed', async t => {
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.0.0',
+        dependencies: { minipass: '^7.1.2' },
+        optionalDependencies: { glob: '11' },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const opts = {
+    projectRoot,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+  }
+  const graph = await ideal.build({
+    ...opts,
+    packageInfo: mockPackageInfo,
+    remover: new RollbackRemove(),
+  })
+  const glob = graph.mainImporter.edgesOut.get('glob')?.to
+  const minipass = graph.mainImporter.edgesOut.get('minipass')?.to
+  if (!glob || !minipass) throw new Error('missing glob or minipass')
+  glob.platform = { cpu: ['wasm32'] }
+  const optional = new Set(
+    [...graph.nodes.values()]
+      .filter(n => n.optional)
+      .map(n => n.name),
+  )
+  t.ok(optional.has('path-scurry'), 'glob brings optional deps')
+  t.notOk(optional.has('minipass'), 'shared dep is not optional')
+
+  const extracted: string[] = []
+  const remover = new RollbackRemove()
+  const rm = remover.rm.bind(remover)
+  const existing: string[] = []
+  remover.rm = async (path: string) => {
+    if (lstatSync(path, { throwIfNoEntry: false }))
+      existing.push(path)
+    return rm(path)
+  }
+  await reify({
+    ...opts,
+    packageInfo: createMockPackageInfo({
+      async extract(
+        spec: Spec | string,
+        target: string,
+        options: PackageInfoClientRequestOptions = {},
+      ): Promise<Resolution> {
+        extracted.push(Spec.parse(String(spec)).name)
+        return mockPackageInfo.extract(spec, target, options)
+      },
+    }),
+    graph,
+    allowScripts: ':not(*)',
+    remover,
+  })
+
+  t.strictSame(
+    extracted.filter(n => optional.has(n)),
+    [],
+    'no optional subtree node extracted',
+  )
+  t.ok(
+    existsSync(
+      resolve(
+        projectRoot,
+        'node_modules/.nrz',
+        minipass.id,
+        'node_modules/minipass/package.json',
+      ),
+    ),
+    'shared dep in store',
+  )
+  t.ok(statSync(resolve(projectRoot, 'node_modules/minipass')))
+  t.throws(() => lstatSync(resolve(projectRoot, 'node_modules/glob')))
+  t.throws(() =>
+    lstatSync(resolve(projectRoot, 'node_modules/.nrz', glob.id)),
+  )
+  const hoisted = resolve(
+    projectRoot,
+    'node_modules/.nrz/node_modules',
+  )
+  const links = readdirSync(hoisted).flatMap(n =>
+    n.startsWith('@') ?
+      readdirSync(resolve(hoisted, n)).map(s => `${n}/${s}`)
+    : [n],
+  )
+  t.strictSame(links, ['minipass'], 'only the shared dep hoisted')
+  t.ok(statSync(resolve(hoisted, 'minipass')), 'hoist link resolves')
+  t.strictSame(existing, [], 'nothing on disk moved away')
+
+  const lockfile = JSON.parse(
+    readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+  ) as LockfileData
+  t.ok(lockfile.nodes[glob.id], 'lockfile keeps glob')
+  t.ok(
+    lockfile.edges[`${glob.id} path-scurry`],
+    'lockfile keeps glob edges',
+  )
+  const hidden = JSON.parse(
+    readFileSync(
+      resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+      'utf8',
+    ),
+  ) as LockfileData
+  t.notOk(hidden.nodes[glob.id], 'hidden lockfile drops glob')
+  t.notOk(
+    hidden.edges[`${glob.id} path-scurry`],
+    'hidden lockfile drops glob edges',
+  )
+})
+
+t.test('early termination when no changes are needed', async t => {
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+      }),
+    },
+  })
+
+  const projectRoot = resolve(dir, 'project')
+
+  // Create a graph and use it as both actual and ideal to ensure no changes
+  const baseGraph = actual.load({
+    projectRoot,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+  })
+
+  // Mock the internal functions to track if they're called
+  let addNodesCalled = false
+  let deleteEdgesCalled = false
+  let addEdgesCalled = false
+  let buildCalled = false
+  let deleteNodesCalled = false
+
+  const { reify: testReify } = await t.mockImport<
+    typeof import('../../src/reify/index.ts')
+  >('../../src/reify/index.ts', {
+    './add-nodes.ts': {
+      addNodes: (..._args: any[]) => {
+        addNodesCalled = true
+        return []
+      },
+    },
+    './delete-edges.ts': {
+      deleteEdges: (..._args: any[]) => {
+        deleteEdgesCalled = true
+        return []
+      },
+    },
+    './add-edges.ts': {
+      addEdges: (..._args: any[]) => {
+        addEdgesCalled = true
+        return []
+      },
+    },
+    './build.ts': {
+      build: (..._args: any[]) => {
+        buildCalled = true
+        return Promise.resolve()
+      },
+    },
+    './delete-nodes.ts': {
+      deleteNodes: (..._args: any[]) => {
+        deleteNodesCalled = true
+        return []
+      },
+    },
+  })
+
+  // Execute reify with the same graph as both actual and ideal
+  const result = await testReify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    graph: baseGraph,
+    actual: baseGraph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  // Verify early termination behavior
+  const { diff } = result
+  t.ok(diff, 'reify should return a diff object')
+  t.equal(diff.hasChanges(), false, 'diff should have no changes')
+
+  // Verify that no reification work was performed
+  t.equal(
+    addNodesCalled,
+    false,
+    'addNodes should not be called when no changes',
+  )
+  t.equal(
+    deleteEdgesCalled,
+    false,
+    'deleteEdges should not be called when no changes',
+  )
+  t.equal(
+    addEdgesCalled,
+    false,
+    'addEdges should not be called when no changes',
+  )
+  t.equal(
+    buildCalled,
+    false,
+    'build should not be called when no changes',
+  )
+  t.equal(
+    deleteNodesCalled,
+    false,
+    'deleteNodes should not be called when no changes',
+  )
+
+  // Verify lockfiles are still written even on early termination
+  t.ok(
+    existsSync(resolve(projectRoot, 'nrz-lock.json')),
+    'nrz-lock.json should be created even with no changes',
+  )
+  t.ok(
+    existsSync(resolve(projectRoot, 'node_modules/.nrz-lock.json')),
+    'node_modules/.nrz-lock.json should be created even with no changes',
+  )
+
+  // Remove hidden lockfile and re-run to cover the branch where
+  // nrz-lock.json exists but node_modules/.nrz-lock.json does not
+  rmSync(resolve(projectRoot, 'node_modules'), {
+    recursive: true,
+    force: true,
+  })
+  t.equal(
+    existsSync(resolve(projectRoot, 'node_modules/.nrz-lock.json')),
+    false,
+    'hidden lockfile removed',
+  )
+  const scurry2 = new PathScurry(projectRoot)
+  await testReify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: scurry2,
+    packageJson: new PackageJson(),
+    graph: baseGraph,
+    actual: baseGraph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+  t.ok(
+    existsSync(resolve(projectRoot, 'node_modules/.nrz-lock.json')),
+    'hidden lockfile recreated when missing',
+  )
+})
+
+t.test(
+  'store-linked nodes: no package.json reads, same lockfiles',
+  async t => {
+    const dir = t.testdir({
+      cache: {},
+      project: {
+        'nrz.json': JSON.stringify({
+          cache: resolve(t.testdirName, 'cache'),
+        }),
+        'package.json': JSON.stringify({
+          name: 'x',
+          version: '1.0.0',
+          dependencies: { lodash: '4', underscore: '1.13.7' },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const opts = () => ({
+      projectRoot,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      allowScripts: ':not(*)',
+      remover: new RollbackRemove(),
+    })
+    // write nrz-lock.json
+    await reify({
+      ...opts(),
+      packageInfo: mockPackageInfo,
+      packageJson: new PackageJson(),
+      graph: await ideal.build({
+        ...opts(),
+        packageInfo: mockPackageInfo,
+        packageJson: new PackageJson(),
+      }),
+    })
+    const nodeReads: string[] = []
+    class Tracked extends PackageJson {
+      read(dir: string, o?: { reload?: boolean }) {
+        if (dir.includes('.nrz')) nodeReads.push(dir)
+        return super.read(dir, o)
+      }
+    }
+    // lockfile, no node_modules: node manifests come from disk or
+    // from the global store index
+    const install = async (packageInfo: PackageInfoClient) => {
+      rmSync(resolve(projectRoot, 'node_modules'), {
+        recursive: true,
+        force: true,
+      })
+      nodeReads.length = 0
+      const packageJson = new Tracked()
+      const graph = await ideal.build({
+        ...opts(),
+        packageInfo,
+        packageJson,
+      })
+      await reify({ ...opts(), packageInfo, packageJson, graph })
+      return ['nrz-lock.json', 'node_modules/.nrz-lock.json'].map(f =>
+        readFileSync(resolve(projectRoot, f), 'utf8'),
+      )
+    }
+    const disk = await install(mockPackageInfo)
+    t.equal(nodeReads.length, 2, 'read from disk')
+    const store = await install(
+      createMockPackageInfo({
+        extract: async (spec, target, options) => ({
+          ...(await mockPackageInfoBase.extract(
+            spec,
+            target,
+            options,
+          )),
+          manifest: readFileSync(
+            resolve(target, 'package.json'),
+            'utf8',
+          ),
+          bindingGyp: false,
+        }),
+      }),
+    )
+    t.strictSame(nodeReads, [], 'no package.json reads')
+    t.strictSame(store, disk, 'same lockfiles')
+    const { nodes } = JSON.parse(store[1]!) as LockfileData
+    for (const [id, name] of [
+      ['lodash@4.17.21', 'lodash'],
+      ['underscore@1.13.7', 'underscore'],
+    ] as const) {
+      t.match(
+        nodes[joinDepIDTuple(['registry', '', id])]?.[5],
+        { name, version: String },
+        'hidden lockfile has the manifest',
+      )
+    }
+  },
+)
+
+t.test('checkNeededBuild is called during reification', async t => {
+  // Use the same test setup as the basic reification test
+  const dir = t.testdir({
+    project: {
+      'nrz.json': JSON.stringify({
+        monorepo: {
+          packages: [],
+        },
+      }),
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.0.0',
+        dependencies: {
+          lodash: '4',
+        },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const packageJson = new PackageJson()
+  const graph = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson,
+    remover: new RollbackRemove(),
+  })
+
+  const result = await reify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    graph: graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  // Verify buildQueue is returned (this proves checkNeededBuild was called)
+  t.ok(result, 'reify should return a result object')
+  t.ok(
+    'buildQueue' in result,
+    'result should have buildQueue property',
+  )
+  t.type(result.buildQueue, Array, 'buildQueue should be an array')
+})
+
+t.test(
+  'reify sets buildState on nodes that need building',
+  async t => {
+    const dir = t.testdir({
+      project: {
+        'nrz.json': JSON.stringify({
+          monorepo: {
+            packages: [],
+          },
+        }),
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {
+            lodash: '4',
+          },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const packageJson = new PackageJson()
+
+    const graph = await ideal.build({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson,
+      remover: new RollbackRemove(),
+    })
+
+    const result = await reify({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      graph,
+      allowScripts: '*',
+      remover: new RollbackRemove(),
+    })
+
+    // Verify buildQueue is returned (this proves checkNeededBuild was called)
+    t.ok(result, 'reify should return a result object')
+    t.ok(
+      'buildQueue' in result,
+      'result should have buildQueue property',
+    )
+    t.type(result.buildQueue, Array, 'buildQueue should be an array')
+  },
+)
+
+t.test(
+  'checkNeededBuild is called when allowScripts is :not(*)',
+  async t => {
+    const dir = t.testdir({
+      cache: {},
+      project: {
+        'nrz.json': JSON.stringify({
+          cache: resolve(t.testdirName, 'cache'),
+        }),
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {
+            lodash: '4',
+          },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const packageJson = new PackageJson()
+
+    const graph = await ideal.build({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson,
+      remover: new RollbackRemove(),
+    })
+
+    // Call reify with allowScripts set to :not(*) (no scripts allowed)
+    const result = await reify({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      graph,
+      allowScripts: ':not(*)',
+      remover: new RollbackRemove(),
+    })
+
+    // Verify buildQueue is returned (this proves checkNeededBuild was called)
+    t.ok(result, 'reify should return a result object')
+    t.ok(
+      'buildQueue' in result,
+      'result should have buildQueue property when allowScripts is :not(*)',
+    )
+    t.type(result.buildQueue, Array, 'buildQueue should be an array')
+  },
+)
+
+t.test('allowScripts with query selector :scripts', async t => {
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {
+          lodash: '4',
+        },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const packageJson = new PackageJson()
+
+  const graph = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson,
+    remover: new RollbackRemove(),
+  })
+
+  // Call reify with allowScripts set to :scripts to trigger the Query library logic
+  const result = await reify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    graph,
+    allowScripts: ':scripts',
+    remover: new RollbackRemove(),
+  })
+
+  // Verify reify completes successfully and returns expected result
+  t.ok(result, 'reify should return a result object')
+  t.ok('diff' in result, 'result should have diff property')
+  t.ok(
+    'buildQueue' in result,
+    'result should have buildQueue property when using query selector',
+  )
+  t.type(result.buildQueue, Array, 'buildQueue should be an array')
+
+  // Verify node_modules structure was created
+  t.strictSame(
+    new Set(readdirSync(projectRoot + '/node_modules')),
+    new Set(['.nrz', '.nrz-lock.json', 'lodash']),
+    'node_modules should contain expected directories',
+  )
+  t.equal(
+    result.buildQueue?.length,
+    0,
+    'lodash has no scripts so nothing was run',
+  )
+})
+
+t.test('allowScripts fails closed w/o security data', async t => {
+  // reify w/ a security archive, returns the script-allowed set
+  const run = async (t: Test, scanned?: string, timedOut = true) => {
+    const dir = t.testdir({
+      cache: {},
+      project: {
+        'nrz.json': JSON.stringify({
+          cache: resolve(t.testdirName, 'cache'),
+        }),
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {
+            lodash: '4',
+          },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const graph = await ideal.build({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      remover: new RollbackRemove(),
+    })
+    let allowed = new Set<DepID>()
+    const { reify } = await t.mockImport<
+      typeof import('../../src/reify/index.ts')
+    >('../../src/reify/index.ts', {
+      '../../src/reify/build.ts': {
+        build: async (
+          _diff: unknown,
+          _packageJson: unknown,
+          _scurry: unknown,
+          allowScriptsNodes: Set<DepID>,
+        ) => {
+          allowed = allowScriptsNodes
+          return { success: [], failure: [] }
+        },
+      },
+      '@nrz/security-archive': {
+        ...(await import('@nrz/security-archive')),
+        SecurityArchive: {
+          start: async () => ({
+            timedOut,
+            has: (id: DepID) => graph.nodes.get(id)?.name === scanned,
+            get: () => undefined,
+          }),
+        },
+      },
+    })
+    await reify({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      graph,
+      allowScripts: ':not(:malware)',
+      remover: new RollbackRemove(),
+    })
+    return [...allowed].map(id => graph.nodes.get(id)?.name).sort()
+  }
+
+  t.test('skips registry pkgs left out by a timeout', async t => {
+    t.strictSame(
+      await run(t),
+      ['test-project'],
+      'should keep only non-registry nodes',
+    )
+  })
+
+  t.test('skips registry pkgs not scanned yet', async t => {
+    t.strictSame(
+      await run(t, undefined, false),
+      ['test-project'],
+      'should keep only non-registry nodes',
+    )
+  })
+
+  t.test('keeps scanned registry pkgs', async t => {
+    t.strictSame(
+      await run(t, 'lodash'),
+      ['lodash', 'test-project'],
+      'should keep scanned pkg',
+    )
+  })
+})
+
+t.test(
+  'no-op reify still reports buildQueue when nodes need building',
+  async t => {
+    const dir = t.testdir({
+      cache: {},
+      project: {
+        'nrz.json': JSON.stringify({
+          cache: resolve(t.testdirName, 'cache'),
+        }),
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {
+            lodash: '4',
+          },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const packageJson = new PackageJson()
+
+    // First install: creates node_modules and lockfiles
+    const graph = await ideal.build({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson,
+      remover: new RollbackRemove(),
+    })
+    await reify({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      graph,
+      allowScripts: ':not(*)',
+      remover: new RollbackRemove(),
+    })
+
+    // Load actual from disk — nodes carry buildState from hidden lockfile
+    const scurry2 = new PathScurry(projectRoot)
+    const act = actual.load({
+      projectRoot,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: scurry2,
+      packageJson: new PackageJson(),
+      loadManifests: true,
+    })
+
+    // Find a non-importer node and mark it as needing a build
+    const lodashId = joinDepIDTuple([
+      'registry',
+      '',
+      'lodash@4.17.21',
+    ])
+    const lodashNode = act.nodes.get(lodashId)
+    t.ok(lodashNode, 'lodash node exists in actual graph')
+    if (!lodashNode) throw new Error('missing lodash node')
+    lodashNode.buildState = 'needed'
+
+    // Second reify: same ideal graph, no diff changes,
+    // but actual has a node with buildState === 'needed'
+    const result = await reify({
+      projectRoot,
+      packageInfo: mockPackageInfo,
+      registries,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: scurry2,
+      packageJson: new PackageJson(),
+      graph,
+      actual: act,
+      allowScripts: ':not(*)',
+      remover: new RollbackRemove(),
+    })
+
+    t.equal(
+      result.diff.hasChanges(),
+      false,
+      'diff should have no changes',
+    )
+    t.ok(result.buildQueue, 'buildQueue should be present')
+    t.ok(
+      result.buildQueue?.includes(lodashId),
+      'buildQueue should include the node that needs building',
+    )
+  },
+)
+
+t.test('binding.gyp found past a stale path cache', async t => {
+  // node_modules ENOENT is cached before extraction
+  const dir = t.testdir({
+    cache: {},
+    project: {
+      'nrz.json': JSON.stringify({
+        cache: resolve(t.testdirName, 'cache'),
+      }),
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: { lodash: '4' },
+      }),
+    },
+  })
+  const projectRoot = resolve(dir, 'project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
+  const graph = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry,
+    packageJson,
+    remover: new RollbackRemove(),
+  })
+  const packageInfo = createMockPackageInfo({
+    extract: async (spec, target, options) => {
+      const res = await mockPackageInfoBase.extract(
+        spec,
+        target,
+        options,
+      )
+      writeFileSync(resolve(target, 'binding.gyp'), '{}')
+      return res
+    },
+  })
+  const result = await reify({
+    projectRoot,
+    packageInfo,
+    registries,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    scurry,
+    packageJson,
+    graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+  const id = joinDepIDTuple(['registry', '', 'lodash@4.17.21'])
+  t.strictSame(result.buildQueue, [id])
+  t.equal(graph.nodes.get(id)?.buildState, 'needed')
+})
+
+t.test('pending build state survives later reify', async t => {
+  const lodashId = joinDepIDTuple(['registry', '', 'lodash@4.17.21'])
+  // lodash gets a binding.gyp, so it needs a build
+  const packageInfo = createMockPackageInfo({
+    extract: async (spec, target, options) => {
+      const res = await mockPackageInfoBase.extract(
+        spec,
+        target,
+        options,
+      )
+      if (String(spec).includes('lodash'))
+        writeFileSync(resolve(target, 'binding.gyp'), '{}')
+      return res
+    },
+  })
+  const setup = async (t: Test) => {
+    const dir = t.testdir({
+      cache: {},
+      project: {
+        'nrz.json': JSON.stringify({
+          cache: resolve(t.testdirName, 'cache'),
+        }),
+        'package.json': JSON.stringify({
+          name: 'x',
+          version: '1.0.0',
+          dependencies: { lodash: '4' },
+        }),
+      },
+    })
+    const projectRoot = resolve(dir, 'project')
+    const opts = () => ({
+      projectRoot,
+      registries,
+      packageInfo,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      remover: new RollbackRemove(),
+      allowScripts: ':not(*)',
+    })
+    const hidden = () =>
+      JSON.parse(
+        readFileSync(
+          resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+          'utf8',
+        ),
+      ) as LockfileData
+    const o = opts()
+    const res = await reify({ ...o, graph: await ideal.build(o) })
+    t.strictSame(res.buildQueue, [lodashId])
+    t.equal(hidden().nodes[lodashId]?.[9], 1, 'pending after install')
+    return { projectRoot, opts, hidden }
+  }
+
+  t.test('unrelated add', async t => {
+    const { opts, hidden } = await setup(t)
+    const o = opts()
+    const act = actual.load({ ...o, loadManifests: true })
+    const add = Object.assign(
+      new Map([
+        [
+          joinDepIDTuple(['file', '.']),
+          new Map([
+            [
+              'underscore',
+              asDependency({
+                spec: Spec.parse('underscore', '1.13.7', {
+                  registries,
+                }),
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]),
+      { modifiedDependencies: true },
+    )
+    const graph = await ideal.build({ ...o, actual: act, add })
+    const res = await reify({ ...o, actual: act, add, graph })
+    const { nodes } = hidden()
+    t.ok(
+      nodes[joinDepIDTuple(['registry', '', 'underscore@1.13.7'])],
+      'hidden lockfile rewritten',
+    )
+    t.equal(nodes[lodashId]?.[9], 1, 'still pending')
+    t.strictSame(res.buildQueue, [lodashId])
+  })
+
+  t.test('changed spec, same node', async t => {
+    const { projectRoot, opts, hidden } = await setup(t)
+    writeFileSync(
+      resolve(projectRoot, 'package.json'),
+      JSON.stringify({
+        name: 'x',
+        version: '1.0.0',
+        dependencies: { lodash: '4.17.21' },
+      }),
+    )
+    const o = opts()
+    const act = actual.load({ ...o, loadManifests: true })
+    const graph = await ideal.build({ ...o, actual: act })
+    const res = await reify({ ...o, actual: act, graph })
+    t.equal(res.diff.hasChanges(), false)
+    const { edges, nodes } = hidden()
+    t.strictSame(
+      edges,
+      {
+        [`${joinDepIDTuple(['file', '.'])} lodash`]: `prod 4.17.21 ${lodashId}`,
+      },
+      'hidden lockfile rewritten',
+    )
+    t.equal(nodes[lodashId]?.[9], 1, 'still pending')
+  })
+})
+
+t.test('reify recreates deleted workspace node_modules', async t => {
+  const projectRoot = t.testdir({
+    cache: {},
+    'nrz.json': JSON.stringify({
+      cache: resolve(t.testdirName, 'cache'),
+      workspaces: { packages: ['./packages/*'] },
+    }),
+    'package.json': JSON.stringify({
+      name: 'my-monorepo',
+      version: '1.0.0',
+      dependencies: {
+        'my-ws': 'workspace:*',
+        lodash: '4',
+      },
+    }),
+    packages: {
+      'my-ws': {
+        'package.json': JSON.stringify({
+          name: 'my-ws',
+          version: '1.0.0',
+          dependencies: {
+            lodash: '4',
+          },
+        }),
+      },
+    },
+  })
+
+  t.chdir(projectRoot)
+  unload('project')
+
+  const monorepo = Monorepo.maybeLoad(projectRoot)
+  const packageJson = new PackageJson()
+  const scurry = new PathScurry(projectRoot)
+
+  // First install: creates everything
+  const graph = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo,
+    scurry,
+    packageJson,
+    remover: new RollbackRemove(),
+  })
+  await reify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo,
+    scurry,
+    packageJson: new PackageJson(),
+    graph,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  // Verify initial install created workspace node_modules
+  const wsNm = resolve(projectRoot, 'packages/my-ws/node_modules')
+  t.ok(
+    existsSync(wsNm),
+    'workspace node_modules should exist after first install',
+  )
+  t.ok(
+    lstatSync(resolve(wsNm, 'lodash')).isSymbolicLink(),
+    'lodash symlink should exist in workspace node_modules',
+  )
+
+  // Delete workspace node_modules to simulate user action
+  rmSync(wsNm, { recursive: true })
+  t.notOk(
+    existsSync(wsNm),
+    'workspace node_modules should be deleted',
+  )
+
+  // Second install: should recreate workspace node_modules
+  const scurry2 = new PathScurry(projectRoot)
+  const monorepo2 = Monorepo.maybeLoad(projectRoot)
+  const graph2 = await ideal.build({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: monorepo2,
+    scurry: scurry2,
+    packageJson: new PackageJson(),
+    remover: new RollbackRemove(),
+  })
+  await reify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    monorepo: monorepo2,
+    scurry: scurry2,
+    packageJson: new PackageJson(),
+    graph: graph2,
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  t.ok(
+    existsSync(wsNm),
+    'workspace node_modules should be recreated after second install',
+  )
+  t.ok(
+    lstatSync(resolve(wsNm, 'lodash')).isSymbolicLink(),
+    'lodash symlink should be recreated in workspace node_modules',
+  )
+})
+
+t.test('reify with workspace bin script', async t => {
+  const projectRoot = t.testdir({
+    cache: {},
+    'nrz.json': JSON.stringify({
+      cache: resolve(t.testdirName, 'cache'),
+      workspaces: { packages: ['./packages/*'] },
+    }),
+    'package.json': JSON.stringify({
+      name: 'my-root',
+      version: '1.0.0',
+      dependencies: {
+        'my-workspace': 'workspace:*',
+      },
+    }),
+    packages: {
+      'my-workspace': {
+        'package.json': JSON.stringify({
+          name: 'my-workspace',
+          version: '1.0.0',
+          bin: {
+            'my-bin': './bin.js',
+          },
+        }),
+        'bin.js': '#!/usr/bin/env node\nconsole.log("hello")',
+      },
+    },
+  })
+
+  t.chdir(projectRoot)
+  unload('project')
+
+  const monorepo = Monorepo.maybeLoad(projectRoot)
+  const graph = await ideal.build({
+    projectRoot,
+    monorepo,
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    registries,
+    remover: new RollbackRemove(),
+  })
+
+  await reify({
+    projectRoot,
+    packageInfo: mockPackageInfo,
+    registries,
+    graph,
+    monorepo,
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    allowScripts: ':not(*)',
+    remover: new RollbackRemove(),
+  })
+
+  // Verify the workspace bin was placed in node_modules/.bin
+  t.equal(
+    // note: not lstat, since this is going to be a shim on windows,
+    // but a symlink on posix
+    statSync(
+      resolve(projectRoot, 'node_modules/.bin/my-bin'),
+    ).isFile(),
+    true,
+    'workspace bin was created',
+  )
+})
+
+t.test(
+  'a same-target add still persists the saved value',
+  async t => {
+    const setup = (saveExact?: boolean) => {
+      const dir = t.testdir({
+        cache: {},
+        project: {
+          'nrz.json': JSON.stringify({
+            cache: resolve(t.testdirName, 'cache'),
+          }),
+          'package.json': JSON.stringify({
+            name: 'x',
+            version: '1.0.0',
+            dependencies: { foo: '^1.0.0' },
+          }),
+        },
+      })
+      const projectRoot = resolve(dir, 'project')
+      // both graphs hold the same foo@1.0.0, so the diff is empty and
+      // only the edge spec text differs
+      const makeGraph = (
+        bareSpec: string,
+        packageJson: PackageJson,
+      ) => {
+        const graph = new Graph({
+          projectRoot,
+          registries,
+          mainManifest: packageJson.read(projectRoot),
+          monorepo: Monorepo.maybeLoad(projectRoot),
+        })
+        const spec = Spec.parse('foo', bareSpec, { registries })
+        const foo = graph.addNode(
+          undefined,
+          fixtureManifest('abbrev-2.0.0'),
+          spec,
+          'foo',
+          '1.0.0',
+        )
+        graph.addEdge('prod', spec, graph.mainImporter, foo)
+        for (const node of graph.nodes.values()) {
+          node.setDefaultLocation()
+        }
+        return graph
+      }
+      const packageJson = new PackageJson()
+      const actualGraph = makeGraph('^1.0.0', new PackageJson())
+      const graph = makeGraph('latest', packageJson)
+      const add = Object.assign(
+        new Map([
+          [
+            graph.mainImporter.id,
+            new Map([
+              [
+                'foo',
+                asDependency({
+                  spec: Spec.parse('foo', 'latest', { registries }),
+                  type: 'prod',
+                }),
+              ],
+            ]),
+          ],
+        ]),
+        { modifiedDependencies: true },
+      )
+      let extractCalled = false
+      const opts = {
+        projectRoot,
+        registries,
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        scurry: new PathScurry(projectRoot),
+        packageJson,
+        packageInfo: createMockPackageInfo({
+          async extract(): Promise<Resolution> {
+            extractCalled = true
+            throw new Error('extract should not be called')
+          },
+        }),
+        allowScripts: ':not(*)',
+        remover: new RollbackRemove(),
+        saveExact,
+      }
+      return {
+        projectRoot,
+        graph,
+        actualGraph,
+        add,
+        opts,
+        extracted: () => extractCalled,
+      }
+    }
+
+    await t.test(
+      'heals the lockfile edge, leaves package.json',
+      async t => {
+        const {
+          projectRoot,
+          graph,
+          actualGraph,
+          add,
+          opts,
+          extracted,
+        } = setup()
+        // first install writes both lockfiles with the unchanged spec
+        await reify({
+          ...opts,
+          graph: actualGraph,
+          actual: actualGraph,
+        })
+        const lockfile = resolve(projectRoot, 'nrz-lock.json')
+        const hidden = resolve(
+          projectRoot,
+          'node_modules/.nrz-lock.json',
+        )
+        t.match(readFileSync(lockfile, 'utf8'), 'prod ^1.0.0')
+
+        const res = await reify({
+          ...opts,
+          graph,
+          actual: actualGraph,
+          add,
+        })
+        t.equal(res.diff.hasChanges(), false, 'no node diff')
+        t.equal(extracted(), false, 'nothing extracted')
+        t.match(readFileSync(lockfile, 'utf8'), 'prod ^1.0.0')
+        t.match(readFileSync(hidden, 'utf8'), 'prod ^1.0.0')
+        t.match(
+          JSON.parse(
+            readFileSync(
+              resolve(projectRoot, 'package.json'),
+              'utf8',
+            ),
+          ),
+          { dependencies: { foo: '^1.0.0' } },
+        )
+      },
+    )
+
+    await t.test(
+      '--save-exact applies with no node diff',
+      async t => {
+        const { projectRoot, graph, actualGraph, add, opts } =
+          setup(true)
+        await reify({ ...opts, graph, actual: actualGraph, add })
+        t.match(
+          readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+          'prod 1.0.0',
+        )
+        t.match(
+          JSON.parse(
+            readFileSync(
+              resolve(projectRoot, 'package.json'),
+              'utf8',
+            ),
+          ),
+          { dependencies: { foo: '1.0.0' } },
+        )
+      },
+    )
+  },
+)

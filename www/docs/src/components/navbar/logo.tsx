@@ -1,0 +1,31 @@
+import NextLink from 'next/link'
+import { Button } from '@/components/ui/button'
+import { Nrz } from '@/components/icons/nrz'
+import { cn } from 'cn'
+
+import type { ComponentProps } from 'react'
+
+// nrz.io's logo without its brand-kit context menu; links to the docs home
+export const Logo = ({
+  className,
+  ...rest
+}: ComponentProps<typeof Button>) => (
+  <Button
+    {...rest}
+    variant="ghost"
+    className={cn('h-9 p-0 has-[>svg]:px-0', className)}
+    asChild>
+    <NextLink
+      href="/"
+      className="cursor-pointer"
+      aria-label="nrz docs home">
+      <Nrz className="size-6" aria-hidden="true" />
+      <p className="bg-linear-to-tr from-neutral-600 to-neutral-950 bg-clip-text py-1 text-lg font-semibold dark:from-neutral-500 dark:to-neutral-100">
+        nrz{' '}
+        <span className="text-muted-foreground font-normal">
+          / docs
+        </span>
+      </p>
+    </NextLink>
+  </Button>
+)

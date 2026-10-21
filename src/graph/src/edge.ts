@@ -1,9 +1,9 @@
 import { satisfies } from '@nrz/satisfies'
-import { type Spec } from '@nrz/spec'
-import { inspect, type InspectOptions } from 'util'
-import { type DependencyTypeShort } from '@nrz/types'
-import { type Node } from './node.ts'
-import { type EdgeLike } from './types.ts'
+import type { Spec } from '@nrz/spec'
+import { inspect } from 'node:util'
+import type { InspectOptions } from 'node:util'
+import type { DependencyTypeShort, EdgeLike } from '@nrz/types'
+import type { Node } from './node.ts'
 
 const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
 
@@ -92,5 +92,19 @@ export class Edge implements EdgeLike {
           this.from.location,
           this.from.projectRoot,
         )
+  }
+
+  toJSON() {
+    return {
+      from: this.from.id,
+      to: this.to?.id,
+      type: this.type,
+      spec: String(this.spec),
+    }
+  }
+
+  toString() {
+    const to = `${this.name}${this.to ? '' : ' (missing)'}`
+    return `Edge from: ${this.from.id} --|${this.type}|--> ${to}`
   }
 }

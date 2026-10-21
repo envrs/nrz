@@ -1,7 +1,7 @@
 import t from 'tap'
 import { stringifyNode } from '../src/stringify-node.ts'
 import { joinDepIDTuple } from '@nrz/dep-id'
-import { type NodeLike } from '../src/types.ts'
+import type { NodeLike } from '@nrz/types'
 
 const nodes = {
   ['undefined']: undefined,
@@ -18,6 +18,15 @@ const nodes = {
   } as NodeLike,
   customReg: {
     id: joinDepIDTuple(['registry', 'custom', 'dep@1.0.0']),
+    name: 'dep',
+    version: '1.0.0',
+  } as NodeLike,
+  arbitraryReg: {
+    id: joinDepIDTuple([
+      'registry',
+      'https://example.com',
+      'dep@1.0.0',
+    ]),
     name: 'dep',
     version: '1.0.0',
   } as NodeLike,
@@ -52,8 +61,5 @@ const nodes = {
 }
 
 for (const [key, val] of Object.entries(nodes)) {
-  t.matchSnapshot(
-    stringifyNode(val as unknown as NodeLike),
-    `should format ${key} node`,
-  )
+  t.matchSnapshot(stringifyNode(val), `should format ${key} node`)
 }

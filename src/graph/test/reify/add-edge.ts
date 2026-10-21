@@ -1,14 +1,15 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
-import { type RollbackRemove } from '@nrz/rollback-remove'
+import type { RollbackRemove } from '@nrz/rollback-remove'
 import { Spec } from '@nrz/spec'
-import { statSync } from 'fs'
-import { rm } from 'fs/promises'
+import { readlinkSync, statSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import { Edge } from '../../src/edge.ts'
 import { Node } from '../../src/node.ts'
 import { addEdge } from '../../src/reify/add-edge.ts'
-import { type GraphLike } from '../../src/types.ts'
+import type { GraphLike } from '@nrz/types'
 
 const mockRemover = {
   rm: (path: string) => rm(path, { recursive: true, force: true }),
@@ -25,7 +26,7 @@ const fooManifest = {
 const barManifest = {
   name: 'bar',
   version: '1.2.3',
-  bin: './bar.js',
+  bin: { bar: 'bar.js' },
 }
 
 t.test('reify an edge', async t => {
@@ -60,25 +61,33 @@ t.test('reify an edge', async t => {
   t.throws(() => statSync(projectRoot + '/node_modules/.bin/bar'))
   t.throws(() => statSync(fooNM + '/bar'))
   t.throws(() => statSync(fooNM + '/.bin/bar'))
+
   const opts = {
     projectRoot,
     graph: {} as GraphLike,
   }
+
   const fooNode = new Node(
     opts,
     joinDepIDTuple(['registry', '', 'foo@1.2.3']),
     fooManifest,
   )
+
   fooNode.location =
     projectRoot +
     '/node_modules/.nrz/' +
     joinDepIDTuple(['registry', '', 'foo@1.2.3']) +
     '/node_modules/foo'
+
   const barNode = new Node(
     opts,
     joinDepIDTuple(['registry', '', 'bar@1.2.3']),
     barManifest,
   )
+  barNode.bins = {
+    bar: 'bar.js',
+  }
+
   barNode.location =
     projectRoot +
     '/node_modules/.nrz/' +
@@ -90,11 +99,14 @@ t.test('reify an edge', async t => {
   const edge = new Edge('prod', Spec.parse('bar@'), fooNode, barNode)
   const scurry = new PathScurry(projectRoot)
 
-  await addEdge(edge, barManifest, scurry, mockRemover)
+  t.intercept(process, 'platform', { value: 'win32' })
+  await addEdge(edge, scurry, mockRemover, barNode.bins)
 
   t.throws(() => statSync(projectRoot + '/node_modules/.bin/bar'))
   statSync(fooNM + '/bar')
   statSync(fooNM + '/.bin/bar')
+  statSync(fooNM + '/.bin/bar.cmd')
+  statSync(fooNM + '/.bin/bar.ps1')
 
   const rootEdge = new Edge(
     'prod',
@@ -102,9 +114,13 @@ t.test('reify an edge', async t => {
     rootNode,
     barNode,
   )
-  await addEdge(rootEdge, barManifest, scurry, mockRemover)
+
+  t.intercept(process, 'platform', { value: 'darwin' })
+  await addEdge(rootEdge, scurry, mockRemover, barNode.bins)
   statSync(projectRoot + '/node_modules/bar')
   statSync(projectRoot + '/node_modules/.bin/bar')
+  t.throws(() => statSync(projectRoot + '/node_modules/.bin/bar.cmd'))
+  t.throws(() => statSync(projectRoot + '/node_modules/.bin/bar.ps1'))
 
   const dangle = new Edge(
     'optional',
@@ -113,10 +129,70 @@ t.test('reify an edge', async t => {
     undefined,
   )
   // just verify it doesn't blow up
-  await addEdge(dangle, {}, scurry, mockRemover)
+  await addEdge(dangle, scurry, mockRemover, undefined)
 
   // exercise the clobbering case
-  await addEdge(rootEdge, barManifest, scurry, mockRemover)
+  await addEdge(rootEdge, scurry, mockRemover, barNode.bins)
   statSync(projectRoot + '/node_modules/bar')
   statSync(projectRoot + '/node_modules/.bin/bar')
+})
+
+t.test('reify a scoped edge', async t => {
+  const fooId = joinDepIDTuple(['registry', '', 'foo@1.2.3'])
+  const bazId = joinDepIDTuple(['registry', '', '@s/baz@1.0.0'])
+  const bazManifest = {
+    name: '@s/baz',
+    version: '1.0.0',
+    bin: { baz: 'baz.js' },
+  }
+  const projectRoot = t.testdir({
+    node_modules: {
+      '.nrz': {
+        [fooId]: {
+          node_modules: {
+            foo: { 'package.json': JSON.stringify(fooManifest) },
+          },
+        },
+        [bazId]: {
+          node_modules: {
+            '@s': {
+              baz: {
+                'package.json': JSON.stringify(bazManifest),
+                'baz.js': '#!/usr/bin/env node\n',
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  const opts = { projectRoot, graph: {} as GraphLike }
+  const scurry = new PathScurry(projectRoot)
+  const fooNode = new Node(opts, fooId, fooManifest)
+  const bazNode = new Node(opts, bazId, bazManifest)
+  bazNode.bins = { baz: 'baz.js' }
+  const rootNode = new Node(opts, joinDepIDTuple(['file', '.']), {})
+  rootNode.location = '.'
+  const bazPath = bazNode.resolvedLocation(scurry)
+  const linked = (link: string) =>
+    resolve(dirname(link), readlinkSync(link))
+
+  t.intercept(process, 'platform', { value: 'darwin' })
+  for (const from of [fooNode, rootNode]) {
+    const edge = new Edge(
+      'prod',
+      Spec.parse('@s/baz@'),
+      from,
+      bazNode,
+    )
+    await addEdge(edge, scurry, mockRemover, bazNode.bins)
+    const nm = from.nodeModules(scurry)
+    const link = resolve(nm, '@s', 'baz')
+    t.equal(linked(link), bazPath, 'dep link')
+    t.equal(
+      linked(resolve(nm, '.bin', 'baz')),
+      resolve(link, 'baz.js'),
+      'bin link',
+    )
+  }
 })

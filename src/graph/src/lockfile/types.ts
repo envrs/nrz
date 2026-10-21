@@ -1,11 +1,21 @@
-import { type DepID } from '@nrz/dep-id'
-import { type Spec, type SpecOptions } from '@nrz/spec'
-import {
-  type Integrity,
-  type Manifest,
-  type DependencyTypeShort,
+import type { DepID } from '@nrz/dep-id'
+import type { Spec, SpecOptions } from '@nrz/spec'
+import type {
+  Integrity,
+  NormalizedManifest,
+  DependencyTypeShort,
 } from '@nrz/types'
-import { type Graph } from '../graph.ts'
+import type { Graph } from '../graph.ts'
+
+/**
+ * Platform requirements for a lockfile node
+ */
+export type LockfilePlatform = {
+  engines?: Record<string, string>
+  os?: string[] | string
+  cpu?: string[] | string
+  libc?: string[] | string
+}
 
 /**
  * This is the main type definition for the contents of the
@@ -15,34 +25,122 @@ import { type Graph } from '../graph.ts'
  * a {@link Graph} representing a previous install.
  */
 export type LockfileData = {
-  options: SpecOptions
+  lockfileVersion: number
+  options: SpecOptions & {
+    modifiers?: Record<string, string> | undefined
+  }
   nodes: Record<DepID, LockfileNode>
   edges: LockfileEdges
 }
 
+/**
+ * A single difference between the config a graph was built with and the
+ * `options` block stored in the lockfile it was loaded from.
+ */
+export type OptionsChange = {
+  /** the `options` key the difference was found in, e.g. `catalog` */
+  section: string
+  /**
+   * the entry inside that section, e.g. the catalog name. Absent for
+   * scalar sections; `<catalog> <dep>` for `catalogs`.
+   */
+  key?: string
+  /** the value stored in the lockfile, absent when the entry is new */
+  from?: string
+  /** the current value, absent when the entry is gone */
+  to?: string
+}
+
+/**
+ * Per-install intern cache for parsed lockfile specs. Shared across
+ * hidden + main lockfile loads so identical (name, bareSpec) pairs
+ * reuse one Spec instance.
+ */
+export type SpecCache = Map<string, Spec>
+
+/**
+ * Current lockfile format version.
+ * Only lockfiles with matching version are considered valid.
+ * Bump when making breaking format changes.
+ */
+export const LOCKFILE_VERSION = 1
+
 export const getFlagNumFromNode = (node: {
   optional?: boolean
   dev?: boolean
+  brotli?: boolean
 }) =>
-  node.optional && node.dev ? LockfileNodeFlagDevOptional
-  : node.optional ? LockfileNodeFlagOptional
-  : node.dev ? LockfileNodeFlagDev
-  : LockfileNodeFlagNone
+  ((node.optional ? LockfileNodeFlagOptional : 0) |
+    (node.dev ? LockfileNodeFlagDev : 0) |
+    (node.brotli ? LockfileNodeFlagBrotli : 0)) as LockfileNodeFlags
 
 export const getBooleanFlagsFromNum = (flags: LockfileNodeFlags) => ({
   dev: !!(flags & LockfileNodeFlagDev),
   optional: !!(flags & LockfileNodeFlagOptional),
+  brotli: !!(flags & LockfileNodeFlagBrotli),
 })
 
 export const LockfileNodeFlagNone = 0
 export const LockfileNodeFlagOptional = 1
 export const LockfileNodeFlagDev = 2
 export const LockfileNodeFlagDevOptional = 3
+/**
+ * This node's artifact is the registry's Brotli (`.tar.br`) tarball, so
+ * `integrity` is that artifact's hash. Carried as a flag bit rather than a
+ * field because a default-registry node writes no `resolved` at all --
+ * `Node.setResolved()` rebuilds the URL, and this is what tells it which
+ * extension to rebuild.
+ */
+export const LockfileNodeFlagBrotli = 4
 
 /**
- * Bit flags indicating whether a node is optional and/or dev.
+ * Bit flags indicating whether a node is optional, dev, and/or served as
+ * a Brotli tarball.
  */
-export type LockfileNodeFlags = 0 | 1 | 2 | 3
+export type LockfileNodeFlags = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
+
+/**
+ * Build state constants for lockfile nodes
+ */
+export const BuildStateNone = undefined
+export const BuildStateNeeded = 1
+export const BuildStateBuilt = 2
+export const BuildStateFailed = 3
+
+/**
+ * Build state for a node - tracks whether it needs building, has been built, or failed
+ */
+export type LockfileBuildState = undefined | 1 | 2 | 3
+
+export const getBuildStateFromNode = (node: {
+  buildState?: 'none' | 'needed' | 'built' | 'failed'
+}): LockfileBuildState => {
+  switch (node.buildState) {
+    case 'needed':
+      return BuildStateNeeded
+    case 'built':
+      return BuildStateBuilt
+    case 'failed':
+      return BuildStateFailed
+    default:
+      return BuildStateNone
+  }
+}
+
+export const getBuildStateFromNum = (
+  state: LockfileBuildState,
+): 'none' | 'needed' | 'built' | 'failed' => {
+  switch (state) {
+    case BuildStateNeeded:
+      return 'needed'
+    case BuildStateBuilt:
+      return 'built'
+    case BuildStateFailed:
+      return 'failed'
+    default:
+      return 'none'
+  }
+}
 
 /**
  * Lockfile representation of a node from the install graph.
@@ -53,7 +151,11 @@ export type LockfileNode = [
   integrity?: Integrity | null,
   resolved?: string | null,
   location?: string | null,
-  manifest?: Manifest | null,
+  manifest?: NormalizedManifest | null,
+  rawManifest?: NormalizedManifest | null,
+  platform?: LockfilePlatform | null,
+  bins?: Record<string, string> | null,
+  buildState?: LockfileBuildState | null,
 ]
 
 /**

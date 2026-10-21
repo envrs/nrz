@@ -1,0 +1,202 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/index.ts > TAP > config error > colliding alias > must match snapshot 1`] = `
+Config Error
+\`github:\` spec prefix defined in both git-hosts.github (built-in) and registries.github
+  Field: registries.github
+  Found: github
+  Wanted: a registries name not used by git-hosts
+`
+
+exports[`test/index.ts > TAP > config error > reserved registries name > must match snapshot 1`] = `
+Problem in Config File {CWD}/.tap/fixtures/test-index.ts-config-error-reserved-registries-name/nrz.json
+Reserved character found in registries name
+  Found: "a~b"
+`
+
+exports[`test/index.ts > TAP > invalid config in file > must match snapshot 1`] = `
+Problem in Config File {CWD}/.tap/fixtures/test-index.ts-invalid-config-in-file/nrz.json
+Invalid value string for color, expected boolean
+  Field: color
+  Found: "foo"
+  Wanted: boolean
+  Run 'nrz help' for more information about available options.
+`
+
+exports[`test/index.ts > TAP > invalid workspace - no nrz.json > must match snapshot 1`] = `
+Error: No matching workspaces found. Make sure the nrz.json config, the "workspaces" field of the root package.json, or the "packages" list of pnpm-workspace.yaml contains the correct workspaces.
+  Workspace: [ 'src/bar' ]
+`
+
+exports[`test/index.ts > TAP > invalid workspace > must match snapshot 1`] = `
+Error: No matching workspaces found. Make sure the nrz.json config, the "workspaces" field of the root package.json, or the "packages" list of pnpm-workspace.yaml contains the correct workspaces.
+  Workspace: [ 'src/bar' ]
+`
+
+exports[`test/index.ts > TAP > invalid workspace-group > must match snapshot 1`] = `
+Error: No matching workspaces found. Make sure the nrz.json config, the "workspaces" field of the root package.json, or the "packages" list of pnpm-workspace.yaml contains the correct workspaces.
+  Workspace Group: [ 'a' ]
+`
+
+exports[`test/index.ts > TAP > unknown config > must match snapshot 1`] = `
+Invalid Option Flag
+Unknown option '--unknown'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- --unknown'
+  Found: --unknown
+  Valid Options:
+    --access=<access>
+    --all
+    --allow-scripts=<query>
+    --allow-skills=<query>
+    --arch=<arch>
+    --bail
+    --before=<date>
+    --brotli-tarballs
+    --cache=<path>
+    --call=<cmd>
+    --color
+    --commit
+    --config=<all | user | project>
+    --dashboard-root=<path>
+    --default-registry-alias=<name>
+    --dry-run
+    --editor=<program>
+    --expect-lockfile
+    --expect-results=<value>
+    --fallback-command=<command>
+    --fetch-retries=<n>
+    --fetch-retry-factor=<n>
+    --fetch-retry-maxtimeout=<n>
+    --fetch-retry-mintimeout=<n>
+    --force
+    --frozen-lockfile
+    --git-host-archives=<name=template>
+    --git-hosts=<name=template>
+    --git-shallow
+    --git-tag-version
+    --help
+    --identity=<name>
+    --if-present
+    --jsr-registries=<name=url>
+    --libc=<libc>
+    --lockfile-only
+    --loglevel=<level>
+    --migrate-workspaces
+    --no-bail
+    --no-color
+    --node-version=<version>
+    --os=<os>
+    --otp=<otp>
+    --package=<p>
+    --publish-directory=<path>
+    --recursive
+    --registries=<name=url>
+    --registry=<url>
+    --save-config
+    --save-dev
+    --save-exact
+    --save-optional
+    --save-peer
+    --save-prefix=<save-prefix>
+    --save-prod
+    --save-types
+    --scope=<query>
+    --scoped-registries=<@scope=url>
+    --script-shell=<program>
+    --skills-dir=<path>
+    --stale-while-revalidate-factor=<n>
+    --store-linker=<auto | hardlink | clone | copy | unpack>
+    --tag=<tag>
+    --target=<query>
+    --telemetry
+    --verbose
+    --version
+    --view=<output>
+    --workspace=<ws>
+    --workspace-group=<workspace-group>
+    --yes
+  Run 'nrz help' for more information about available options.
+`
+
+exports[`test/index.ts > TAP > unknown config in file > must match snapshot 1`] = `
+Problem in Config File {CWD}/.tap/fixtures/test-index.ts-unknown-config-in-file/nrz.json
+Unknown config option: asdf
+  Found: "asdf"
+  Valid Options:
+    access
+    all
+    allow-scripts
+    allow-skills
+    arch
+    bail
+    before
+    brotli-tarballs
+    cache
+    call
+    color
+    commit
+    config
+    dashboard-root
+    default-registry-alias
+    dry-run
+    editor
+    expect-lockfile
+    expect-results
+    fallback-command
+    fetch-retries
+    fetch-retry-factor
+    fetch-retry-maxtimeout
+    fetch-retry-mintimeout
+    force
+    frozen-lockfile
+    git-host-archives
+    git-hosts
+    git-shallow
+    git-tag-version
+    help
+    identity
+    if-present
+    jsr-registries
+    libc
+    lockfile-only
+    loglevel
+    migrate-workspaces
+    no-bail
+    no-color
+    node-version
+    os
+    otp
+    package
+    publish-directory
+    recursive
+    registries
+    registry
+    save-config
+    save-dev
+    save-exact
+    save-optional
+    save-peer
+    save-prefix
+    save-prod
+    save-types
+    scope
+    scoped-registries
+    script-shell
+    skills-dir
+    stale-while-revalidate-factor
+    store-linker
+    tag
+    target
+    telemetry
+    verbose
+    version
+    view
+    workspace
+    workspace-group
+    yes
+  Run 'nrz help' for more information about available options.
+`

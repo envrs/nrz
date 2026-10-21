@@ -1,0 +1,571 @@
+import t from 'tap'
+
+t.intercept(process.stdout, 'isTTY', { value: false })
+t.intercept(process.stderr, 'isTTY', { value: false })
+t.intercept(process, 'env', {
+  value: Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => !['FORCE_COLOR', 'NO_COLOR', 'CI'].includes(k),
+    ),
+  ),
+})
+
+import type { Jack } from 'jackspeak'
+import type { LoadedConfig } from '../src/config/index.ts'
+import type { Command } from '../src/index.ts'
+import type { ViewFn, ViewOptions } from '../src/view.ts'
+import * as view from '../src/view.ts'
+import * as printErr from '../src/print-err.ts'
+
+// make sure these are loaded after the isTTY intercept
+const {
+  outputCommand,
+  flushAndExit,
+  flushStream,
+  getView,
+  stderr,
+  stdout,
+} = await t.mockImport<typeof import('../src/output.ts')>(
+  '../src/output.ts',
+  {
+    '../src/print-err.ts': t.createMock(printErr, {
+      printErr(err: unknown) {
+        errsPrinted.push(err)
+      },
+    }),
+    '../src/view.ts': view,
+  },
+)
+
+const errsPrinted: unknown[] = []
+// errsPrinted.length at each conf.abort()
+const aborted: number[] = []
+const abort = () => {
+  aborted.push(errsPrinted.length)
+}
+
+t.test('stdout, stderr', t => {
+  const logs = t.capture(console, 'log').args
+  const errs = t.capture(console, 'error').args
+  stdout('standard', 'out')
+  stderr('std', 'err')
+  t.strictSame(logs(), [['standard', 'out']])
+  t.strictSame(errs(), [['std', 'err']])
+  t.end()
+})
+
+t.test('flushStream', async t => {
+  const written: string[] = []
+  const stream = (writableLength: number) => ({
+    writableLength,
+    write: (chunk: string, cb: () => void) => {
+      written.push(chunk)
+      cb()
+      return true
+    },
+  })
+  await flushStream(stream(0))
+  t.strictSame(written, [], 'an empty stream is not written to')
+  await flushStream(stream(100))
+  t.strictSame(written, [''], 'a queued stream is waited on')
+})
+
+t.test('flushAndExit', async t => {
+  const exits = t.capture(process, 'exit').args
+  await flushAndExit(3)
+  t.strictSame(exits(), [[3]])
+})
+
+t.test('getView', async t => {
+  const json = (x: unknown) => x
+  const human = (x: unknown) => x
+  const x = {}
+  const options = {} as ViewOptions
+  const confJson = {
+    values: { view: 'json' },
+  } as LoadedConfig
+  const confHuman = {
+    values: { view: 'human' },
+  } as LoadedConfig
+  t.equal(await getView(confJson, { json, human }), json)
+  const id = (await getView(confHuman)) as ViewFn
+  const xx = id(x, options, confHuman)
+  t.equal(xx, x, 'identity function returned')
+
+  const confUnknown = {
+    values: { view: 'unknown' as any },
+  } as LoadedConfig
+  process.env.NRZ_VIEW = 'unknown'
+  const unknown = await getView(confUnknown, { json, human })
+  t.equal(
+    unknown,
+    json,
+    'json view was returned for unknown view name',
+  )
+  t.equal(process.env.NRZ_VIEW, 'json', 'set view config to default')
+  const viewFn = (() => {}) as ViewFn<true>
+  t.equal(await getView(confHuman, viewFn), viewFn)
+  t.equal(
+    await getView(
+      confHuman,
+      view.lazyView(async () => viewFn),
+    ),
+    viewFn,
+  )
+
+  let loaded = false
+  const lazyHuman = view.lazyView(async () => {
+    loaded = true
+    return human
+  })
+  t.equal(await getView(confHuman, { json, human: lazyHuman }), human)
+  t.ok(loaded, 'lazy view loader ran for human view')
+
+  loaded = false
+  const confSilent = {
+    values: { view: 'silent' },
+  } as LoadedConfig
+  const silent = await getView(confSilent, {
+    json,
+    human: lazyHuman,
+  })
+  t.equal(
+    (silent as ViewFn)(undefined, options, confSilent),
+    undefined,
+  )
+  t.notOk(loaded, 'lazy view loader skipped for silent view')
+  t.end()
+})
+
+t.test('outputCommand', async t => {
+  const confJson = {
+    values: { view: 'json' },
+  } as LoadedConfig
+  const confHuman = {
+    values: { view: 'human' },
+    abort,
+  } as LoadedConfig
+  const confInspect = {
+    values: { view: 'inspect' },
+    abort,
+  } as LoadedConfig
+  const confHelp = {
+    values: { help: true },
+  } as LoadedConfig
+
+  const cliCommand: Command<true> = {
+    async command() {
+      return true
+    },
+    usage: () => ({ usage: () => 'usage' }) as Jack,
+    views: {
+      json: x => x,
+      human: x => ({ ohthehumanity: x }),
+    },
+  }
+
+  t.test('output usage', async t => {
+    const logs = t.capture(console, 'log').args
+    await outputCommand(cliCommand, confHelp)
+    t.strictSame(logs(), [['usage']])
+  })
+
+  t.test('success output (json)', async t => {
+    const logs = t.capture(console, 'log').args
+    await outputCommand(cliCommand, confJson)
+    t.strictSame(logs(), [['true']])
+  })
+
+  t.test('success output (human)', async t => {
+    const logs = t.capture(console, 'log').args
+    await outputCommand(cliCommand, confHuman)
+    t.strictSame(logs(), [['{ ohthehumanity: true }']])
+  })
+
+  t.test('success output (silent)', async t => {
+    const logs = t.capture(console, 'log').args
+    const confSilent = {
+      values: { view: 'silent' },
+    } as LoadedConfig
+    await outputCommand(cliCommand, confSilent)
+    t.strictSame(logs(), [], 'no output produced with silent view')
+  })
+
+  t.test('undefined output', async t => {
+    const logs = t.capture(console, 'log').args
+    await outputCommand(
+      {
+        async command() {
+          return undefined
+        },
+        usage: () => ({ usage: () => 'usage' }) as Jack,
+        views: {
+          human: x => ({ ohthehumanity: x }),
+        },
+      },
+      confHuman,
+    )
+    t.strictSame(logs(), [])
+  })
+
+  t.test('missing view', async t => {
+    const logs = t.capture(console, 'log').args
+    await outputCommand(
+      {
+        async command() {
+          return true
+        },
+        usage: () => ({ usage: () => 'usage' }) as Jack,
+        views: {},
+      },
+      { values: {} } as LoadedConfig,
+    )
+    t.strictSame(logs(), [['true']])
+  })
+
+  t.test('fail output', async t => {
+    errsPrinted.length = 0
+    aborted.length = 0
+    const { exitCode = 0 } = process
+    const exits = t.capture(process, 'exit').args
+    t.teardown(() => {
+      if (t.passing()) process.exitCode = exitCode
+    })
+    cliCommand.command = async () => {
+      throw new Error('poop')
+    }
+    await outputCommand(cliCommand, confInspect)
+    t.strictSame(exits(), [], 'no forced exit')
+    t.strictSame(aborted, [1], 'aborted after printing')
+    t.equal(process.exitCode, 1)
+    t.strictSame(errsPrinted, [new Error('poop')])
+  })
+
+  t.test('fail output with error cause code', async t => {
+    errsPrinted.length = 0
+    aborted.length = 0
+    const { exitCode = 0 } = process
+    const exits = t.capture(process, 'exit').args
+    t.teardown(() => {
+      if (t.passing()) process.exitCode = exitCode
+    })
+    cliCommand.command = async () => {
+      throw new Error('boom', { cause: { code: 'ECODE' } })
+    }
+    await outputCommand(cliCommand, confInspect)
+    t.strictSame(exits(), [], 'no forced exit')
+    t.strictSame(aborted, [1], 'aborted after printing')
+    t.equal(process.exitCode, 1)
+    t.strictSame(errsPrinted, [
+      new Error('boom', { cause: { code: 'ECODE' } }),
+    ])
+  })
+
+  t.test('fail output with onError method', async t => {
+    errsPrinted.length = 0
+    aborted.length = 0
+    const { exitCode = 0 } = process
+    t.teardown(() => {
+      if (t.passing()) process.exitCode = exitCode
+    })
+    const exits = t.capture(process, 'exit').args
+    let sawError: unknown = undefined
+    cliCommand.views = class extends view.ViewClass<true> {
+      error(err: unknown) {
+        sawError = err
+      }
+    }
+    cliCommand.command = async () => {
+      throw new Error('asdf')
+    }
+    await outputCommand(cliCommand, confHuman)
+    t.strictSame(exits(), [], 'no forced exit')
+    t.strictSame(aborted, [1], 'aborted after printing')
+    t.equal(process.exitCode, 1)
+    t.match(sawError, new Error('asdf'))
+    t.equal(errsPrinted[0], sawError, 'printed the error we saw')
+  })
+
+  t.test('needsRegistry', async t => {
+    const registryCommand: Command<true> = {
+      async command() {
+        return true
+      },
+      usage: () => ({ usage: () => 'usage' }) as Jack,
+      views: { json: x => x },
+      needsRegistry: true,
+    }
+
+    t.test(
+      'ECONFIG when only built-in defaults are configured',
+      async t => {
+        errsPrinted.length = 0
+        aborted.length = 0
+        const { exitCode = 0 } = process
+        const exits = t.capture(process, 'exit').args
+        t.teardown(() => {
+          if (t.passing()) process.exitCode = exitCode
+        })
+        // a built-in default (gh) left at its default URL does not
+        // count as the user having configured a registry
+        await outputCommand(registryCommand, {
+          values: { view: 'json' },
+          options: {
+            registries: { gh: 'https://npm.pkg.github.com/' },
+          },
+          abort,
+        } as unknown as LoadedConfig)
+        t.strictSame(exits(), [], 'no forced exit')
+        t.strictSame(aborted, [1], 'aborted after printing')
+        t.equal(process.exitCode, 1)
+        t.match(errsPrinted[0], { cause: { code: 'ECONFIG' } })
+        t.match(String(errsPrinted[0]), /docs\.nrz\.sh\/cli/)
+      },
+    )
+
+    t.test('--help is answered before the check', async t => {
+      const logs = t.capture(console, 'log').args
+      await outputCommand(registryCommand, {
+        values: { help: true },
+        options: {},
+      } as LoadedConfig)
+      t.strictSame(logs(), [['usage']], 'usage printed, no error')
+    })
+
+    t.test('runs when a registry is configured', async t => {
+      const logs = t.capture(console, 'log').args
+      await outputCommand(registryCommand, {
+        values: { view: 'json' },
+        options: { registry: 'https://registry.npmjs.org/' },
+      } as LoadedConfig)
+      t.strictSame(logs(), [['true']])
+    })
+
+    t.test(
+      'runs when the default-registry-alias is configured',
+      async t => {
+        const logs = t.capture(console, 'log').args
+        await outputCommand(registryCommand, {
+          values: { view: 'json' },
+          options: {
+            'default-registry-alias': 'npm',
+            registries: { npm: 'https://registry.npmjs.org/' },
+          },
+        } as unknown as LoadedConfig)
+        t.strictSame(logs(), [['true']])
+      },
+    )
+
+    t.test(
+      'runs when only a non-default alias is configured',
+      async t => {
+        // the default alias (npm) is not configured, but a single
+        // user-configured alias is enough for resolveRegistry to pick
+        const logs = t.capture(console, 'log').args
+        await outputCommand(registryCommand, {
+          values: { view: 'json' },
+          options: {
+            'default-registry-alias': 'npm',
+            registries: { main: 'https://example.com/' },
+          },
+        } as unknown as LoadedConfig)
+        t.strictSame(logs(), [['true']])
+      },
+    )
+
+    t.test('runs when a built-in alias is overridden', async t => {
+      // gh overridden to a non-default URL counts as user-configured
+      const logs = t.capture(console, 'log').args
+      await outputCommand(registryCommand, {
+        values: { view: 'json' },
+        options: {
+          registries: { gh: 'https://custom.example.com/' },
+        },
+      } as unknown as LoadedConfig)
+      t.strictSame(logs(), [['true']])
+    })
+  })
+
+  t.test('needsNpmRegistry', async t => {
+    const npmRegistryCommand: Command<true> = {
+      async command() {
+        return true
+      },
+      usage: () => ({ usage: () => 'usage' }) as Jack,
+      views: { json: x => x },
+      needsNpmRegistry: true,
+    }
+
+    t.test('ECONFIG when registries.npm is missing', async t => {
+      errsPrinted.length = 0
+      aborted.length = 0
+      const { exitCode = 0 } = process
+      const exits = t.capture(process, 'exit').args
+      t.teardown(() => {
+        if (t.passing()) process.exitCode = exitCode
+      })
+      // a scalar --registry is enough for needsRegistry, but not
+      // for the install-related npm alias gate
+      await outputCommand(npmRegistryCommand, {
+        values: { view: 'json' },
+        options: {
+          registry: 'https://registry.npmjs.org/',
+          registries: {},
+          'default-registry-alias': 'npm',
+        },
+        abort,
+      } as unknown as LoadedConfig)
+      t.strictSame(exits(), [], 'no forced exit')
+      t.strictSame(aborted, [1], 'aborted after printing')
+      t.equal(process.exitCode, 1)
+      t.match(errsPrinted[0], { cause: { code: 'ECONFIG' } })
+      t.match(String(errsPrinted[0]), /registries\.npm/)
+    })
+
+    t.test(
+      'ECONFIG when only a non-npm alias is configured',
+      async t => {
+        errsPrinted.length = 0
+        aborted.length = 0
+        const { exitCode = 0 } = process
+        const exits = t.capture(process, 'exit').args
+        t.teardown(() => {
+          if (t.passing()) process.exitCode = exitCode
+        })
+        await outputCommand(npmRegistryCommand, {
+          values: { view: 'json' },
+          options: {
+            registries: { main: 'https://example.com/' },
+            'default-registry-alias': 'npm',
+          },
+          abort,
+        } as unknown as LoadedConfig)
+        t.strictSame(exits(), [], 'no forced exit')
+        t.strictSame(aborted, [1], 'aborted after printing')
+        t.equal(process.exitCode, 1)
+        t.match(String(errsPrinted[0]), /Missing npm registry/)
+      },
+    )
+
+    t.test('error names the default-registry-alias', async t => {
+      errsPrinted.length = 0
+      aborted.length = 0
+      const { exitCode = 0 } = process
+      const exits = t.capture(process, 'exit').args
+      t.teardown(() => {
+        if (t.passing()) process.exitCode = exitCode
+      })
+      await outputCommand(npmRegistryCommand, {
+        values: { view: 'json' },
+        options: {
+          registries: {},
+          'default-registry-alias': 'custom',
+        },
+        abort,
+      } as unknown as LoadedConfig)
+      t.strictSame(exits(), [], 'no forced exit')
+      t.strictSame(aborted, [1], 'aborted after printing')
+      t.match(String(errsPrinted[0]), /Missing custom registry/)
+      t.match(String(errsPrinted[0]), /registries\.custom/)
+    })
+
+    t.test('--help is answered before the check', async t => {
+      const logs = t.capture(console, 'log').args
+      await outputCommand(npmRegistryCommand, {
+        values: { help: true },
+        options: {},
+      } as LoadedConfig)
+      t.strictSame(logs(), [['usage']], 'usage printed, no error')
+    })
+
+    t.test('runs when registries.npm is configured', async t => {
+      const logs = t.capture(console, 'log').args
+      await outputCommand(npmRegistryCommand, {
+        values: { view: 'json' },
+        options: {
+          registries: { npm: 'https://registry.npmjs.org/' },
+          'default-registry-alias': 'npm',
+        },
+      } as unknown as LoadedConfig)
+      t.strictSame(logs(), [['true']])
+    })
+
+    t.test(
+      'runs when default-registry-alias points at another configured alias',
+      async t => {
+        const logs = t.capture(console, 'log').args
+        // registries.npm is missing, but bare specs resolve through
+        // `main` here, so the gate must not block
+        await outputCommand(npmRegistryCommand, {
+          values: { view: 'json' },
+          options: {
+            registries: { main: 'https://example.com/' },
+            'default-registry-alias': 'main',
+          },
+        } as unknown as LoadedConfig)
+        t.strictSame(logs(), [['true']])
+      },
+    )
+  })
+
+  t.test('view class success', async t => {
+    let startCalled = false
+    let doneCalled = false
+    let errCalled: unknown = false
+
+    class MyView extends view.ViewClass<true> {
+      start() {
+        startCalled = true
+      }
+      async done(
+        result: true,
+        opts: { time: number },
+      ): Promise<undefined> {
+        doneCalled = result
+        t.matchOnlyStrict(opts, { time: Number })
+      }
+      error(err: unknown) {
+        errCalled = err
+      }
+    }
+
+    const cliCommand: Command<true> = {
+      async command() {
+        return true
+      },
+      usage: () => ({ usage: () => 'usage' }) as Jack,
+      views: {
+        human: MyView,
+      },
+    }
+
+    await outputCommand(cliCommand, confHuman)
+
+    t.ok(startCalled, 'start method was called')
+    t.ok(doneCalled, 'done method was called')
+    t.notOk(errCalled, 'error method was not called')
+  })
+
+  t.test('lazy view class success', async t => {
+    let startCalled = false
+
+    class MyView extends view.ViewClass<true> {
+      start() {
+        startCalled = true
+      }
+    }
+
+    const cliCommand: Command<true> = {
+      async command() {
+        return true
+      },
+      usage: () => ({ usage: () => 'usage' }) as Jack,
+      views: {
+        human: view.lazyView(async () => MyView),
+      },
+    }
+
+    await outputCommand(cliCommand, confHuman)
+    t.ok(startCalled, 'lazy view class was loaded and started')
+  })
+})

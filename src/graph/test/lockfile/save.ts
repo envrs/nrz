@@ -1,7 +1,10 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import type { DepID } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import t from 'tap'
 import { Edge } from '../../src/edge.ts'
@@ -11,6 +14,8 @@ import {
   save,
   saveHidden,
 } from '../../src/lockfile/save.ts'
+import { load } from '../../src/lockfile/load.ts'
+import { GraphModifier } from '../../src/modifiers.ts'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',
@@ -29,7 +34,9 @@ t.test('save', async t => {
       foo: '^1.0.0',
     },
   }
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     ...configData,
     projectRoot,
@@ -129,7 +136,9 @@ t.test('missing registries', async t => {
     registry: 'http://example.com',
     registries: undefined,
   }
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     projectRoot,
     ...borkedConfigData,
@@ -139,7 +148,7 @@ t.test('missing registries', async t => {
   t.matchSnapshot(JSON.stringify(lockfile, null, 2))
 })
 
-t.test('custom git hosts', async t => {
+t.test('custom git hosts and catalogs', async t => {
   const mainManifest = {
     name: 'my-project',
     version: '1.0.0',
@@ -148,6 +157,8 @@ t.test('custom git hosts', async t => {
     },
   }
   const specOptions = {
+    catalog: { x: '1.2.3' },
+    catalogs: { a: { x: '2.3.4' } },
     'git-hosts': {
       example: 'git+ssh://example.com/$1/$2.git',
     },
@@ -155,7 +166,9 @@ t.test('custom git hosts', async t => {
       example: 'https://example.com/$1/$2/archive/$3.tar.gz',
     },
   }
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     projectRoot,
     ...specOptions,
@@ -174,7 +187,7 @@ t.test('custom git hosts', async t => {
   t.matchSnapshot(JSON.stringify(lockfile, null, 2))
 })
 
-t.test('scope-registries', async t => {
+t.test('jsr-registries', async t => {
   const mainManifest = {
     name: 'my-project',
     version: '1.0.0',
@@ -183,11 +196,13 @@ t.test('scope-registries', async t => {
     },
   }
   const specOptions = {
-    'scope-registries': {
+    'scoped-registries': {
       '@myscope': 'https://example.com/',
     },
   }
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     projectRoot,
     ...specOptions,
@@ -210,6 +225,44 @@ t.test('scope-registries', async t => {
   t.matchSnapshot(JSON.stringify(lockfile, null, 2))
 })
 
+t.test('jsr-registries', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      '@foo/bar': 'intl:@foo/bar@1',
+    },
+  }
+  const specOptions = {
+    'jsr-registries': {
+      intl: 'https://jsr.example.com/',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    ...specOptions,
+    mainManifest,
+  })
+  graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse(
+      '@foo/bar',
+      mainManifest.dependencies['@foo/bar'],
+      specOptions,
+    ),
+    {
+      name: '@foo/bar',
+      version: '1.0.0',
+    },
+  )
+  const lockfile = lockfileData({ ...specOptions, graph })
+  t.matchSnapshot(JSON.stringify(lockfile, null, 2))
+})
+
 t.test('overrides default registries', async t => {
   const mainManifest = {
     name: 'my-project',
@@ -224,13 +277,49 @@ t.test('overrides default registries', async t => {
       npm: 'http://example.com',
     },
   }
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     projectRoot,
     ...specOptions,
     mainManifest,
   })
   const lockfile = lockfileData({ ...specOptions, graph })
+  t.matchSnapshot(JSON.stringify(lockfile, null, 2))
+})
+
+t.test('persists a non-default default-registry-alias', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+    },
+  }
+  const specOptions = {
+    registries: {
+      npm: 'https://registry.npmjs.org/',
+      internal: 'https://internal.example.com/',
+      // matches a built-in default, so it is stripped from the lockfile
+      gh: 'https://npm.pkg.github.com/',
+    },
+    'default-registry-alias': 'internal',
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    ...specOptions,
+    mainManifest,
+  })
+  const lockfile = lockfileData({ ...specOptions, graph })
+  t.equal(
+    lockfile.options['default-registry-alias'],
+    'internal',
+    'non-default alias is persisted',
+  )
   t.matchSnapshot(JSON.stringify(lockfile, null, 2))
 })
 
@@ -241,8 +330,10 @@ t.test('workspaces', async t => {
   }
   const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: {
+        packages: ['./packages/*'],
+      },
     }),
     packages: {
       a: {
@@ -262,6 +353,8 @@ t.test('workspaces', async t => {
       },
     },
   })
+  t.chdir(projectRoot)
+  unload('project')
   const monorepo = Monorepo.load(projectRoot)
   const graph = new Graph({
     projectRoot,
@@ -297,11 +390,859 @@ t.test('workspaces', async t => {
   )
 
   await t.test('save manifests', async t => {
-    save({ ...configData, graph, saveManifests: true })
+    save({ ...configData, graph })
     t.matchSnapshot(
       readFileSync(resolve(projectRoot, 'nrz-lock.json'), {
         encoding: 'utf8',
       }),
     )
   })
+})
+
+t.test('confused manifest', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo', '^1.0.0'),
+    {
+      name: 'test', // Different name to trigger confusion
+      version: '1.0.0',
+    },
+  )
+  if (!foo) {
+    throw new Error('Missing expected package')
+  }
+  foo.setResolved()
+  foo.location = 'node_modules/.pnpm/foo@1.0.0/node_modules/foo'
+
+  // Save with manifests to include rawManifest
+  saveHidden({ ...configData, graph })
+  t.matchSnapshot(
+    readFileSync(
+      resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+      {
+        encoding: 'utf8',
+      },
+    ),
+    'should save lockfile with confused manifest',
+  )
+})
+
+t.test('store modifiers', async t => {
+  await t.test('with valid modifiers', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({
+      'nrz.json': JSON.stringify({
+        modifiers: {
+          ':root > #foo': '2',
+        },
+      }),
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      {
+        name: 'foo',
+        version: '2.0.0',
+        dist: {
+          integrity:
+            'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        },
+      },
+      undefined,
+      ':root > #foo',
+    )
+    if (!foo) {
+      throw new Error('Missing expected package')
+    }
+    foo.setResolved()
+    save({
+      ...configData,
+      modifiers: new GraphModifier(configData),
+      graph,
+    })
+    t.matchSnapshot(
+      readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+      'should save lockfile with modifiers',
+    )
+  })
+
+  await t.test('with missing modifiers', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({})
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dist: {
+          integrity:
+            'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        },
+      },
+    )!
+    foo.setResolved()
+
+    // Test with undefined modifiers
+    // (should not include modifiers in lockfile data)
+    t.matchSnapshot(
+      lockfileData({ ...configData, graph, modifiers: undefined }),
+      'should save lockfile without modifiers when undefined',
+    )
+  })
+
+  await t.test('with empty modifiers config', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dist: {
+          integrity:
+            'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        },
+      },
+    )!
+    foo.setResolved()
+
+    // Create a modifiers object with empty config
+    const mockModifiers = {
+      config: {}, // Empty config should not be included in lockfile
+    }
+
+    // Test with empty modifiers config (should not include modifiers in lockfile)
+    t.matchSnapshot(
+      lockfileData({
+        ...configData,
+        graph,
+        modifiers: mockModifiers as any,
+      }),
+      'should save lockfile without modifiers when config is empty',
+    )
+  })
+
+  await t.test('with undefined scope registries', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dist: {
+          integrity:
+            'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        },
+      },
+    )!
+    foo.setResolved()
+
+    // Test with undefined scope registries
+    // (should not include scoped-registries in lockfile)
+    t.matchSnapshot(
+      lockfileData({
+        ...configData,
+        graph,
+        'scoped-registries': undefined,
+      }),
+      'should save lockfile without scope registries when undefined',
+    )
+  })
+
+  await t.test('with invalid scope registries', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dist: {
+          integrity:
+            'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        },
+      },
+    )
+    if (!foo) {
+      throw new Error('Missing expected package')
+    }
+    foo.setResolved()
+
+    // Test with invalid scope registries (not a record of strings) - should not include scoped-registries in lockfile
+    t.matchSnapshot(
+      lockfileData({
+        ...configData,
+        graph,
+        'scoped-registries': 'invalid-type' as any,
+      }),
+      'should save lockfile without scope registries when invalid type',
+    )
+  })
+})
+
+t.test(
+  'saveManifests with normalized author and contributors',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+
+    // Import normalizeManifest function and types
+    const { normalizeManifest } = await import('@nrz/types')
+
+    // Create a package manifest with both author and contributors
+    const rawManifest = {
+      name: 'foo',
+      version: '1.0.0',
+      author: 'John Doe <john@example.com>',
+      contributors: [
+        'Jane Smith <jane@example.com>',
+        { name: 'Bob Wilson', email: 'bob@example.com' },
+      ],
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==' as const,
+      },
+    } as any
+
+    // Normalize the manifest as required by Node class
+    const normalizedManifest = normalizeManifest(rawManifest)
+
+    const foo = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo@^1.0.0'),
+      normalizedManifest,
+    )
+    if (!foo) {
+      throw new Error('Missing expected package')
+    }
+    foo.setResolved()
+
+    // Use saveHidden which automatically sets saveManifests: true
+    saveHidden({ ...configData, graph })
+    t.matchSnapshot(
+      readFileSync(
+        resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+        {
+          encoding: 'utf8',
+        },
+      ),
+      'should save hidden lockfile with normalized manifest containing author and contributors',
+    )
+  },
+)
+
+t.test('save platform data for optional dependencies', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+    },
+    optionalDependencies: {
+      bar: '^1.0.0',
+      baz: '^1.0.0',
+    },
+  }
+
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+
+  // Regular dependency (should not have platform data in lockfile)
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@^1.0.0'),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      engines: { node: '>=14' },
+      os: ['linux', 'darwin'],
+      cpu: ['x64', 'arm64'],
+      bin: { foo: 'foo.js' },
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!foo) throw new Error('Missing foo package')
+  foo.setResolved()
+
+  // Optional dependency with platform requirements
+  const bar = graph.placePackage(
+    graph.mainImporter,
+    'optional',
+    Spec.parse('bar@^1.0.0'),
+    {
+      name: 'bar',
+      version: '1.0.0',
+      engines: { node: '>=16' },
+      os: ['linux'],
+      cpu: ['x64'],
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!bar) throw new Error('Missing bar package')
+  bar.setResolved()
+  bar.optional = true
+
+  // Optional dependency without platform requirements
+  const baz = graph.placePackage(
+    graph.mainImporter,
+    'optional',
+    Spec.parse('baz@^1.0.0'),
+    {
+      name: 'baz',
+      version: '1.0.0',
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!baz) throw new Error('Missing baz package')
+  baz.setResolved()
+  baz.optional = true
+
+  // Save the lockfile and check that platform data is included for optional deps
+  save({ ...configData, graph })
+  const lockfileContent = JSON.parse(
+    readFileSync(resolve(projectRoot, 'nrz-lock.json'), {
+      encoding: 'utf8',
+    }),
+  )
+
+  // Verify platform data is saved for bar but not for foo or baz
+  // Debug: log all node keys to see what format they're using
+  const nodeKeys = Object.keys(lockfileContent.nodes)
+  t.comment('Node keys in lockfile:', nodeKeys)
+
+  // Find the actual key for bar
+  const barKey = nodeKeys.find(k => k.includes('bar'))
+  const barNode = barKey ? lockfileContent.nodes[barKey] : undefined
+  t.ok(barNode, 'bar node exists in lockfile')
+  t.ok(barNode?.[7], 'bar has platform data at index 7')
+  t.same(
+    barNode?.[7],
+    {
+      engines: { node: '>=16' },
+      os: ['linux'],
+      cpu: ['x64'],
+    },
+    'bar platform data is correct',
+  )
+
+  const fooKey = nodeKeys.find(k => k.includes('foo'))
+  const fooNode = fooKey ? lockfileContent.nodes[fooKey] : undefined
+  t.ok(fooNode, 'foo node exists in lockfile')
+  t.notOk(
+    fooNode?.[7],
+    'foo does not have platform data (not optional)',
+  )
+
+  const bazKey = nodeKeys.find(k => k.includes('baz'))
+  const bazNode = bazKey ? lockfileContent.nodes[bazKey] : undefined
+  t.ok(bazNode, 'baz node exists in lockfile')
+  t.notOk(
+    bazNode?.[7],
+    'baz does not have platform data (no platform requirements)',
+  )
+
+  t.matchSnapshot(
+    JSON.stringify(lockfileContent, null, 2),
+    'lockfile with platform data for optional dependencies',
+  )
+})
+
+t.test('save buildState data', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+      bar: '^1.0.0',
+      baz: '^1.0.0',
+      qux: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+
+  // Create nodes with different buildState values
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@^1.0.0'),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!foo) throw new Error('Missing foo package')
+  foo.setResolved()
+  foo.buildState = 'needed'
+
+  const bar = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar@^1.0.0'),
+    {
+      name: 'bar',
+      version: '1.0.0',
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!bar) throw new Error('Missing bar package')
+  bar.setResolved()
+  bar.buildState = 'built'
+
+  const baz = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('baz@^1.0.0'),
+    {
+      name: 'baz',
+      version: '1.0.0',
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!baz) throw new Error('Missing baz package')
+  baz.setResolved()
+  baz.buildState = 'failed'
+
+  const qux = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('qux@^1.0.0'),
+    {
+      name: 'qux',
+      version: '1.0.0',
+      dist: {
+        integrity:
+          'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+      },
+    },
+  )
+  if (!qux) throw new Error('Missing qux package')
+  qux.setResolved()
+  qux.buildState = 'none'
+
+  await t.test('save with saveBuildData: true', async t => {
+    const lockfile = lockfileData({
+      ...configData,
+      graph,
+      saveBuildData: true,
+    })
+
+    // Verify buildState is saved for each node
+    const nodeKeys = Object.keys(lockfile.nodes)
+    const fooKey = nodeKeys.find(k => k.includes('foo')) as DepID
+    const barKey = nodeKeys.find(k => k.includes('bar')) as DepID
+    const bazKey = nodeKeys.find(k => k.includes('baz')) as DepID
+    const quxKey = nodeKeys.find(k => k.includes('qux')) as DepID
+
+    t.ok(fooKey, 'foo node exists')
+    t.ok(barKey, 'bar node exists')
+    t.ok(bazKey, 'baz node exists')
+    t.ok(quxKey, 'qux node exists')
+
+    // Check buildState values (index 9 in LockfileNode array)
+    t.equal(
+      lockfile.nodes[fooKey]?.[9],
+      1,
+      'foo buildState is 1 (needed)',
+    )
+    t.equal(
+      lockfile.nodes[barKey]?.[9],
+      2,
+      'bar buildState is 2 (built)',
+    )
+    t.equal(
+      lockfile.nodes[bazKey]?.[9],
+      3,
+      'baz buildState is 3 (failed)',
+    )
+    t.notOk(
+      lockfile.nodes[quxKey]?.[9],
+      'qux buildState is undefined (none)',
+    )
+
+    t.matchSnapshot(
+      JSON.stringify(lockfile, null, 2),
+      'lockfile with buildState data',
+    )
+  })
+
+  await t.test('save without saveBuildData (default)', async t => {
+    const lockfile = lockfileData({
+      ...configData,
+      graph,
+      saveBuildData: false,
+    })
+
+    // Verify buildState is NOT saved when saveBuildData is false
+    const nodeKeys = Object.keys(lockfile.nodes)
+    const fooKey = nodeKeys.find(k => k.includes('foo')) as DepID
+
+    t.ok(fooKey, 'foo node exists')
+    t.notOk(
+      lockfile.nodes[fooKey]?.[9],
+      'buildState not saved when saveBuildData is false',
+    )
+
+    t.matchSnapshot(
+      JSON.stringify(lockfile, null, 2),
+      'lockfile without buildState data',
+    )
+  })
+
+  await t.test('save() and saveHidden() with buildState', async t => {
+    // Test save() with saveBuildData
+    save({ ...configData, graph, saveBuildData: true })
+    const savedContent = JSON.parse(
+      readFileSync(resolve(projectRoot, 'nrz-lock.json'), {
+        encoding: 'utf8',
+      }),
+    )
+
+    const nodeKeys = Object.keys(savedContent.nodes)
+    const fooKey = nodeKeys.find(k => k.includes('foo'))
+    t.equal(
+      savedContent.nodes[fooKey!]?.[9],
+      1,
+      'save() with saveBuildData includes buildState',
+    )
+    t.matchSnapshot(
+      JSON.stringify(savedContent, null, 2),
+      'save() output with buildState',
+    )
+
+    // Test saveHidden() (automatically includes buildState)
+    saveHidden({ ...configData, graph })
+    const hiddenContent = JSON.parse(
+      readFileSync(
+        resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+        {
+          encoding: 'utf8',
+        },
+      ),
+    )
+
+    const hiddenNodeKeys = Object.keys(hiddenContent.nodes)
+    const hiddenFooKey = hiddenNodeKeys.find(k => k.includes('foo'))
+    t.equal(
+      hiddenContent.nodes[hiddenFooKey!]?.[9],
+      1,
+      'saveHidden() automatically includes buildState',
+    )
+    t.matchSnapshot(
+      JSON.stringify(hiddenContent, null, 2),
+      'saveHidden() output with buildState',
+    )
+  })
+})
+
+t.test('saveHidden skips when graph has no manifest', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+
+  // Create a node with minimal manifest (name only) and explicit DepID
+  // This simulates a node without full manifest data
+  const depId = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@^1.0.0'),
+    { name: 'foo' },
+    depId,
+  )
+  if (!foo) throw new Error('Missing foo package')
+  foo.setResolved()
+
+  // Remove the manifest from the graph's manifest map to simulate missing manifest
+  graph.manifests.delete(depId)
+  foo.manifest = undefined
+
+  // Call saveHidden - should not create file due to missing manifest
+  saveHidden({ ...configData, graph })
+
+  const hiddenLockfilePath = resolve(
+    projectRoot,
+    'node_modules/.nrz-lock.json',
+  )
+
+  t.notOk(
+    existsSync(hiddenLockfilePath),
+    'hidden lockfile should not be created when manifest is missing',
+  )
+})
+
+t.test('round-trip a peer-suffixed node', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { ui: '^1.0.0' },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+  const extra = 'peer.aaaaaaaaaaaaaaaa'
+  const ui = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('ui@^1.0.0'),
+    {
+      name: 'ui',
+      version: '1.0.0',
+      peerDependencies: { react: '^18' },
+    },
+    undefined,
+    extra,
+  )
+  if (!ui) throw new Error('missing ui')
+  ui.setResolved()
+  save({ ...configData, graph })
+
+  const loaded = load({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+  const loadedUi = [...loaded.nodes.values()].find(
+    n => n.name === 'ui',
+  )
+  t.equal(loadedUi?.peerSetHash, extra)
+  t.equal(loadedUi?.id, ui.id)
+  t.ok(
+    Object.keys(
+      JSON.parse(
+        readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+      ).nodes,
+    ).some(id => id.includes(extra)),
+    'lockfile stores the peer suffix',
+  )
+})
+
+t.test('brotli round trip', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { foo: '^1.0.0', bar: '^1.0.0' },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+
+  const graph = new Graph({
+    ...configData,
+    projectRoot,
+    mainManifest,
+  })
+
+  // a node the registry served as .tar.br: `resolved` and `integrity`
+  // both describe that artifact
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@^1.0.0'),
+    { name: 'foo', version: '1.0.0' },
+  )
+  if (!foo) throw new Error('Missing foo package')
+  foo.resolved = 'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br'
+  foo.integrity = 'sha512-brotlibrotlibrotli=='
+
+  const bar = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar@^1.0.0'),
+    { name: 'bar', version: '1.0.0' },
+  )
+  if (!bar) throw new Error('Missing bar package')
+  bar.setResolved()
+
+  save({ ...configData, graph })
+  const nodes = (
+    JSON.parse(
+      readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+    ) as { nodes: Record<string, [number, ...unknown[]]> }
+  ).nodes
+  const key = (name: string) =>
+    Object.keys(nodes).find(k => k.includes(name))!
+
+  t.equal(nodes[key('foo')]?.[0], 4, 'brotli bit set on foo')
+  t.equal(nodes[key('bar')]?.[0], 0, 'and not on the .tgz node')
+  t.equal(
+    nodes[key('foo')]?.[3],
+    undefined,
+    'still no resolved url: the bit is the whole cost',
+  )
+
+  // and back: the url is rebuilt from the bit alone
+  const loaded = load({ ...configData, projectRoot, mainManifest })
+  const fooOut = [...loaded.nodes.values()].find(
+    n => n.name === 'foo',
+  )
+  t.equal(fooOut?.brotli, true)
+  t.equal(
+    fooOut?.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.0.0.tar.br',
+  )
+  t.equal(fooOut?.integrity, 'sha512-brotlibrotlibrotli==')
+  const barOut = [...loaded.nodes.values()].find(
+    n => n.name === 'bar',
+  )
+  t.equal(barOut?.brotli, false)
+  t.equal(
+    barOut?.resolved,
+    'https://registry.npmjs.org/bar/-/bar-1.0.0.tgz',
+  )
 })

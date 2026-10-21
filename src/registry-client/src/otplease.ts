@@ -1,22 +1,53 @@
 import { error } from '@nrz/error-cause'
-import { type Dispatcher } from 'undici'
-import {
-  type RegistryClient,
-  type RegistryClientRequestOptions,
+import type { Dispatcher } from 'undici'
+import type {
+  RegistryClient,
+  RegistryClientRequestOptions,
 } from './index.ts'
-import { isWebAuthChallenge } from './web-auth-challenge.ts'
-
+import { tokenRefusal } from './registry-error.ts'
+import { getWebAuthChallenge } from './web-auth-challenge.ts'
 import { urlOpen } from '@nrz/url-open'
 import { createInterface } from 'node:readline/promises'
+import { gunzipSync } from 'node:zlib'
+
+// eslint-disable-next-line no-console
+const log = (msg: string) => console.error(msg)
+
+const question = async (text: string): Promise<string> => {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+  const answer = await rl.question(text)
+  rl.close()
+  return answer
+}
 
 const otpChallengeNotice =
   /^Open ([^ ]+) to use your security key for authentication or enter OTP from your authenticator app/i
+
+const responseBodyText = async (
+  response: Dispatcher.ResponseData,
+): Promise<string> => {
+  const contentEncoding = String(
+    response.headers['content-encoding'] ?? '',
+  )
+  if (/\bgzip\b/i.test(contentEncoding)) {
+    return gunzipSync(await response.body.arrayBuffer()).toString()
+  }
+  return await response.body.text()
+}
+
+export type OtpResult =
+  | { retry: RegistryClientRequestOptions }
+  | { bodyConsumed: string }
+  | undefined
 
 export const otplease = async (
   client: RegistryClient,
   options: RegistryClientRequestOptions,
   response: Dispatcher.ResponseData,
-): Promise<RegistryClientRequestOptions | undefined> => {
+): Promise<OtpResult> => {
   const waHeader = String(response.headers['www-authenticate'] ?? '')
   const wwwAuth = new Set(
     waHeader ? waHeader.toLowerCase().split(/,\s*/) : [],
@@ -24,51 +55,94 @@ export const otplease = async (
 
   if (wwwAuth.has('ipaddress')) {
     throw error('Authorization is not allowed from your ip address', {
+      code: 'ENEEDAUTH',
+      status: response.statusCode,
+      method: options.method,
       response,
     })
   }
 
   if (wwwAuth.has('otp')) {
     // do a web auth opener to get otp token
-    const challenge = await response.body.json()
-    if (isWebAuthChallenge(challenge)) {
+    const challenge = getWebAuthChallenge(
+      await responseBodyText(response)
+        .then(text => JSON.parse(text) as unknown)
+        .catch(() => null),
+    )
+    if (challenge) {
       return {
-        ...options,
-        otp: (await client.webAuthOpener(challenge)).token,
+        retry: {
+          ...options,
+          otp: (await client.webAuthOpener(challenge)).token,
+        },
       }
-    } else {
-      const { 'npm-notice': npmNotice } = response.headers
-      if (npmNotice) {
-        const n = String(npmNotice)
-        const match = otpChallengeNotice.exec(n) as
-          | null
-          | [string, string]
-        if (match) {
-          void urlOpen(match[1])
-          const otp = await createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          }).question(n)
-          return { ...options, otp }
+    }
+
+    const { 'npm-notice': npmNotice } = response.headers
+    if (npmNotice) {
+      const notice = String(npmNotice)
+      const match = otpChallengeNotice.exec(notice)
+      if (match?.[1]) {
+        // the opener may fail to launch a browser, e.g: xdg-open on a
+        // headless server. The url is printed in the notice below.
+        await urlOpen(match[1]).catch(() => {})
+        log(notice)
+        return {
+          retry: {
+            ...options,
+            otp: await question('OTP: '),
+          },
         }
       }
-      throw error('Unrecognized OTP authentication challenge', {
-        response,
-      })
     }
+
+    throw error('Unrecognized OTP authentication challenge', {
+      code: 'ENEEDAUTH',
+      status: response.statusCode,
+      method: options.method,
+      response,
+    })
+  }
+
+  if (wwwAuth.has('bearer')) {
+    // A token the registry says is dead explains itself in the body, so hand
+    // it back to be rendered like any other 401. Every other bearer challenge
+    // -- npm's own registry sends one with no body -- keeps the generic line.
+    const text = await responseBodyText(response).catch(() => '')
+    if (tokenRefusal({ statusCode: 401, text: () => text })) {
+      return { bodyConsumed: text }
+    }
+    throw error(
+      'Missing or invalid authentication token. Run `nrz login` or `nrz token add` to authenticate.',
+      {
+        code: 'ENEEDAUTH',
+        status: response.statusCode,
+        method: options.method,
+        response,
+      },
+    )
   }
 
   if (wwwAuth.size) {
-    throw error('Unknown authentication challenge', { response })
+    throw error('Unknown authentication challenge', {
+      code: 'ENEEDAUTH',
+      status: response.statusCode,
+      method: options.method,
+      response,
+    })
   }
 
-  // see if the body is prompting for otp
-  const text = await response.body.text()
+  // Consume the body to check if it's prompting for OTP.
+  // We must return the consumed text so the caller doesn't try to
+  // re-read from the already-drained stream.
+  const text = await responseBodyText(response).catch(() => '')
   if (text.toLowerCase().includes('one-time pass')) {
-    const otp = await createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    }).question(text)
-    return { ...options, otp }
+    return {
+      retry: {
+        ...options,
+        otp: await question(text),
+      },
+    }
   }
+  return { bodyConsumed: text }
 }

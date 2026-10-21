@@ -1,19 +1,30 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { PackageJson } from '@nrz/package-json'
 import { kCustomInspect, Spec } from '@nrz/spec'
+import { reload, unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
-import { inspect } from 'node:util'
+import { inspect as rawInspect } from 'node:util'
+import type { InspectOptions } from 'node:util'
+
+// Normalize inspect output across Node.js versions: strip [Map]/[Set] tags
+// and force consistent multi-line formatting with compact: false
+const inspect = (obj: unknown, opts?: InspectOptions) =>
+  rawInspect(obj, { compact: false, ...opts })
+    .replaceAll(' [Map] ', ' ')
+    .replaceAll(' [Set] ', ' ')
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
+import type { Test } from 'tap'
 import { load } from '../../src/actual/load.ts'
-import {
-  asDependency,
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
+import type {
+  AddImportersDependenciesMap,
+  RemoveImportersDependenciesMap,
 } from '../../src/dependencies.ts'
+import { asDependency } from '../../src/dependencies.ts'
+import { Edge } from '../../src/edge.ts'
 import { Graph } from '../../src/graph.ts'
 import { getImporterSpecs } from '../../src/ideal/get-importer-specs.ts'
-import { Edge } from '../../src/edge.ts'
+import { GraphModifier } from '../../src/modifiers.ts'
 
 Object.assign(Spec.prototype, {
   [kCustomInspect](this: Spec) {
@@ -22,14 +33,25 @@ Object.assign(Spec.prototype, {
 })
 
 t.test('empty graph and nothing to add', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     mainManifest: {},
-    monorepo: Monorepo.maybeLoad(t.testdirName),
+    monorepo: Monorepo.maybeLoad(projectRoot),
   })
   const add = new Map() as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.strictSame(specs.add.size, 0, 'should have no items to add')
 })
 
@@ -51,26 +73,43 @@ t.test('empty graph with workspaces and nothing to add', async t => {
         }),
       },
     },
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: {
+        packages: ['./packages/*'],
+      },
     }),
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   const add = new Map() as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(specs.add, 'should have no items to add')
 })
 
 t.test('empty graph and something to add', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     mainManifest: {},
-    monorepo: Monorepo.maybeLoad(t.testdirName),
+    monorepo: Monorepo.maybeLoad(projectRoot),
   })
   const add = new Map([
     [
@@ -78,7 +117,9 @@ t.test('empty graph and something to add', async t => {
       new Map(
         Object.entries({
           bar: asDependency({
-            spec: Spec.parse('bar@custom:bar@^1.1.1'),
+            spec: Spec.parse('bar@custom:bar@^1.1.1', {
+              registries: { custom: 'http://example.com' },
+            }),
             type: 'dev',
           }),
           foo: asDependency({
@@ -90,12 +131,49 @@ t.test('empty graph and something to add', async t => {
     ],
   ]) as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs.add, { depth: Infinity }),
     'should result in only added specs',
   )
 })
+
+t.test(
+  'an importer dual declaration keeps the regular type',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      devDependencies: { c: '^1.0.0' },
+      peerDependencies: { c: '*' },
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const specs = getImporterSpecs({
+      add: new Map() as AddImportersDependenciesMap,
+      graph: load({ projectRoot, scurry, packageJson }),
+      remove: new Map() as RemoveImportersDependenciesMap,
+      scurry,
+      packageJson,
+    })
+    const deps = specs.add.get(joinDepIDTuple(['file', '.']))
+    t.strictSame([...(deps?.keys() ?? [])], ['c'], 'queued once')
+    t.strictSame(deps?.get('c')?.type, 'dev', 'as the regular type')
+    t.strictSame(String(deps?.get('c')?.spec), 'c@^1.0.0')
+  },
+)
 
 t.test('graph specs and nothing to add', async t => {
   const mainManifest = {
@@ -110,15 +188,26 @@ t.test('graph specs and nothing to add', async t => {
   }
   const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   const add = new Map() as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs.add, { depth: Infinity }),
     'should have root specs added only',
@@ -135,11 +224,16 @@ t.test('graph specs and new things to add', async t => {
   }
   const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   const add = new Map([
     [
@@ -159,7 +253,13 @@ t.test('graph specs and new things to add', async t => {
     ],
   ]) as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs.add, { depth: Infinity }),
     'should have root specs along with the added ones',
@@ -176,11 +276,16 @@ t.test('graph specs and something to update', async t => {
   }
   const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   const add = new Map([
     [
@@ -196,7 +301,13 @@ t.test('graph specs and something to update', async t => {
     ],
   ]) as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs.add, { depth: Infinity }),
     'should have the updated root spec',
@@ -210,11 +321,16 @@ t.test('installing over a dangling edge', async t => {
   }
   const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   // this simulates a dangling edge, representing a missing node
   graph.mainImporter.edgesOut.set(
@@ -235,7 +351,13 @@ t.test('installing over a dangling edge', async t => {
     ],
   ]) as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs, { depth: Infinity }),
     'should add the missing dep',
@@ -274,14 +396,20 @@ t.test(
           }),
         },
       },
-      'nrz-workspaces.json': JSON.stringify({
-        packages: ['./packages/*'],
+      'nrz.json': JSON.stringify({
+        workspaces: {
+          packages: ['./packages/*'],
+        },
       }),
     })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
     const graph = load({
       projectRoot,
-      scurry: new PathScurry(projectRoot),
-      packageJson: new PackageJson(),
+      scurry,
+      packageJson,
       monorepo: Monorepo.maybeLoad(projectRoot),
     })
     const add = new Map([
@@ -320,7 +448,13 @@ t.test(
       ],
     ]) as AddImportersDependenciesMap
     const remove = new Map() as RemoveImportersDependenciesMap
-    const specs = getImporterSpecs({ add, graph, remove })
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
     t.matchSnapshot(
       inspect(specs.add, { depth: Infinity }),
       'should have root and workspaces nodes with specs to add',
@@ -329,15 +463,20 @@ t.test(
 )
 
 t.test('adding to a non existing importer', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot: projectRoot,
     mainManifest: {},
-    monorepo: Monorepo.maybeLoad(t.testdirName),
+    monorepo: Monorepo.maybeLoad(projectRoot),
   })
   const add = new Map([
-    // this workspace id does not exist in the given graph
+    // this file dep id does not exist in the given graph
     [
-      joinDepIDTuple(['workspace', 'packages/a']),
+      joinDepIDTuple(['file', 'nested/folder']),
       new Map(
         Object.entries({
           baz: asDependency({
@@ -349,10 +488,17 @@ t.test('adding to a non existing importer', async t => {
     ],
   ]) as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  t.throws(
-    () => getImporterSpecs({ add, graph, remove }),
-    /Not an importer/,
-    'should throw an bad importer id error',
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
+  // Non-importer file deps should be stored in transientAdd for later injection
+  t.matchSnapshot(
+    inspect(specs, { depth: Infinity }),
+    'should store non-importer file deps in transientAdd',
   )
 })
 
@@ -403,14 +549,22 @@ t.test('graph specs and something to remove', async t => {
       ),
     },
   })
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
   const graph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
-    packageJson: new PackageJson(),
+    scurry,
+    packageJson,
   })
   const add = new Map() as AddImportersDependenciesMap
   const remove = new Map() as RemoveImportersDependenciesMap
-  const specs = getImporterSpecs({ add, graph, remove })
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
   t.matchSnapshot(
     inspect(specs, { depth: Infinity }),
     'should removed entries missing from manifest file',
@@ -487,24 +641,1075 @@ t.test(
           },
         },
       },
-      'nrz-workspaces.json': JSON.stringify({
-        packages: ['./packages/*'],
+      'nrz.json': JSON.stringify({
+        workspaces: {
+          packages: ['./packages/*'],
+        },
       }),
     })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
     const graph = load({
       projectRoot,
-      scurry: new PathScurry(projectRoot),
-      packageJson: new PackageJson(),
+      scurry,
+      packageJson,
       monorepo: Monorepo.maybeLoad(projectRoot),
     })
     const add = new Map() as AddImportersDependenciesMap
     const remove = new Map([
       [joinDepIDTuple(['workspace', 'packages/b']), new Set(['a'])],
     ]) as RemoveImportersDependenciesMap
-    const specs = getImporterSpecs({ add, graph, remove })
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
     t.matchSnapshot(
       inspect(specs, { depth: Infinity }),
       'should have root and workspaces nodes with specs to remove',
     )
   },
 )
+
+t.test('removing from a non existing importer', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
+  const graph = new Graph({
+    projectRoot: projectRoot,
+    mainManifest: {},
+    monorepo: Monorepo.maybeLoad(projectRoot),
+  })
+  const add = new Map() as AddImportersDependenciesMap
+  // this file dep id does not exist in the given graph
+  const remove = new Map([
+    [joinDepIDTuple(['file', 'nested/folder']), new Set(['baz'])],
+  ]) as RemoveImportersDependenciesMap
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
+  // Non-importer file deps should be stored in transientRemove for later processing
+  t.matchSnapshot(
+    inspect(specs, { depth: Infinity }),
+    'should store non-importer file deps in transientRemove',
+  )
+})
+
+t.test('transientAdd from file-type directory manifest', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      nested: 'file:./nested',
+    },
+  }
+  const nestedManifest = {
+    name: 'nested',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0', // <-- unchanged from lockfile
+      bar: '^2.0.0', // <-- new
+      baz: '^3.0.0', // <-- updating from ^1.0.0 in lockfile
+    },
+  }
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
+    nested: {
+      'package.json': JSON.stringify(nestedManifest),
+    },
+    node_modules: {
+      nested: t.fixture(
+        'symlink',
+        '.nrz/' +
+          joinDepIDTuple(['file', 'nested']) +
+          '/node_modules/nested',
+      ),
+      '.nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {
+          [joinDepIDTuple(['file', 'nested'])]: [
+            0,
+            'nested',
+            null,
+            null,
+            null,
+            {
+              name: 'nested',
+              version: '1.0.0',
+              dependencies: {
+                foo: '^1.0.0',
+                baz: '^1.0.0',
+              },
+            },
+          ],
+          [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: [
+            0,
+            'foo',
+            null,
+            null,
+            null,
+            {
+              name: 'foo',
+              version: '1.0.0',
+            },
+          ],
+          [joinDepIDTuple(['registry', '', 'baz@1.0.0'])]: [
+            0,
+            'baz',
+            null,
+            null,
+            null,
+            {
+              name: 'baz',
+              version: '1.0.0',
+            },
+          ],
+        },
+        edges: {
+          [`${joinDepIDTuple(['file', '.'])} nested`]:
+            'prod file:./nested ' +
+            joinDepIDTuple(['file', 'nested']),
+          [`${joinDepIDTuple(['file', 'nested'])} foo`]:
+            'prod ^1.0.0 ' +
+            joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+          [`${joinDepIDTuple(['file', 'nested'])} baz`]:
+            'prod ^1.0.0 ' +
+            joinDepIDTuple(['registry', '', 'baz@1.0.0']),
+        },
+      }),
+    },
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
+  const graph = load({
+    projectRoot,
+    scurry,
+    packageJson,
+    loadManifests: true,
+    skipHiddenLockfile: false,
+  })
+  const add = new Map() as AddImportersDependenciesMap
+  const remove = new Map() as RemoveImportersDependenciesMap
+  const specs = getImporterSpecs({
+    add,
+    graph,
+    remove,
+    scurry,
+    packageJson,
+  })
+  t.matchSnapshot(
+    inspect(specs, { depth: Infinity }),
+    'should populate transientAdd from nested directory manifest',
+  )
+})
+
+t.test(
+  'transientRemove from file-type directory with removed edge',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        nested: 'file:./nested',
+      },
+    }
+    // Manifest no longer has foo dependency
+    const nestedManifest = {
+      name: 'nested',
+      version: '1.0.0',
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+      nested: {
+        'package.json': JSON.stringify(nestedManifest),
+      },
+      node_modules: {
+        '.nrz': {
+          [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: {
+            node_modules: {
+              foo: {
+                'package.json': JSON.stringify({
+                  name: 'foo',
+                  version: '1.0.0',
+                }),
+              },
+            },
+          },
+        },
+        nested: t.fixture(
+          'symlink',
+          '.nrz/' +
+            joinDepIDTuple(['file', 'nested']) +
+            '/node_modules/nested',
+        ),
+      },
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {
+          [joinDepIDTuple(['file', 'nested'])]: [0, 'nested'],
+        },
+        edges: {
+          [`${joinDepIDTuple(['file', '.'])} nested`]:
+            'prod file:./nested ' +
+            joinDepIDTuple(['file', 'nested']),
+          [`${joinDepIDTuple(['file', 'nested'])} foo`]:
+            'prod ^1.0.0 ' +
+            joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+        },
+      }),
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = load({
+      projectRoot,
+      scurry,
+      packageJson,
+    })
+
+    const add = new Map() as AddImportersDependenciesMap
+    const remove = new Map() as RemoveImportersDependenciesMap
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
+    t.matchSnapshot(
+      inspect(specs, { depth: Infinity }),
+      'should populate transientRemove for edge not in manifest',
+    )
+  },
+)
+
+t.test(
+  'transientAdd and transientRemove combined via params',
+  async t => {
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = new Graph({
+      projectRoot: projectRoot,
+      mainManifest: {},
+      monorepo: Monorepo.maybeLoad(projectRoot),
+    })
+    // Add to non-importer
+    const add = new Map([
+      [
+        joinDepIDTuple(['file', 'nested/folder']),
+        new Map(
+          Object.entries({
+            foo: asDependency({
+              spec: Spec.parse('foo@^1.0.0'),
+              type: 'prod',
+            }),
+          }),
+        ),
+      ],
+    ]) as AddImportersDependenciesMap
+    // Remove from non-importer
+    const remove = new Map([
+      [joinDepIDTuple(['file', 'other/folder']), new Set(['bar'])],
+    ]) as RemoveImportersDependenciesMap
+
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
+    t.matchSnapshot(
+      inspect(specs, { depth: Infinity }),
+      'should store both transientAdd and transientRemove from params',
+    )
+  },
+)
+
+t.test(
+  'skips non-file type nodes for transient processing',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+      node_modules: {
+        '.nrz': {
+          [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: {
+            node_modules: {
+              foo: {
+                'package.json': JSON.stringify({
+                  name: 'foo',
+                  version: '1.0.0',
+                  dependencies: {
+                    bar: '^1.0.0',
+                  },
+                }),
+              },
+            },
+          },
+        },
+        foo: t.fixture(
+          'symlink',
+          '.nrz/' +
+            joinDepIDTuple(['registry', '', 'foo@1.0.0']) +
+            '/node_modules/foo',
+        ),
+      },
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = load({
+      projectRoot,
+      scurry,
+      packageJson,
+    })
+    const add = new Map() as AddImportersDependenciesMap
+    const remove = new Map() as RemoveImportersDependenciesMap
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
+    // Registry deps should NOT appear in transientAdd
+    t.strictSame(
+      specs.transientAdd.size,
+      0,
+      'should not have transient deps from registry nodes',
+    )
+    t.strictSame(
+      specs.transientRemove.size,
+      0,
+      'should not have transient remove from registry nodes',
+    )
+  },
+)
+
+t.test(
+  'merging remove entries into existing transientRemove',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        nested: 'file:./nested',
+      },
+    }
+    // Manifest has no dependencies left
+    const nestedManifest = {
+      name: 'nested',
+      version: '1.0.0',
+      // the nested-direct-dep is defined in the hidden lockfile and is
+      // going to be present in the loaded graph but it's missing here
+      // so that a transientRemove entry is going to be created for it
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+      nested: {
+        'package.json': JSON.stringify(nestedManifest),
+        node_modules: {
+          'nested-direct-dep': t.fixture(
+            'symlink',
+            '../nested-direct-dep',
+          ),
+        },
+      },
+      'nested-direct-dep': {
+        'package.json': JSON.stringify({
+          name: 'nested-direct-dep',
+          version: '1.0.0',
+        }),
+      },
+      node_modules: {
+        '.nrz': {
+          [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: {
+            node_modules: {
+              foo: {
+                'package.json': JSON.stringify({
+                  name: 'foo',
+                  version: '1.0.0',
+                }),
+              },
+            },
+          },
+        },
+        nested: t.fixture('symlink', '../nested'),
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {
+            [joinDepIDTuple(['file', 'nested'])]: [
+              0,
+              'nested',
+              null,
+              null,
+              null,
+              {
+                name: 'nested',
+                version: '1.0.0',
+                dependencies: {
+                  foo: '^1.0.0',
+                  'nested-direct-dep': 'file:../nested-direct-dep',
+                },
+              },
+            ],
+            [joinDepIDTuple(['file', 'nested-direct-dep'])]: [
+              0,
+              'nested-direct-dep',
+              null,
+              null,
+              null,
+              {
+                name: 'nested-direct-dep',
+                version: '1.0.0',
+              },
+            ],
+            [joinDepIDTuple(['file', 'foo'])]: [
+              0,
+              'foo',
+              null,
+              null,
+              null,
+              {
+                name: 'foo',
+                version: '1.0.0',
+              },
+            ],
+          },
+          edges: {
+            [`${joinDepIDTuple(['file', '.'])} nested`]:
+              'prod file:./nested ' +
+              joinDepIDTuple(['file', 'nested']),
+            [`${joinDepIDTuple(['file', 'nested'])} foo`]:
+              'prod ^1.0.0 ' +
+              joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+            [`${joinDepIDTuple(['file', 'nested'])} nested-direct-dep`]:
+              'prod file:../nested-direct-dep ' +
+              joinDepIDTuple(['file', 'nested-direct-dep']),
+          },
+        }),
+      },
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = load({
+      projectRoot,
+      scurry,
+      packageJson,
+      loadManifests: true,
+      skipHiddenLockfile: false,
+    })
+    const nestedId = joinDepIDTuple(['file', 'nested'])
+    const add = new Map([
+      [
+        joinDepIDTuple(['file', 'nested']),
+        new Map([
+          [
+            'foo',
+            asDependency({
+              spec: Spec.parse('foo@^1.0.0'),
+              type: 'prod',
+            }),
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap
+
+    // Provide a remove param that targets same file node that will already
+    // have transientRemove entry from manifest comparison (foo edge exists
+    // but is no longer in manifest) - this tests the merge branch
+    const remove = new Map([
+      [nestedId, new Set(['baz'])],
+    ]) as RemoveImportersDependenciesMap
+
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
+
+    // assert that the transientRemove for the nestedId has expected entries
+    const nestedRemoves = specs.transientRemove.get(nestedId)
+    t.ok(
+      nestedRemoves,
+      'should have transientRemove entry for nested',
+    )
+    t.ok(
+      nestedRemoves?.has('baz'),
+      'should have baz from remove param',
+    )
+    t.ok(
+      nestedRemoves?.has('nested-direct-dep'),
+      'should have nested-direct-dep inferred from graph vs manifest',
+    )
+    t.notOk(
+      nestedRemoves?.has('foo'),
+      'foo is not to be removed since it is being added back in add param',
+    )
+    t.equal(nestedRemoves?.size, 2, 'should have expected items')
+  },
+)
+
+t.test(
+  'workspace dep with missing workspace marks dep for removal',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        'my-workspace': 'workspace:*',
+        abbrev: '^3.0.0',
+      },
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        workspaces: { packages: ['./packages/*'] },
+      }),
+      packages: {},
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = new Graph({
+      projectRoot,
+      mainManifest,
+      monorepo: Monorepo.maybeLoad(projectRoot, {
+        scurry,
+        packageJson,
+      }),
+    })
+    // simulate a dangling edge (workspace node missing from graph)
+    const rootNode = graph.mainImporter
+    const spec = Spec.parse('my-workspace', 'workspace:*', {})
+    new Edge('prod', spec, rootNode, undefined)
+
+    const rootDepID = joinDepIDTuple(['file', '.'])
+    const add = new Map() as AddImportersDependenciesMap
+    const remove = new Map([
+      [rootDepID, new Set<string>()],
+    ]) as RemoveImportersDependenciesMap
+    const specs = getImporterSpecs({
+      add,
+      graph,
+      remove,
+      scurry,
+      packageJson,
+    })
+
+    const rootRemoves = specs.remove.get(rootDepID)
+    t.ok(
+      rootRemoves?.has('my-workspace'),
+      'missing workspace dep should be marked for removal',
+    )
+    const rootAdds = specs.add.get(rootDepID)
+    t.notOk(
+      rootAdds?.has('my-workspace'),
+      'missing workspace dep should NOT be in add set',
+    )
+  },
+)
+
+t.test(
+  'dangling importer edge with matching spec is still queued',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        abbrev: '^3.0.0',
+      },
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = new Graph({
+      projectRoot,
+      mainManifest,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+    })
+    graph.addEdge(
+      'prod',
+      Spec.parse('abbrev', '^3.0.0'),
+      graph.mainImporter,
+    )
+
+    const specs = getImporterSpecs({
+      add: new Map() as AddImportersDependenciesMap,
+      graph,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      scurry,
+      packageJson,
+    })
+
+    t.equal(
+      specs.add.modifiedDependencies,
+      true,
+      'MISSING target still counts as a modification so the rebuild can place it',
+    )
+    t.ok(
+      specs.add.get(joinDepIDTuple(['file', '.']))?.has('abbrev'),
+      'dangling matching-spec edge is queued as an add',
+    )
+  },
+)
+
+t.test('a satisfied lockfile edge with a stale spec', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { foo: '^1.0.0' },
+  }
+  const rootId = joinDepIDTuple(['file', '.'])
+  const build = () => {
+    const graph = new Graph({
+      projectRoot,
+      mainManifest,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+    })
+    // the lockfile edge reads a dist-tag, package.json a range
+    const spec = Spec.parse('foo', 'latest')
+    const foo = graph.addNode(
+      undefined,
+      { name: 'foo', version: '1.0.0' },
+      spec,
+      'foo',
+      '1.0.0',
+    )
+    graph.addEdge('prod', spec, graph.mainImporter, foo)
+    return graph
+  }
+  const call = (add: AddImportersDependenciesMap) =>
+    getImporterSpecs({
+      add,
+      graph: build(),
+      remove: new Map() as RemoveImportersDependenciesMap,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+    })
+
+  const specs = call(new Map() as AddImportersDependenciesMap)
+  t.equal(specs.staleSpecs.size, 1, 'the stale edge is reported')
+  t.equal(
+    [...specs.staleSpecs.values()][0]?.spec.bareSpec,
+    '^1.0.0',
+    'reported with the package.json value',
+  )
+  t.equal(specs.add.modifiedDependencies, false, 'nothing to rebuild')
+
+  const withCaller = call(
+    new Map([
+      [
+        rootId,
+        new Map([
+          [
+            'foo',
+            asDependency({
+              spec: Spec.parse('foo', '1.x'),
+              type: 'prod',
+            }),
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap,
+  )
+  t.equal(
+    withCaller.staleSpecs.size,
+    0,
+    'a name the caller asked for is left alone',
+  )
+})
+
+t.test('the last declaration of a name wins', async t => {
+  // getRawDependencies places the last type listing a name, so a dep in
+  // both devDependencies and optionalDependencies is optional, and an
+  // edge already reading `optional` is not stale
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    devDependencies: { a: '^1.0.0' },
+    optionalDependencies: { a: '^1.0.0' },
+  }
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    mainManifest,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+  })
+  const spec = Spec.parse('a', '^1.0.0')
+  const node = graph.addNode(
+    undefined,
+    { name: 'a', version: '1.0.0' },
+    spec,
+    'a',
+    '1.0.0',
+  )
+  graph.addEdge('optional', spec, graph.mainImporter, node)
+
+  const specs = getImporterSpecs({
+    add: new Map() as AddImportersDependenciesMap,
+    graph,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+  })
+  t.equal(specs.staleSpecs.size, 0, 'the optional edge is not stale')
+  t.notOk(
+    specs.add.get(joinDepIDTuple(['file', '.']))?.size,
+    'and nothing is queued',
+  )
+})
+
+t.test('unchanged importer edges are not re-parsed', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      // matching lockfile edges: never parsed
+      a: '^1.0.0',
+      b: '^1.0.0',
+      c: '^1.0.0',
+      // text changed since the lockfile was written
+      d: '^2.0.0',
+      // dangling: the edge has no target
+      e: '^1.0.0',
+    },
+    // same text as its lockfile edge, but the type moved
+    devDependencies: { f: '^1.0.0' },
+  }
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': '{}',
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
+  const graph = new Graph({
+    projectRoot,
+    mainManifest,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+  })
+  for (const [name, bareSpec] of Object.entries({
+    a: '^1.0.0',
+    b: '^1.0.0',
+    c: '^1.0.0',
+    d: '^1.0.0',
+    f: '^1.0.0',
+  })) {
+    const spec = Spec.parse(name, bareSpec)
+    const node = graph.addNode(
+      undefined,
+      { name, version: '1.0.0' },
+      spec,
+      name,
+      '1.0.0',
+    )
+    graph.addEdge('prod', spec, graph.mainImporter, node)
+  }
+  graph.mainImporter.edgesOut.set(
+    'e',
+    new Edge('prod', Spec.parse('e', '^1.0.0'), graph.mainImporter),
+  )
+
+  const specModule = await import('@nrz/spec')
+  let parses = 0
+  const { getImporterSpecs: mocked } = await t.mockImport<
+    typeof import('../../src/ideal/get-importer-specs.ts')
+  >('../../src/ideal/get-importer-specs.ts', {
+    '@nrz/spec': {
+      ...specModule,
+      Spec: {
+        parse: (...args: Parameters<typeof Spec.parse>) => {
+          parses++
+          return Spec.parse(...args)
+        },
+      },
+    },
+  })
+
+  const specs = mocked({
+    add: new Map() as AddImportersDependenciesMap,
+    graph,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    scurry,
+    packageJson,
+  })
+  t.equal(
+    parses,
+    3,
+    'only the changed, dangling and retyped specs are parsed',
+  )
+  t.strictSame(
+    [...(specs.add.get(joinDepIDTuple(['file', '.'])) ?? []).keys()],
+    ['d', 'e'],
+    'the changed and dangling deps are queued',
+  )
+  t.strictSame(
+    [...specs.staleSpecs].map(([edge, dep]) => [
+      edge.name,
+      edge.type,
+      dep.type,
+    ]),
+    [['f', 'prod', 'dev']],
+    'the retyped dep is satisfied, so it heals instead',
+  )
+})
+
+t.test('a "-" modifier keeps the dependency out of add', async t => {
+  const removedCase = (
+    t: Test,
+    dependencies: Record<string, string>,
+    edges: Record<string, string> = {},
+  ) => {
+    const mainManifest = { name: 'my-project', dependencies }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        modifiers: {
+          ':root > #b': '-',
+          ':root > #q:semver(^1.0.0)': '-',
+        },
+      }),
+    })
+    t.chdir(projectRoot)
+    reload('modifiers', 'project')
+    const graph = new Graph({
+      projectRoot,
+      mainManifest,
+      monorepo: Monorepo.maybeLoad(projectRoot),
+    })
+    // edges as a lockfile written before the change has them
+    for (const [name, bareSpec] of Object.entries(edges)) {
+      const spec = Spec.parse(name, bareSpec)
+      const node = graph.addNode(
+        undefined,
+        { name, version: '2.0.0' },
+        spec,
+        name,
+        '2.0.0',
+      )
+      graph.addEdge('prod', spec, graph.mainImporter, node)
+    }
+    return getImporterSpecs({
+      add: new Map() as AddImportersDependenciesMap,
+      graph,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      modifiers: GraphModifier.load({}),
+    })
+  }
+
+  await t.test('with other deps', async t => {
+    const specs = removedCase(t, { a: '^1.0.0', b: '^1.0.0' })
+    t.strictSame(
+      [
+        ...(specs.add.get(joinDepIDTuple(['file', '.']))?.keys() ??
+          []),
+      ],
+      ['a'],
+      'only the kept dep is queued',
+    )
+    t.equal(specs.add.modifiedDependencies, true)
+  })
+
+  await t.test('only the removed dep', async t => {
+    const specs = removedCase(t, { b: '^1.0.0' })
+    t.notOk(
+      specs.add.get(joinDepIDTuple(['file', '.']))?.size,
+      'nothing is queued',
+    )
+    t.equal(specs.add.modifiedDependencies, false)
+    t.equal(specs.removedEdges.size, 0, 'no edge to drop')
+  })
+
+  await t.test('a qualifier starts matching an edge', async t => {
+    const specs = removedCase(t, { q: '^1.1.0' }, { q: '^2.0.0' })
+    t.strictSame(
+      [...specs.removedEdges].map(
+        e => `${e.name}@${e.spec.bareSpec}`,
+      ),
+      ['q@^2.0.0'],
+      'the old edge is dropped',
+    )
+    t.notOk(
+      specs.add.get(joinDepIDTuple(['file', '.']))?.size,
+      'nothing is queued',
+    )
+    t.equal(specs.remove.size, 0, 'package.json keeps it')
+    t.equal(specs.add.modifiedDependencies, false)
+    t.equal(specs.remove.modifiedDependencies, false)
+  })
+})
+
+t.test('catalog spec errors point at the manifest', async t => {
+  t.test('importer', async t => {
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      projectRoot,
+      mainManifest: {
+        name: 'x',
+        version: '1.0.0',
+        dependencies: { abbrev: 'catalog:dev' },
+      },
+      monorepo: Monorepo.maybeLoad(projectRoot),
+    })
+    t.throws(
+      () =>
+        getImporterSpecs({
+          add: new Map() as AddImportersDependenciesMap,
+          graph,
+          remove: new Map() as RemoveImportersDependenciesMap,
+          scurry: new PathScurry(projectRoot),
+          packageJson: new PackageJson(),
+        }),
+      {
+        message: 'Catalog "dev" not found for abbrev@catalog:dev',
+        cause: {
+          code: 'ECONFIG',
+          from: './package.json (dependencies)',
+        },
+      },
+    )
+  })
+
+  t.test('file-type directory', async t => {
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        dependencies: { nested: 'file:./nested' },
+      }),
+      'nrz.json': '{}',
+      nested: {
+        'package.json': JSON.stringify({
+          name: 'nested',
+          version: '1.0.0',
+          dependencies: { foo: '^1.0.0', bar: 'catalog:' },
+        }),
+      },
+      node_modules: {
+        nested: t.fixture(
+          'symlink',
+          '.nrz/' +
+            joinDepIDTuple(['file', 'nested']) +
+            '/node_modules/nested',
+        ),
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {
+            [joinDepIDTuple(['file', 'nested'])]: [
+              0,
+              'nested',
+              null,
+              null,
+              null,
+              {
+                name: 'nested',
+                version: '1.0.0',
+                dependencies: { foo: '^1.0.0' },
+              },
+            ],
+            [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: [
+              0,
+              'foo',
+              null,
+              null,
+              null,
+              { name: 'foo', version: '1.0.0' },
+            ],
+          },
+          edges: {
+            [`${joinDepIDTuple(['file', '.'])} nested`]:
+              'prod file:./nested ' +
+              joinDepIDTuple(['file', 'nested']),
+            [`${joinDepIDTuple(['file', 'nested'])} foo`]:
+              'prod ^1.0.0 ' +
+              joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+          },
+        }),
+      },
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const graph = load({
+      projectRoot,
+      scurry,
+      packageJson,
+      loadManifests: true,
+      skipHiddenLockfile: false,
+    })
+    t.throws(
+      () =>
+        getImporterSpecs({
+          add: new Map() as AddImportersDependenciesMap,
+          graph,
+          remove: new Map() as RemoveImportersDependenciesMap,
+          scurry,
+          packageJson,
+        }),
+      {
+        message: 'Default catalog not found for bar@catalog:',
+        cause: {
+          code: 'ECONFIG',
+          from: './nested/package.json (dependencies)',
+        },
+      },
+    )
+  })
+})

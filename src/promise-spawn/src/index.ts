@@ -1,16 +1,16 @@
 import { error } from '@nrz/error-cause'
-import {
-  type ChildProcess,
-  type IOType,
-  spawn,
-  type SpawnOptions,
-  type StdioOptions,
-} from 'child_process'
+import type { ErrorCauseOptions } from '@nrz/error-cause'
+import { spawn } from 'node:child_process'
+import type {
+  ChildProcess,
+  IOType,
+  SpawnOptions,
+  StdioOptions,
+} from 'node:child_process'
 
 const isPipe = (
   stdio:
-    | Exclude<StdioOptions, IOType>[number]
-    | StdioOptions = 'pipe',
+    Exclude<StdioOptions, IOType>[number] | StdioOptions = 'pipe',
   fd: number,
 ): stdio is IOTypePipe =>
   stdio === 'pipe' || stdio === 'overlapped' || stdio === null ? true
@@ -24,16 +24,13 @@ export interface PromiseSpawnOptions extends SpawnOptions {
   stdioString?: boolean
   acceptFail?: boolean
 }
-export interface PromiseSpawnOptionsString
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsString extends PromiseSpawnOptions {
   stdioString?: true
 }
-export interface PromiseSpawnOptionsBuffer
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsBuffer extends PromiseSpawnOptions {
   stdioString: false
 }
-export interface PromiseSpawnOptionsStdin
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsStdin extends PromiseSpawnOptions {
   stdio?:
     | Exclude<IOTypePipe, null>
     | [
@@ -42,8 +39,7 @@ export interface PromiseSpawnOptionsStdin
         stderr?: Exclude<StdioOptions, IOType>[number],
       ]
 }
-export interface PromiseSpawnOptionsNoStdin
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsNoStdin extends PromiseSpawnOptions {
   stdio:
     | IOTypeNoPipe
     | IOTypeNoPipe[]
@@ -53,8 +49,7 @@ export interface PromiseSpawnOptionsNoStdin
         stderr?: Exclude<StdioOptions, IOType>[number],
       ]
 }
-export interface PromiseSpawnOptionsStdout
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsStdout extends PromiseSpawnOptions {
   stdio?:
     | Exclude<IOTypePipe, null>
     | [
@@ -63,16 +58,13 @@ export interface PromiseSpawnOptionsStdout
         stderr?: Exclude<StdioOptions, IOType>[number],
       ]
 }
-export interface PromiseSpawnOptionsStdoutString
-  extends PromiseSpawnOptionsStdout {
+export interface PromiseSpawnOptionsStdoutString extends PromiseSpawnOptionsStdout {
   stdioString?: true
 }
-export interface PromiseSpawnOptionsStdoutBuffer
-  extends PromiseSpawnOptionsStdout {
+export interface PromiseSpawnOptionsStdoutBuffer extends PromiseSpawnOptionsStdout {
   stdioString: false
 }
-export interface PromiseSpawnOptionsNoStdout
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsNoStdout extends PromiseSpawnOptions {
   stdio:
     | IOTypeNoPipe
     | IOTypeNoPipe[]
@@ -82,8 +74,7 @@ export interface PromiseSpawnOptionsNoStdout
         stderr?: Exclude<StdioOptions, IOType>[number],
       ]
 }
-export interface PromiseSpawnOptionsStderr
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsStderr extends PromiseSpawnOptions {
   stdio?:
     | Exclude<IOTypePipe, null>
     | [
@@ -92,16 +83,13 @@ export interface PromiseSpawnOptionsStderr
         stderr?: IOTypePipe,
       ]
 }
-export interface PromiseSpawnOptionsStderrString
-  extends PromiseSpawnOptionsStderr {
+export interface PromiseSpawnOptionsStderrString extends PromiseSpawnOptionsStderr {
   stdioString?: true
 }
-export interface PromiseSpawnOptionsStderrBuffer
-  extends PromiseSpawnOptionsStderr {
+export interface PromiseSpawnOptionsStderrBuffer extends PromiseSpawnOptionsStderr {
   stdioString: false
 }
-export interface PromiseSpawnOptionsNoStderr
-  extends PromiseSpawnOptions {
+export interface PromiseSpawnOptionsNoStderr extends PromiseSpawnOptions {
   stdio:
     | IOTypeNoPipe
     | IOTypeNoPipe[]
@@ -256,42 +244,64 @@ export class SpawnPromise<
       proc = spawn(command, args, opts) as ChildProcessByOptions<O>
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
-      const reject = (er: Error) =>
-        rej(
-          error('command failed', {
-            command,
-            args,
-            cwd: opts.cwd ?? process.cwd(),
-            ...stdioResult(stdout, stderr, opts),
-            ...extra,
-            cause: er,
-          }),
-        )
-      proc.on('error', reject)
-      if (proc.stdout) {
-        proc.stdout
-          .on('data', c => stdout.push(c as Buffer))
-          .on('error', er => reject(er))
-      }
-      if (proc.stderr) {
-        proc.stderr
-          .on('data', c => stderr.push(c as Buffer))
-          .on('error', er => reject(er))
-      }
-      proc.on('close', (status, signal) => {
-        const result = {
+      // Don't use the spread operator on successResult or errorResult
+      // as that kills any typechecking for the known keys.
+      const reject = (
+        er?: Error,
+        status?: number | null,
+        signal?: NodeJS.Signals | null,
+      ) => {
+        const stdio = stdioResult(stdout, stderr, opts)
+        const errorResult: ErrorCauseOptions = {
           command,
           args,
-          cwd: opts.cwd ?? process.cwd(),
-          /* c8 ignore next 2 - because windows */
-          status: status ?? null,
-          signal: signal ?? null,
-          ...stdioResult(stdout, stderr, opts),
-          ...extra,
-        } as SpawnResultByOptions<O> & T
-        if ((status || signal) && !opts.acceptFail)
-          rej(error('command failed', result))
-        else res(result)
+          stdout: stdio.stdout,
+          stderr: stdio.stderr,
+          cwd: opts.cwd?.toString() ?? process.cwd(),
+        }
+        if (er !== undefined) {
+          errorResult.cause = er
+        }
+        if (status !== undefined) {
+          errorResult.status = status
+        }
+        /* c8 ignore next 3 - hard to test on win32 so coverage fails */
+        if (signal !== undefined) {
+          errorResult.signal = signal
+        }
+        Object.assign(errorResult, extra)
+        rej(error('command failed', errorResult))
+      }
+      const resolve = (
+        status: number | null,
+        signal: NodeJS.Signals | null,
+      ) => {
+        const stdio = stdioResult(stdout, stderr, opts)
+        const successResult: SpawnResultByOptions<O> = {
+          command,
+          args,
+          status,
+          signal,
+          stdout: stdio.stdout,
+          stderr: stdio.stderr,
+          cwd: opts.cwd?.toString() ?? process.cwd(),
+        }
+        Object.assign(successResult, extra)
+        res(successResult as SpawnResultByOptions<O> & T)
+      }
+      proc.on('error', reject)
+      proc.stdout
+        ?.on('data', c => stdout.push(c as Buffer))
+        .on('error', reject)
+      proc.stderr
+        ?.on('data', c => stderr.push(c as Buffer))
+        .on('error', reject)
+      proc.on('close', (status, signal) => {
+        if ((status || signal) && !opts.acceptFail) {
+          reject(undefined, status, signal)
+        } else {
+          resolve(status, signal)
+        }
       })
     })
     this.process = proc

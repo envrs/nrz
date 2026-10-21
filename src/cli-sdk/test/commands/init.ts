@@ -1,0 +1,536 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import t from 'tap'
+import type { LoadedConfig } from '../../src/config/index.ts'
+import type { InitFileResults } from '@nrz/init'
+
+const inited: string[] = []
+const nrzJsonData: Record<string, any> = {}
+let installCalled = false
+
+const { usage, command, views } = await t.mockImport<
+  typeof import('../../src/commands/init.ts')
+>('../../src/commands/init.ts', {
+  '@nrz/init': {
+    init: async ({ cwd }: { cwd: string }) => {
+      inited.push(cwd)
+    },
+    getAuthorFromGitUser() {
+      return ''
+    },
+  },
+  '@nrz/graph': {
+    install: async () => {
+      installCalled = true
+      return { graph: { toJSON: () => ({}) } }
+    },
+  },
+  '@nrz/nrz-json': {
+    load: (field: string) => nrzJsonData[field],
+    save: (field: string, value: any) => {
+      nrzJsonData[field] = value
+    },
+  },
+})
+
+t.matchSnapshot(usage().usageMarkdown())
+
+t.test('test command', async t => {
+  t.chdir(t.testdir())
+  installCalled = false
+  await command({
+    values: {},
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+  t.strictSame(inited, [t.testdirName])
+  t.ok(installCalled, 'should call install')
+})
+
+t.test('test command with workspace', async t => {
+  const res: InitFileResults[] = []
+  installCalled = false
+  const { command, views } = await t.mockImport<
+    typeof import('../../src/commands/init.ts')
+  >('../../src/commands/init.ts', {
+    '@nrz/init': {
+      init: async ({ cwd }: { cwd: string }) => {
+        res.push({
+          manifest: {
+            path: cwd,
+            data: {
+              name: 'a',
+              version: '1.0.0',
+            },
+          },
+        })
+      },
+      getAuthorFromGitUser() {
+        return ''
+      },
+    },
+    '@nrz/graph': {
+      install: async () => {
+        installCalled = true
+        return { graph: { toJSON: () => ({}) } }
+      },
+    },
+  })
+  const dir = t.testdir({
+    'README.md': 'This is a workspace',
+    '.git': {},
+  })
+  t.chdir(dir)
+  inited.length = 0 // reset array
+
+  await command({
+    values: {
+      workspace: ['packages/a'],
+    },
+    options: {
+      projectRoot: dir,
+    },
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+  t.strictSame(
+    res,
+    [
+      {
+        manifest: {
+          data: { name: 'a', version: '1.0.0' },
+          path: resolve(dir, 'packages/a'),
+        },
+      },
+    ],
+    'should have initial result',
+  )
+  t.ok(installCalled, 'should call install after workspace init')
+  t.matchSnapshot(
+    readFileSync(resolve(dir, 'nrz.json'), 'utf8'),
+    'should add workspace to nrz.json',
+  )
+
+  t.matchSnapshot(
+    views
+      .human(res)
+      .replace(resolve(dir, 'packages/a'), 'packages/a'),
+    'should output human readable message',
+  )
+})
+
+t.test('test command with empty workspace array', async t => {
+  t.chdir(t.testdir())
+  inited.length = 0 // reset array
+  installCalled = false
+  await command({
+    values: {
+      workspace: [],
+    },
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+  t.strictSame(inited, [t.testdirName])
+  t.ok(installCalled, 'should call install')
+})
+
+t.test('test command with undefined workspace', async t => {
+  t.chdir(t.testdir())
+  inited.length = 0 // reset array
+  installCalled = false
+  await command({
+    values: {
+      workspace: undefined,
+    },
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+  t.strictSame(inited, [t.testdirName])
+  t.ok(installCalled, 'should call install')
+})
+
+t.test(
+  'test workspace already matched by existing pattern',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = 'packages/*'
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['packages/a'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'packages/a')])
+
+    // nrz.json should remain unchanged since packages/a matches packages/*
+    t.strictSame(nrzJsonData.workspaces, 'packages/*')
+  },
+)
+
+t.test(
+  'test string workspace config - add non-matching workspace',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = 'packages/*'
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['docs/website'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'docs/website')])
+
+    // nrz.json should be converted to array with new workspace added
+    t.strictSame(nrzJsonData.workspaces, [
+      'packages/*',
+      'docs/website',
+    ])
+  },
+)
+
+t.test(
+  'test array workspace config - add non-matching workspace',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = ['app/*', 'docs/*']
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['packages/a'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'packages/a')])
+
+    // new workspace should be appended to existing array
+    t.strictSame(nrzJsonData.workspaces, [
+      'app/*',
+      'docs/*',
+      'packages/a',
+    ])
+  },
+)
+
+t.test(
+  'test object with packages key (array) - add non-matching workspace',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = {
+      packages: ['packages/*'],
+    }
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['docs/website'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'docs/website')])
+
+    // new workspace should be appended to packages array
+    t.strictSame(nrzJsonData.workspaces, {
+      packages: ['packages/*', 'docs/website'],
+    })
+  },
+)
+
+t.test(
+  'test object with packages key (string) - convert to array and add workspace',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = {
+      packages: 'packages/a',
+    }
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['packages/b'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'packages/b')])
+
+    // packages should be converted to array with new workspace added
+    t.strictSame(nrzJsonData.workspaces, {
+      packages: ['packages/a', 'packages/b'],
+    })
+  },
+)
+
+t.test(
+  'test object without packages key - create packages key with new workspace',
+  async t => {
+    const dir = t.testdir({
+      'README.md': 'This is a workspace',
+      '.git': {},
+    })
+
+    // Set up initial nrz.json data in mock
+    nrzJsonData.workspaces = {
+      utils: ['utils/*'],
+    }
+    inited.length = 0 // reset array
+
+    await command({
+      values: {
+        workspace: ['docs/website'],
+      },
+      options: {
+        projectRoot: dir,
+      },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'docs/website')])
+
+    // packages key should be created with new workspace
+    t.strictSame(nrzJsonData.workspaces, {
+      utils: ['utils/*'],
+      packages: ['docs/website'],
+    })
+  },
+)
+
+t.test('test multiple workspaces with mixed matching', async t => {
+  const dir = t.testdir({
+    'README.md': 'This is a workspace',
+    '.git': {},
+  })
+
+  // Set up initial nrz.json data in mock
+  nrzJsonData.workspaces = ['packages/*', 'apps/*']
+  inited.length = 0 // reset array
+
+  await command({
+    values: {
+      workspace: ['packages/a', 'docs/website', 'apps/web'],
+    },
+    options: {
+      projectRoot: dir,
+    },
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+
+  t.strictSame(inited, [
+    resolve(dir, 'packages/a'),
+    resolve(dir, 'docs/website'),
+    resolve(dir, 'apps/web'),
+  ])
+
+  // only docs/website should be added since packages/a and apps/web match existing patterns
+  t.strictSame(nrzJsonData.workspaces, [
+    'packages/*',
+    'apps/*',
+    'docs/website',
+  ])
+})
+
+t.test('human output', t => {
+  t.matchSnapshot(
+    views.human({
+      manifest: {
+        path: '/some/path',
+        data: { name: 'myproject' },
+      },
+    }),
+  )
+  t.end()
+})
+
+t.test('human output with gitignore', t => {
+  t.matchSnapshot(
+    views.human({
+      manifest: {
+        path: '/some/path/package.json',
+        data: { name: 'myproject', version: '1.0.0' },
+      },
+      gitignore: {
+        path: '/some/path/.gitignore',
+      },
+    }),
+  )
+  t.end()
+})
+
+t.test('human output array', t => {
+  t.matchSnapshot(
+    views.human([
+      {
+        manifest: {
+          path: '/some/path/packages/a/package.json',
+          data: { name: 'a' },
+        },
+        gitignore: {
+          path: '/some/path/packages/a/.gitignore',
+        },
+      },
+      {
+        manifest: {
+          path: '/some/path/packages/b/package.json',
+          data: { name: 'b' },
+        },
+      },
+    ]),
+  )
+  t.end()
+})
+
+t.test('workspaces declared in package.json', async t => {
+  await t.test('covered by an existing pattern', async t => {
+    const dir = t.testdir({
+      '.git': {},
+      'package.json': JSON.stringify({
+        name: 'root',
+        workspaces: ['packages/*'],
+      }),
+    })
+    t.chdir(dir)
+    delete nrzJsonData.workspaces
+    inited.length = 0
+
+    await command({
+      values: { workspace: ['packages/a'] },
+      options: { projectRoot: dir },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(inited, [resolve(dir, 'packages/a')])
+    t.equal(
+      nrzJsonData.workspaces,
+      undefined,
+      'nothing written to nrz.json: package.json already covers it',
+    )
+  })
+
+  await t.test('not covered: seeds nrz.json first', async t => {
+    const dir = t.testdir({
+      '.git': {},
+      'package.json': JSON.stringify({
+        name: 'root',
+        workspaces: ['packages/*'],
+      }),
+    })
+    t.chdir(dir)
+    delete nrzJsonData.workspaces
+    inited.length = 0
+
+    await command({
+      values: { workspace: ['apps/b'] },
+      options: { projectRoot: dir },
+      get: () => undefined,
+    } as unknown as LoadedConfig)
+
+    t.strictSame(
+      nrzJsonData.workspaces,
+      ['packages/*', 'apps/b'],
+      'package.json patterns are carried over, so they are not shadowed',
+    )
+  })
+
+  await t.test(
+    'negated patterns do not count as covered',
+    async t => {
+      const dir = t.testdir({
+        '.git': {},
+        'package.json': JSON.stringify({
+          name: 'root',
+          workspaces: ['packages/*', '!packages/a'],
+        }),
+      })
+      t.chdir(dir)
+      delete nrzJsonData.workspaces
+      inited.length = 0
+
+      await command({
+        values: { workspace: ['packages/a'] },
+        options: { projectRoot: dir },
+        get: () => undefined,
+      } as unknown as LoadedConfig)
+
+      t.strictSame(nrzJsonData.workspaces, [
+        'packages/*',
+        '!packages/a',
+        'packages/a',
+      ])
+    },
+  )
+})
+
+t.test('workspaces declared in pnpm-workspace.yaml', async t => {
+  for (const [name, workspace, want] of [
+    ['covered by an existing pattern', 'packages/a', undefined],
+    [
+      'not covered: seeds nrz.json first',
+      'apps/b',
+      ['packages/*', 'apps/b'],
+    ],
+  ] as const) {
+    await t.test(name, async t => {
+      const dir = t.testdir({
+        '.git': {},
+        'package.json': JSON.stringify({ name: 'root' }),
+        'pnpm-workspace.yaml': "packages:\n  - 'packages/*'\n",
+      })
+      t.chdir(dir)
+      delete nrzJsonData.workspaces
+      inited.length = 0
+
+      await command({
+        values: { workspace: [workspace] },
+        options: { projectRoot: dir },
+        get: () => undefined,
+      } as unknown as LoadedConfig)
+
+      t.strictSame(inited, [resolve(dir, workspace)])
+      t.strictSame(nrzJsonData.workspaces, want)
+    })
+  }
+})

@@ -1,0 +1,461 @@
+import t from 'tap'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import { parse, asPostcssNodeWithChildren } from '@nrz/dss-parser'
+import {
+  outdated,
+  parseInternals,
+  queueNode,
+  retrieveRemoteVersions,
+} from '../../src/pseudo/outdated.ts'
+import {
+  getSemverRichGraph,
+  getSimpleGraph,
+} from '../fixtures/graph.ts'
+import type { NodeLike } from '@nrz/types'
+import type { SpecOptions } from '@nrz/spec'
+import type { ParserState } from '../../src/types.ts'
+
+// the `npm` alias is no longer built in; configure it so the
+// default-registry DepIDs hydrate to the npm registry URL. Typed as
+// SpecOptions so the surrounding `as NodeLike` casts stay valid.
+const npmSpecOptions: SpecOptions = {
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
+
+const fetchedUrls: string[] = []
+const fetchedUserAgents: (string | undefined)[] = []
+
+global.fetch = (async (
+  url: string,
+  init?: { headers?: Record<string, string> },
+) => {
+  fetchedUrls.push(url)
+  fetchedUserAgents.push(init?.headers?.['User-Agent'])
+  if (url.startsWith('http://example.com/private/registry/')) {
+    if (init?.headers?.authorization !== 'Bearer test-token') {
+      return {
+        status: 401,
+        ok: false,
+      }
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        versions: {
+          '1.0.0': {},
+          '2.0.0': {},
+        },
+      }),
+    }
+  }
+  if (url === 'https://registry.npmjs.org/h') {
+    return {
+      ok: false,
+    }
+  } else if (url === 'https://registry.npmjs.org/i') {
+    throw new Error('ERR')
+  } else if (url === 'https://registry.npmjs.org/c') {
+    return {
+      status: 404,
+      ok: false,
+    }
+  }
+  return {
+    ok: true,
+    json: async () => {
+      switch (url) {
+        case 'https://registry.npmjs.org/a': {
+          return {
+            versions: {
+              '1.0.0': {},
+              '2.0.0': {},
+              '3.0.0': {},
+            },
+          }
+        }
+        case 'https://registry.npmjs.org/b': {
+          return {
+            versions: {
+              '1.0.0': {},
+              '2.0.0': {},
+              '2.1.0': {},
+              '2.2.0': {},
+            },
+          }
+        }
+        case 'http://example.com/c': {
+          return {
+            versions: {
+              '3.0.0': {},
+              '3.4.0': {},
+              '4.0.0': {},
+              '5.0.0': {},
+            },
+          }
+        }
+        case 'https://registry.npmjs.org/d': {
+          return {
+            versions: {
+              '1.0.0': {},
+              '1.2.0': {},
+              '2.3.4': {},
+              '2.3.5': {},
+            },
+          }
+        }
+        case 'https://registry.npmjs.org/e': {
+          return {
+            versions: {
+              '120.0.0': {},
+              '120.1.0': {},
+              '121.0.0': {},
+              '122.0.0': {},
+            },
+          }
+        }
+        case 'https://registry.npmjs.org/f': {
+          return {
+            versions: {
+              '4.0.0': {},
+              '4.5.6': {},
+            },
+          }
+        }
+        case 'https://registry.npmjs.org/g': {
+          return {
+            versions: {
+              '1.2.3-rc.1+rev.1': {},
+              '1.2.3-rc.1+rev.2': {},
+              '1.2.3-rc.2+rev.3': {},
+              '1.2.3-rc.3+rev.4': {},
+            },
+          }
+        }
+      }
+    },
+  }
+}) as unknown as typeof global.fetch
+
+const getState = (query: string, graph = getSemverRichGraph()) => {
+  const ast = parse(query)
+  const current = asPostcssNodeWithChildren(ast.first.first)
+  const state: ParserState = {
+    comment: '',
+    current,
+    initial: {
+      edges: new Set(graph.edges.values()),
+      nodes: new Set(graph.nodes.values()),
+    },
+    partial: {
+      edges: new Set(graph.edges.values()),
+      nodes: new Set(graph.nodes.values()),
+    },
+    collect: {
+      edges: new Set(),
+      nodes: new Set(),
+    },
+    cancellable: async () => {},
+    walk: async i => i,
+    retries: 0,
+    securityArchive: undefined,
+    importers: new Set(graph.importers),
+    signal: new AbortController().signal,
+    specificity: { idCounter: 0, commonCounter: 0 },
+  }
+  return state
+}
+
+t.test('select from outdated definition', async t => {
+  await t.test('outdated as an element', async t => {
+    const res = await outdated(getState(':outdated'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['a', 'c', 'd', 'e', 'g', 'e'],
+      'should have expected result using outdated defaulting to "any"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind any', async t => {
+    const res = await outdated(getState(':outdated(any)'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['a', 'c', 'd', 'e', 'g', 'e'],
+      'should have expected result using outdated kind "any"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind major', async t => {
+    const res = await outdated(getState(':outdated(major)'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['a', 'c', 'e', 'e'],
+      'should have expected result using outdated kind "major"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind minor', async t => {
+    const res = await outdated(getState(':outdated("minor")'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['e'],
+      'should have expected result using outdated kind "minor"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind patch', async t => {
+    const res = await outdated(getState(':outdated("patch")'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['d'],
+      'should have expected result using outdated kind "patch"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind in-range', async t => {
+    const res = await outdated(getState(':outdated(in-range)'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['c', 'e'],
+      'should have expected result using outdated kind "in-range"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('outdated kind out-of-range', async t => {
+    const res = await outdated(getState(':outdated(out-of-range)'))
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['a', 'd', 'g', 'e'],
+      'should have expected result using outdated kind "out-of-range"',
+    )
+    t.matchSnapshot({
+      nodes: [...res.partial.nodes].map(n => n.name),
+      edges: [...res.partial.edges].map(e => e.name),
+    })
+  })
+
+  await t.test('invalid pseudo selector usage', async t => {
+    await t.rejects(
+      outdated(getState(':outdated(foo)')),
+      /Failed to parse :outdated selector/,
+      'should throw an error for invalid pseudo selector usage',
+    )
+  })
+
+  await t.test('missing package response', async t => {
+    const log = t.capture(console, 'warn').args
+    const res = await outdated(
+      getState(':outdated(any)', getSimpleGraph()),
+    )
+    // mind this is a different graph that is being asserted,
+    // as manifests differs so are the results here
+    t.strictSame(
+      [...res.partial.nodes].map(n => n.name),
+      ['a', 'b', 'e', 'f'],
+      'should have expected results still',
+    )
+    t.matchSnapshot(
+      log(),
+      'should log a warning for missing package response',
+    )
+  })
+})
+
+t.test('parseInternals', async t => {
+  const ast = parse(':outdated(any)')
+  const nodes = asPostcssNodeWithChildren(ast.first.first).nodes
+  const internals = parseInternals(nodes)
+  t.strictSame(
+    internals,
+    { kind: 'any' },
+    'should correctly parse internals from outdated selector',
+  )
+})
+
+t.test('invalid outdated kind', async t => {
+  const ast = parse(':outdated(unsupported)')
+  const nodes = asPostcssNodeWithChildren(ast.first.first).nodes
+  t.throws(
+    () => parseInternals(nodes),
+    /Expected a valid outdated kind/,
+    'should throw an error for invalid outdated kind',
+  )
+})
+
+t.test('retrieveRemoveVersions', async t => {
+  t.capture(console, 'warn')
+
+  const missingName = {
+    id: joinDepIDTuple(['registry', '', 'a@1.0.0']),
+  } as NodeLike
+  t.strictSame(
+    await retrieveRemoteVersions(missingName),
+    [],
+    'should return an empty array if missing essential info',
+  )
+
+  await t.test('no response from registry', async t => {
+    const missingName = {
+      name: 'h',
+      id: joinDepIDTuple(['registry', '', 'h@1.0.0']),
+      options: npmSpecOptions,
+    } as NodeLike
+    await t.rejects(
+      retrieveRemoteVersions(missingName),
+      /Failed to fetch packument/,
+      'should throw an internal error so that it may be retried',
+    )
+  })
+
+  await t.test('fetch error', async t => {
+    const missingName = {
+      name: 'i',
+      id: joinDepIDTuple(['registry', '', 'i@1.0.0']),
+      options: npmSpecOptions,
+    } as NodeLike
+    await t.rejects(
+      retrieveRemoteVersions(missingName),
+      /ERR/,
+      'should throw the original error that will be retried',
+    )
+  })
+
+  await t.test('authenticated path-prefixed registry', async t => {
+    const privateSpecOptions: SpecOptions = {
+      registries: { private: 'http://example.com/private/registry' },
+    }
+    const node = {
+      name: 'p',
+      id: joinDepIDTuple(['registry', 'private', 'p@1.0.0']),
+      options: privateSpecOptions,
+    } as NodeLike
+
+    t.strictSame(
+      await retrieveRemoteVersions(
+        node,
+        undefined,
+        async () => 'Bearer test-token',
+      ),
+      ['1.0.0', '2.0.0'],
+      'should retrieve versions using auth header',
+    )
+    t.strictSame(
+      fetchedUrls.at(-1),
+      'http://example.com/private/registry/p',
+      'should preserve the registry path prefix',
+    )
+
+    const scoped = {
+      name: '@scope/s',
+      id: joinDepIDTuple(['registry', 'private', '@scope/s@1.0.0']),
+      options: privateSpecOptions,
+    } as NodeLike
+    t.strictSame(
+      await retrieveRemoteVersions(
+        scoped,
+        undefined,
+        async () => 'Bearer test-token',
+      ),
+      ['1.0.0', '2.0.0'],
+      'should retrieve versions for scoped package',
+    )
+    t.strictSame(
+      fetchedUrls.at(-1),
+      'http://example.com/private/registry/@scope/s',
+      'should preserve prefix with scoped name',
+    )
+
+    await t.rejects(
+      retrieveRemoteVersions(node),
+      /Failed to fetch packument/,
+      'should fail when no auth header is available',
+    )
+  })
+
+  await t.test('sends a nrz user-agent', async t => {
+    const node = {
+      name: 'a',
+      id: joinDepIDTuple(['registry', '', 'a@1.0.0']),
+      options: npmSpecOptions,
+    } as NodeLike
+    await retrieveRemoteVersions(node)
+    t.match(
+      fetchedUserAgents.at(-1),
+      /^nrz\/\d+\.\d+\.\d+/,
+      'user-agent header is nrz/<version>',
+    )
+  })
+})
+
+t.test('queueNode', async t => {
+  const missingName = {
+    id: joinDepIDTuple(['registry', '', 'a@1.0.0']),
+  } as NodeLike
+  t.strictSame(
+    await queueNode(getState(':outdated(any)'), missingName, 'any'),
+    missingName,
+    'should return an empty array if missing essential info',
+  )
+
+  await t.test('collects errors via onError', async t => {
+    const log = t.capture(console, 'warn').args
+    const failing = {
+      name: 'h',
+      version: '1.0.0',
+      id: joinDepIDTuple(['registry', '', 'h@1.0.0']),
+      options: npmSpecOptions,
+    } as NodeLike
+    const failures: unknown[] = []
+    t.strictSame(
+      await queueNode(
+        getState(':outdated(any)'),
+        failing,
+        'any',
+        (node, err) => failures.push([node.name, err]),
+      ),
+      failing,
+      'should keep node when versions cannot be retrieved',
+    )
+    t.strictSame(failures.length, 1, 'should collect the failure')
+    t.strictSame(log().length, 0, 'should not warn directly')
+  })
+
+  await t.test('warns directly without onError', async t => {
+    const log = t.capture(console, 'warn').args
+    const failing = {
+      name: 'h',
+      version: '1.0.0',
+      id: joinDepIDTuple(['registry', '', 'h@1.0.0']),
+      options: npmSpecOptions,
+    } as NodeLike
+    t.strictSame(
+      await queueNode(getState(':outdated(any)'), failing, 'any'),
+      failing,
+      'should keep node when versions cannot be retrieved',
+    )
+    t.strictSame(log().length, 1, 'should warn once')
+  })
+})

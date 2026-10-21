@@ -1,0 +1,12 @@
+---
+description: Cursor Rules Location
+globs: **/*.mdc
+alwaysApply: false
+---
+# Cursor Rules Location
+
+Rule files (`.mdc`) go in `.cursor/rules/` only. Kebab-case filenames.
+
+```
+.cursor/rules/your-rule-name.mdc
+```

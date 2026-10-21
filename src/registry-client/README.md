@@ -2,76 +2,96 @@
 
 # @nrz/registry-client
 
-This is a very light wrapper around undici, optimized for interfacing with an npm registry.
+This is a very light wrapper around undici, optimized for interfacing
+with an npm registry.
 
-**[Cache Unzipped](#cache-unzipped)**
-·
-**[Integrity Options](#integrity-options)**
-·
-**[Usage](#usage)**
+**[Cache Unzipped](#cache-unzipped)** · **[Proxies](#proxies)** ·
+**[Integrity Options](#integrity-options)** · **[Usage](#usage)**
 
 ## Overview
 
-Any response with `immutable` in the `cache-control` header, or with a `content-type` of `application/octet-stream` or a path ending in `.tgz`, will be cached forever and never requested again as long as the cache survives.
+Any response with `immutable` in the `cache-control` header, or with a
+`content-type` of `application/octet-stream` or a path ending in
+`.tgz`, will be cached forever and never requested again as long as
+the cache survives.
 
 If the request has a cached response:
 
-- Cached responses with `immutable` in the `cache-control`
-  header will be returned from cache without a network request,
-  no matter what.
-- Cached responses with a `content-type` of
-  `application/octet-stream` will be returned from cache without
-  a network request, no matter what, because tarballs are
-  immutable.
+- Cached responses with `immutable` in the `cache-control` header will
+  be returned from cache without a network request, no matter what.
+- Cached responses with a `content-type` of `application/octet-stream`
+  will be returned from cache without a network request, no matter
+  what, because tarballs are immutable.
 - Cached responses with `max-age=<n>` or `s-max-age=<n>` will be
-  served from cache without a network request if it's less than
-  `<n>` seconds old.
+  served from cache without a network request if it's less than `<n>`
+  seconds old.
 - Otherwise, a network request to the registry will be made
-  - if an `etag` is present in the cached response, it will be
-    used as the `if-none-match` header.
-  - If a `last-modified` header is in the response, that will
-    be used as the `if-modified-since` request header.
-  - If there is no `last-modified` header, then use the `mtime`
-    of the cache file as the `if-modified-since` header.
+  - if an `etag` is present in the cached response, it will be used as
+    the `if-none-match` header.
+  - If a `last-modified` header is in the response, that will be used
+    as the `if-modified-since` request header.
+  - If there is no `last-modified` header, then use the `mtime` of the
+    cache file as the `if-modified-since` header.
 
 This is the extent of the cache control logic. It is not a
-full-featured spec-compliant caching HTTP client, because that is
-not needed for this use case. Every response will be cached, even
-if the registry headers don't technically allow it.
+full-featured spec-compliant caching HTTP client, because that is not
+needed for this use case. Every response will be cached, even if the
+registry headers don't technically allow it.
 
 ## Cache Unzipped
 
-Client always sends `accept-encoding: gzip;q=1.0, *;q=0.5`
-header when making requests, to save time on the wire.
+Client always sends `accept-encoding: gzip;q=1.0, *;q=0.5` header when
+making requests, to save time on the wire.
 
-If response has `content-encoding: gzip`, then we swap out the
-body for the unzipped response body in the cache, as if it was
-not gzipped in the first place. This _must_ be done before
-returning the response, because you can't `JSON.parse()` a
-gzipped response anyway.
+If response has `content-encoding: gzip`, then we swap out the body
+for the unzipped response body in the cache, as if it was not gzipped
+in the first place. This _must_ be done before returning the response,
+because you can't `JSON.parse()` a gzipped response anyway.
 
-If the response is `content-type: application/octet-stream` and
-starts with the gzip header, then we return the raw body as we
-received it, but as a best-effort background job, unzip it and
-update the cache entry to be an unzipped response body. This is
-done in the `@nrz/cache-unzip` worker.
+If the response is `content-type: application/octet-stream` and starts
+with the gzip header, then we return the raw body as we received it,
+but as a best-effort background job, unzip it and update the cache
+entry to be an unzipped response body. This is done in the
+`@nrz/cache-unzip` child process.
 
 So,
 
-- json responses will always be un-zipped, in the response and in
-  the cache.
-- artifact responses _may_ be gzipped (and thus, have to be
-  unzipped by the unpack operation), but will eventually be
-  cached as unzipped tarballs.
+- json responses will always be un-zipped, in the response and in the
+  cache.
+- artifact responses _may_ be gzipped (and thus, have to be unzipped
+  by the unpack operation). Tarballs exploded into the global store
+  stay gzipped; the rest will eventually be cached as unzipped
+  tarballs.
 
-Thus, the `content-length` response header will _usually_ not
-match the actual byte length of the response body.
+Thus, the `content-length` response header will _usually_ not match
+the actual byte length of the response body.
+
+Tarball entries with an `integrity` header, gzipped or not, are also
+passed to that child with the global store root (the `storeRoot`
+option, default `storeRoot(cache)`, i.e. `<cache>/store/v1`, also at
+`@nrz/registry-client/store-root`), so it can explode them there
+when `NRZ_STORE_LINKER` enables the store.
+`queueForStore(key, integrity)` queues an already cached tarball (a
+`cachedBody()` hit) the same way: exploded when the store is on, else
+un-gzipped.
+
+## Proxies
+
+If `http_proxy` or `https_proxy` is set in the environment (either
+case), requests are routed through that proxy using undici's
+[`EnvHttpProxyAgent`](https://undici.nodejs.org/#/docs/api/EnvHttpProxyAgent).
+Hosts listed in `no_proxy` are still dialed directly. When neither
+variable is set, the client uses the same plain undici `Agent` it
+always has, so there is no change to the default path.
+
+A proxy that terminates TLS needs its certificate authority to be
+trusted. Point `NODE_EXTRA_CA_CERTS` at the CA file and node will
+trust it for the tunneled connection.
 
 ## Integrity Options
 
-An `integrity` option may be specified in a
-`fetchOptions.context` object, or in the options provided to
-`cache.set()`. For example:
+An `integrity` option may be specified in a `fetchOptions.context`
+object, or in the options provided to `cache.set()`. For example:
 
 ```js
 const integrity = `sha512-${base64hash}`
@@ -86,16 +106,16 @@ cache.set(key, value, { integrity })
 const value = await cache.fetch(key, { context: { integrity } })
 ```
 
-If the integrity provided is obviously not a valid sha512
-`Integrity` string, then it is ignored.
+If the integrity provided is obviously not a valid sha512 `Integrity`
+string, then it is ignored.
 
-Integrity values are not calculated or verified. The caller must do this
-check, if desired.
+Integrity values are not calculated or verified. The caller must do
+this check, if desired.
 
 Note that the integrity provided to `cache.fetch()` or `cache.set()`
 does _not_ typically match the calculated integrity of the object
-being cached. Typically, the integrity is related to the body of
-the response that a `@nrz/registry-client.CacheEntry` object
+being cached. Typically, the integrity is related to the body of the
+response that a `@nrz/registry-client.CacheEntry` object
 represents.
 
 ## Usage

@@ -1,0 +1,465 @@
+---
+title: Quick Start
+sidebar:
+  label: Quick Start
+  order: 0
+---
+
+## Sign Up
+
+You need a nrz.io account to publish, and also to **install** through
+your account's `npm` mirror: the mirror requires a token, even for
+public npm packages.
+
+For a team, invite each developer
+([Members & Access Control](/registry/access#inviting-members)); each
+one logs in (or creates a personal token). Give CI and shared
+environments (Vercel, coding-agent sandboxes) a service token with
+only `package:read` (plus `package:write` if CI publishes), created by
+an owner or admin — see
+[Authentication & Tokens](/registry/tokens#personal-and-service-tokens).
+
+[Sign up](https://www.nrz.io/sign-up):
+
+<Steps>
+
+1. **Create your account**
+
+   You can sign up with Github, Google (Gmail) or with an email and
+   password.
+
+   <Image
+     src="/images/signin.png"
+     alt="Sign up form on nrz's sign up view with first name and last name fields, and login buttons connecting to Google and Github"
+     variant="square"
+   />
+
+2. **Verify your email**
+
+   If you signed up with an email and password, check your inbox for a
+   one-time passcode (OTP). Paste it into the verification view to
+   confirm your account.
+
+   <Image
+     src="/images/otp-email.png"
+     alt="Screenshot of nrz signup one-time passcode email"
+     variant="square"
+   />
+
+3. Set up your account
+
+   <Image
+     src="/images/account-setup.png"
+     alt="Screenshot of nrz account setup view with display name and slug fields, and a grid of plans for user selection"
+     variant="landscape"
+   />
+
+   <Badge text="Caution" variant="caution" /> The slug appears in your
+   registry URLs and in your package scope, so choose carefully.
+
+4. You've signed up! You'll be logged into the Dashboard.
+
+   <Image
+     src="/images/dashboard.png"
+     alt="Screenshot of nrz Dashboard view displaying left side side navigation where using can browse through registries and account settings"
+     variant="landscape"
+   />
+
+</Steps>
+
+## Log in
+
+<Steps>
+
+1. **Enter your credentials**
+
+   Log in with your email address, or continue with Github or Google.
+   You can also use a passkey if you've set one up.
+
+   <Image
+     src="/images/login.png"
+     alt="Login view on nrz.io with Email address input, continue button, and Github and Google login buttons. Below are links to Use passkey and a call to action to sign up if the user does not have an account"
+     variant="square"
+   />
+
+</Steps>
+
+## Set up your package manager
+
+Once you have an account, connect the package manager you already use
+to your registries. The examples below use `acme` as the account slug
+— replace it with your own, or use the **Setup Instructions** button
+in the dashboard's **Registries** section, which generates these
+instructions for your account.
+
+<Tabs syncKey="pkg-manager">
+
+<TabItem label="nrz">
+
+If you're setting up a nrz.io account for the first time, start with
+[`nrz setup`](/client/registries#getting-started-with-nrz-setup) — it
+authenticates and configures your account's `npm` and `main` registry
+aliases in one step:
+
+```bash
+nrz setup
+```
+
+Alternatively, configure a project manually:
+
+<Steps>
+
+1. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. To set it up in
+   `nrz.json`, run:
+
+   ```bash
+   nrz config set scoped-registries=@acme=https://registry.nrz.io/acme/main/
+   ```
+
+   Then obtain an authentication token for your private scope:
+
+   ```bash
+   nrz login --registry=https://registry.nrz.io/acme/main/
+   ```
+
+   Now you can publish and install packages from your private `@acme`
+   scope.
+
+2. **Set up the nrz.io npm mirror**
+
+   Change your default registry to your nrz.io mirror. This updates
+   your `nrz.json` file to use the mirror for all packages in the
+   current project:
+
+   ```bash
+   nrz config set registry=https://registry.nrz.io/acme/npm/ \
+     registries.npm=https://registry.nrz.io/acme/npm/
+   ```
+
+   Then log in to obtain an authentication token:
+
+   ```bash
+   nrz login
+   ```
+
+   Then reinstall your dependencies from the nrz.io mirror:
+
+   ```bash
+   nrz install
+   ```
+
+</Steps>
+
+</TabItem>
+
+<TabItem label="npm">
+
+<Steps>
+
+1. **Set up the nrz.io npm mirror**
+
+   Change your default registry to your nrz.io mirror. This updates
+   your `.npmrc` file to use the mirror for all npm packages in the
+   current project:
+
+   ```bash
+   npm config set registry https://registry.nrz.io/acme/npm/ --location=project
+   ```
+
+   Then log in to obtain an authentication token:
+
+   ```bash
+   npm login --registry=https://registry.nrz.io/acme/npm/
+   ```
+
+   Keep your `package-lock.json`: npm fetches its `registry.npmjs.org`
+   entries from the mirror. Run a normal install:
+
+   ```bash
+   npm install
+   ```
+
+2. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. To set it up in
+   `.npmrc`, run:
+
+   ```bash
+   npm config set @acme:registry https://registry.nrz.io/acme/main/ --location=project
+   ```
+
+   Then obtain an authentication token for your private scope:
+
+   ```bash
+   npm login --registry=https://registry.nrz.io/acme/main/ --scope=@acme
+   ```
+
+   Now you can publish and install packages from your private `@acme`
+   scope.
+
+</Steps>
+
+</TabItem>
+
+<TabItem label="pnpm">
+
+<Steps>
+
+1. **Set up the nrz.io npm mirror**
+
+   Change your default registry to your nrz.io mirror. This updates
+   your `.npmrc` file to use the mirror for all npm packages in the
+   current project:
+
+   ```bash
+   pnpm config set registry https://registry.nrz.io/acme/npm/ --location=project
+   ```
+
+   Keep registry settings in `.npmrc`: pnpm before 11.10 ignores
+   `registry` in `pnpm-workspace.yaml` and installs from npmjs.org,
+   even if `pnpm config get registry` shows the mirror; pnpm 10 also
+   logs in to npmjs.org. pnpm 11.10+ reads `registry` from either
+   file. `_authToken` needs `.npmrc`.
+
+   Then log in to obtain an authentication token:
+
+   ```bash
+   pnpm login
+   ```
+
+   `pnpm login` keeps the token out of the repo. In CI, don't put
+   `${NRZ_TOKEN}` in the project `.npmrc` — pnpm 11.5.3+ ignores it.
+   See
+   [pnpm in CI](/registry/publishing/ci#pnpm-needs-a-different-approach).
+
+   Keep your `pnpm-lock.yaml`: it stores no tarball URLs, so a normal
+   install fetches everything from the mirror:
+
+   ```bash
+   pnpm install
+   ```
+
+2. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. To set it up in
+   `.npmrc`, run:
+
+   ```bash
+   pnpm config set @acme:registry https://registry.nrz.io/acme/main/ --location=project
+   ```
+
+   Then obtain an authentication token for your private scope:
+
+   ```bash
+   pnpm login --registry=https://registry.nrz.io/acme/main/ --scope=@acme
+   ```
+
+   Now you can publish and install packages from your private `@acme`
+   scope.
+
+</Steps>
+
+</TabItem>
+
+<TabItem label="yarn">
+
+These instructions are for yarn 2+ ("Berry"), the version you get from
+`yarn set version berry` or a `packageManager` field in
+`package.json`.
+
+<Steps>
+
+1. **Set up the nrz.io npm mirror**
+
+   Change your default registry to your nrz.io mirror. This updates
+   your project's `.yarnrc.yml` file to use the mirror for all npm
+   packages:
+
+   ```bash
+   yarn config set npmRegistryServer "https://registry.nrz.io/acme/npm/"
+   ```
+
+   Then log in to obtain an authentication token:
+
+   ```bash
+   yarn npm login --web-login --always-auth
+   ```
+
+   Then to switch all your dependencies to the nrz.io mirror, delete
+   your `yarn.lock` and reinstall:
+
+   ```bash
+   rm -rf yarn.lock
+   yarn install
+   ```
+
+2. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. To set it up in
+   `.yarnrc.yml`, run:
+
+   ```bash
+   yarn config set npmScopes.acme.npmRegistryServer "https://registry.nrz.io/acme/main/"
+   yarn config set npmScopes.acme.npmPublishRegistry "https://registry.nrz.io/acme/main/"
+   ```
+
+   Then obtain an authentication token for your private scope:
+
+   ```bash
+   yarn npm login --scope acme --always-auth --web-login
+   ```
+
+   Now you can publish and install packages from your private `@acme`
+   scope.
+
+</Steps>
+
+</TabItem>
+
+<TabItem label="bun">
+
+<Steps>
+
+1. **Get a token**
+
+   To authenticate Bun with your registries, first create an
+   authentication token from your account's
+   [Tokens page](https://www.nrz.io/tokens/acme) and define an
+   environment variable. If you're using a `.env` file, define the
+   token there:
+
+   ```ini
+   NRZ_TOKEN=<your token>
+   ```
+
+   You can also add it to your `.bashrc` or `.zshrc`, or export it in
+   your current shell for the duration of your session:
+
+   ```bash
+   export NRZ_TOKEN=<your token>
+   ```
+
+   `NRZ_TOKEN` is just a name: bun doesn't read it by itself, only
+   through the `$NRZ_TOKEN` reference in `bunfig.toml` below.
+
+2. **Set up the nrz.io npm mirror**
+
+   Create (or edit) `bunfig.toml` in your project root and point the
+   default registry at your nrz.io mirror. Use a `$NRZ_TOKEN`
+   placeholder for the token instead of a literal value — bun expands
+   `$VAR` references from the environment at request time, so this
+   file is safe to commit:
+
+   ```toml
+   [install]
+   registry = { url = "https://registry.nrz.io/acme/npm/", token = "$NRZ_TOKEN" }
+   ```
+
+   Then to switch all your dependencies to the nrz.io mirror, delete
+   your `bun.lock` and `node_modules` folder and reinstall:
+
+   ```bash
+   rm -rf bun.lock node_modules
+   bun install
+   ```
+
+3. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. Add it under
+   `[install.scopes]` in `bunfig.toml`. nrz.io tokens are scoped to
+   your account rather than to a specific registry, so the same
+   `$NRZ_TOKEN` works here too:
+
+   ```toml
+   [install.scopes.acme]
+   url = "https://registry.nrz.io/acme/main/"
+   token = "$NRZ_TOKEN"
+   ```
+
+   Now you can publish and install packages from your private `@acme`
+   scope — `bun publish` resolves the registry from the package name's
+   scope automatically.
+
+</Steps>
+
+</TabItem>
+
+<TabItem label="deno">
+
+<Steps>
+
+1. **Set up the nrz.io npm mirror**
+
+   Create (or edit) `.npmrc` in your project root and point the
+   default registry at your nrz.io mirror. Reference the token via
+   `${NRZ_TOKEN}` rather than a literal value — deno expands `${VAR}`
+   references in `.npmrc` from the environment, so this file is safe
+   to commit:
+
+   ```bash
+   cat >> .npmrc <<'EOF'
+   registry=https://registry.nrz.io/acme/npm/
+   //registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
+   EOF
+   ```
+
+   Since there's no `deno login`, create a token from the nrz.io
+   dashboard instead, then put it in a `.env` file (make sure `.env`
+   is in your `.gitignore`):
+
+   ```bash
+   echo "NRZ_TOKEN=<your token>" >> .env
+   ```
+
+   `NRZ_TOKEN` is just a name: deno uses it only through the
+   `${NRZ_TOKEN}` lines in `.npmrc`.
+
+   Then to switch all your dependencies to the nrz.io mirror, delete
+   your `deno.lock` and `node_modules` folder and reinstall, passing
+   `--env-file` so the token in `.env` is loaded:
+
+   ```bash
+   rm -rf deno.lock node_modules
+   deno install --env-file
+   ```
+
+2. **Set up your private `@acme` scope**
+
+   Your private scope lives in a separate registry. Add a scope
+   mapping and a matching auth-token line — the token line's host/path
+   must exactly match the scope's registry URL:
+
+   ```bash
+   cat >> .npmrc <<'EOF'
+   @acme:registry=https://registry.nrz.io/acme/main/
+   //registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+   EOF
+   ```
+
+   nrz.io tokens are scoped to your account rather than to a specific
+   registry, so the same `NRZ_TOKEN` works here too. Now you can
+   install packages from your private `@acme` scope with
+   `deno install --env-file`.
+
+   `deno publish` targets [JSR](https://jsr.io) only, but `deno pack`
+   builds a real npm package from a Deno project, which you then
+   upload with `npm publish`. See
+   [the deno guide](/registry/publishing/deno) for the full workflow —
+   including Deno's 24-hour dependency-age gate, which will otherwise
+   hide a version you just published.
+
+</Steps>
+
+</TabItem>
+
+</Tabs>
+
+## CI and hosted environments
+
+Only the nrz CLI reads `NRZ_TOKEN` / `NRZ_TOKEN_*` itself (see
+[Authentication](/client/auth#ci-and-other-headless-environments)).
+Other package managers need an auth line in their own config, and
+Vercel builds use `NPM_RC`. For CI, Vercel and coding-agent sandboxes,
+see [CI & automation](/registry/publishing/ci#who-reads-what).

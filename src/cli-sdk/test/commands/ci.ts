@@ -1,0 +1,182 @@
+import t from 'tap'
+import type { LoadedConfig } from '../../src/config/index.ts'
+import type { CIResult } from '../../src/commands/ci.ts'
+import { loadLazyView } from '../../src/view.ts'
+
+const options = {}
+let log = ''
+t.afterEach(() => (log = ''))
+const warned: unknown[] = []
+
+const Command = await t.mockImport<
+  typeof import('../../src/commands/ci.ts')
+>('../../src/commands/ci.ts', {
+  '@nrz/graph': {
+    async install(opts: any) {
+      log += `install expectLockfile=${opts.expectLockfile} cleanInstall=${opts.cleanInstall} allowScripts=${opts.allowScripts}\n`
+      return {
+        graph: {},
+        buildQueue: ['··a@1.0.0'],
+        ...(opts.allowSkills ?
+          {
+            skills: {
+              allowSkills: opts.allowSkills,
+              skillsDirs: opts.skillsDirs,
+            },
+          }
+        : null),
+      }
+    },
+  },
+  '../../src/migrate-workspaces.ts': {
+    warnIgnoredWorkspaces: (conf: LoadedConfig) => warned.push(conf),
+  },
+})
+
+t.test('usage', t => {
+  const usage = Command.usage()
+  t.matchSnapshot(usage.usage(), 'usage output')
+  t.end()
+})
+
+t.test('command execution', async t => {
+  const conf = {
+    positionals: [],
+    values: {},
+    options,
+    get: () => undefined,
+  } as unknown as LoadedConfig
+  warned.length = 0
+  const result = await Command.command(conf)
+  t.strictSame(warned, [conf], 'warns about ignored workspaces')
+  t.matchSnapshot(
+    log,
+    'should call install with expectLockfile and cleanInstall true',
+  )
+  t.strictSame(
+    result.buildQueue,
+    ['··a@1.0.0'],
+    'passes buildQueue through',
+  )
+})
+
+t.test('allow-scripts option overrides default', async t => {
+  await Command.command({
+    positionals: [],
+    values: {},
+    options,
+    get: (k: string) =>
+      k === 'allow-scripts' ? ':root > *' : undefined,
+  } as unknown as LoadedConfig)
+  t.match(log, /allowScripts=:root > \*/)
+})
+
+t.test('allow-skills option', async t => {
+  const res = await Command.command({
+    positionals: [],
+    values: {},
+    options,
+    explicit: { 'allow-skills': '#foo' },
+    // ci never writes config
+    addConfigToFile: () => {
+      throw new Error('config written')
+    },
+    get: (k: string) =>
+      k === 'allow-skills' ? '#foo'
+      : k === 'skills-dir' ? ['.claude/skills']
+      : undefined,
+  } as unknown as LoadedConfig)
+  t.strictSame(
+    res.skills,
+    { allowSkills: '#foo', skillsDirs: ['.claude/skills'] },
+    'passed through',
+  )
+  const none = await Command.command({
+    positionals: [],
+    values: {},
+    options,
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+  t.notOk('skills' in none, 'no skills key when unset')
+})
+
+t.test('views', async t => {
+  // Test json view
+  t.strictSame(
+    Command.views.json({
+      graph: {
+        toJSON: () => ({ ci: true }),
+      },
+    } as unknown as CIResult),
+    { ci: true },
+    'json view returns graph.toJSON()',
+  )
+
+  const human = await loadLazyView(Command.views.human)
+  t.equal(
+    human.name,
+    'InstallReporter',
+    'human view uses InstallReporter',
+  )
+
+  t.end()
+})
+
+t.test('command description and examples', t => {
+  const usage = Command.usage()
+  const usageStr = usage.usage()
+
+  t.ok(
+    usageStr.includes('Clean install from lockfile'),
+    'includes description',
+  )
+  t.ok(
+    usageStr.includes('Deletes node_modules'),
+    'mentions node_modules deletion',
+  )
+  t.ok(usageStr.includes('nrz-lock.json'), 'mentions lockfile')
+  t.ok(
+    usageStr.includes('--expect-lockfile'),
+    'mentions expect-lockfile',
+  )
+  t.ok(usageStr.includes('nrz build'), 'mentions nrz build')
+
+  t.end()
+})
+
+t.test('lockfile-only flag', async t => {
+  const options = {
+    'lockfile-only': true,
+  }
+
+  let log = ''
+  const Command = await t.mockImport<
+    typeof import('../../src/commands/ci.ts')
+  >('../../src/commands/ci.ts', {
+    '@nrz/graph': {
+      async install(opts: any) {
+        log += `install expectLockfile=${opts.expectLockfile} cleanInstall=${opts.cleanInstall} lockfileOnly=${opts.lockfileOnly}\n`
+        return {
+          graph: {},
+        }
+      },
+    },
+    '../../src/migrate-workspaces.ts': {
+      warnIgnoredWorkspaces: () => {},
+    },
+  })
+
+  await Command.command({
+    positionals: [],
+    values: {},
+    options,
+    get: () => undefined,
+  } as unknown as LoadedConfig)
+
+  t.match(
+    log,
+    /install expectLockfile=true cleanInstall=true lockfileOnly=true/,
+    'should pass lockfileOnly along with other ci options',
+  )
+  t.end()
+})

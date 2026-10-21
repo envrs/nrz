@@ -1,0 +1,148 @@
+name: Baseline Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'www/docs/**'
+      - '**/*.md'
+
+jobs:
+  benchmark_base_branch:
+    name: Continuous Benchmarking with Bencher
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        fixture: ['vue']
+        variation:
+          [
+            'cache-lockfile',
+            'cache-lockfile-node-modules',
+            'clean',
+            'lockfile',
+          ]
+    env:
+      BENCH_WARMUP: '2'
+      BENCH_RUNS: '10'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '^22.22.0'
+          check-latest: true
+
+      - name: Setup nrz
+        uses: nrz/setup-nrz@v1
+
+      - name: Install Dependencies with known good version of nrz
+        run: nrz install
+
+      - name: Build source version of nrz
+        run: node --run build:bundle
+
+      - name: Add source version of nrz to PATH
+        run: echo "$GITHUB_WORKSPACE/scripts/bins/bundle" >> $GITHUB_PATH
+
+      - name: Install Dependencies with source of nrz
+        run: |
+          # avoid changes from the bootstrap step
+          ./scripts/rm-node-nodules.ts
+          # re-install dependencies
+          nrz install --view=human
+
+      - name: Prepare
+        run: xvn --recursive prepare
+
+      - name: Install & Setup Tools
+        run: |
+          bash ./infra/cli-benchmarks/scripts/setup.sh
+
+      - name: Run Benchmarks variations
+        run: |
+          bash ./infra/cli-benchmarks/scripts/benchmark.sh ${{ matrix.fixture }} ${{ matrix.variation }}
+
+      - name: Upload Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.fixture }}-${{ matrix.variation }}
+          path: ./results/${{ matrix.fixture }}/${{ matrix.variation }}/
+
+  consolidate:
+    name: Consolidate Benchmark Results
+    needs: [benchmark_base_branch]
+    permissions:
+      checks: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Results
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+          pattern: results-*
+
+      - name: Consolidate benchmarks
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // Define fixture and variation values from the strategy matrix
+            const fixtures = ["vue"];
+            const variations = ["cache-lockfile", "cache-lockfile-node-modules", "clean", "lockfile"];
+
+            const consolidatedResults = {
+              results: []
+            };
+
+            // Read and consolidate benchmark results
+            for (const fixture of fixtures) {
+              for (const variation of variations) {
+                const benchmarkPath = path.join('results', `results-${fixture}-${variation}`, 'benchmarks.json');
+
+                try {
+                  console.log(`Reading benchmark file: ${benchmarkPath}`);
+                  const benchmarkData = JSON.parse(fs.readFileSync(benchmarkPath, 'utf8'));
+
+                  // Take the first entry from the results array
+                  if (benchmarkData.results && benchmarkData.results.length > 0) {
+                    consolidatedResults.results.push(benchmarkData.results[0]);
+                    console.log(`Added result for ${fixture}-${variation}: ${benchmarkData.results[0].command}`);
+                  } else {
+                    console.warn(`No results found in ${benchmarkPath}`);
+                  }
+                } catch (error) {
+                  console.error(`Failed to read ${benchmarkPath}: ${error.message}`);
+                }
+              }
+            }
+
+            // Save consolidated results
+            const outputPath = 'benchmarks.json';
+            fs.writeFileSync(outputPath, JSON.stringify(consolidatedResults, null, 2));
+            console.log(`Consolidated ${consolidatedResults.results.length} benchmark results to ${outputPath}`);
+
+      - uses: bencherdev/bencher@main
+      # 25% over 20-sample mean: between-job noise CV is 10-24%
+      - name: Track base branch benchmarks with Bencher
+        run: |
+          bencher run \
+          --project nrz-monorepo \
+          --token '${{ secrets.BENCHER_API_TOKEN }}' \
+          --branch main \
+          --hash "${{ github.sha }}" \
+          --testbed ubuntu-latest \
+          --threshold-measure latency \
+          --threshold-test percentage \
+          --threshold-min-sample-size 7 \
+          --threshold-max-sample-size 20 \
+          --threshold-upper-boundary 0.25 \
+          --thresholds-reset \
+          --adapter shell_hyperfine \
+          --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+          --file "benchmarks.json"

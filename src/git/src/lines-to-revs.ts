@@ -1,8 +1,4 @@
-import {
-  type RevDoc,
-  type RevDocEntry,
-  type RefType,
-} from '@nrz/types'
+import type { RevDoc, RevDocEntry, RefType } from '@nrz/types'
 import { parse } from '@nrz/semver'
 import { error } from '@nrz/error-cause'
 
@@ -70,7 +66,7 @@ const distTags = (revs: RevDoc) => {
     // simulate a dist-tags with latest pointing at the
     // 'latest' branch if one exists and is a version,
     // or HEAD if not.
-    if (revs.refs.latest && ver.sha === revs.refs.latest.sha) {
+    if (ver.sha === revs.refs.latest?.sha) {
       revs['dist-tags'].latest = v
     } else if (ver.sha === HEAD.sha) {
       revs['dist-tags'].HEAD = v

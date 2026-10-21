@@ -1,0 +1,43 @@
+---
+description: Monorepo structure, workspace map, and development workflow
+globs: **/*
+alwaysApply: true
+---
+# nrz Monorepo
+
+nrz monorepo. Workspaces in `src/*`, `infra/*`, `www/*`. Workspaces published as `@nrz/*`, the built nrz CLI itself is published as `nrz`.
+
+## Development
+
+- `cd` into workspace dir before running commands (e.g., `cd src/semver`)
+- Each workspace has own `package.json`, `test/` folder
+- 100% test coverage required. Use nrz. Strict TypeScript.
+- See `@code-validation-workflow.mdc` for format/lint/test/coverage/typecheck steps
+
+## Workspaces
+
+**Graph (core install engine):** `src/graph` — See `@graph/index.mdc` and sub-rules: `data-structure`, `ideal`, `ideal-append-nodes`, `load-actual`, `modifiers`, `lockfiles`, `reify`, `peers`
+
+**Core:** `src/cache`, `src/cache-unzip`, `src/types`, `src/dep-id` (node IDs), `src/spec` (specifier parsing), `src/satisfies` (DepID↔Spec)
+
+**DSS Query:** `src/dss-parser`, `src/dss-breadcrumb`, `src/query` — See `@query-pseudo-selector-creation.mdc`
+
+**Package Mgmt:** `src/package-info`, `src/package-json`, `src/registry-client`, `src/tar`, `src/workspaces`
+
+**CLI:** `src/cli-sdk` (framework — see `@cli-sdk-workspace.mdc`), `src/init`, `src/nrx`, `src/run`
+
+**Utilities:** `src/keychain`, `src/security-archive`, `src/semver`, `src/git`, `src/error-cause`, `src/output`, `src/xdg`, `src/url-open`, `src/promise-spawn`, `src/cmd-shim`, `src/rollback-remove`, `src/dot-prop`, `src/fast-split`, `src/pick-manifest`, `src/nrz-json`, `src/which`
+
+**Infra:** `infra/benchmark`, `infra/cli`, `infra/cli-js`, `infra/smoke-test`
+
+**Docs:** `www/docs` → https://docs.nrz.khulnasoft.com
+
+## Related Rules
+
+- `@code-validation-workflow.mdc` — format/lint/test/coverage/typecheck steps
+- `@linting-error-handler.mdc` — fixing unused vars, imports, type guards
+- `@cli-sdk-workspace.mdc` — CLI commands, options, config system
+- `@graph/index.mdc` — dependency graph architecture (has sub-rules)
+- `@query-pseudo-selector-creation.mdc` — adding DSS pseudo-selectors
+- `@config-reload-jackspeak-issues.mdc` — config caching bugs
+- `@cursor-rules-location.mdc` — where to put new `.mdc` files

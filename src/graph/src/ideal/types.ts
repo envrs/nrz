@@ -1,11 +1,44 @@
-import { type DepID } from '@nrz/dep-id'
-import { type PackageInfoClient } from '@nrz/package-info'
-import {
-  type AddImportersDependenciesMap,
-  type Dependency,
-  type RemoveImportersDependenciesMap,
+import type { DepID } from '@nrz/dep-id'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { Spec } from '@nrz/spec'
+import type { DependencySaveType } from '@nrz/types'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+  RemoveImportersDependenciesMap,
 } from '../dependencies.ts'
-import { type Graph } from '../graph.ts'
+import type { ModifierActiveEntry } from '../modifiers.ts'
+import type { Graph } from '../graph.ts'
+import type { Node } from '../node.ts'
+
+/**
+ * A map of dependencies to be added to non-importer nodes.
+ * Keys are {@link DepID} of nodes that are not importers (e.g., nested folders).
+ * When these nodes are resolved and placed in the graph, their dependencies
+ * from this map are injected into the processing queue.
+ */
+export type TransientAddMap = Omit<
+  AddImportersDependenciesMap,
+  'modifiedDependencies'
+>
+
+/**
+ * A map of dependency names to be removed from non-importer nodes.
+ * Keys are {@link DepID} of nodes that are not importers (e.g., nested folders).
+ * When these nodes are processed, their dependencies in this map are excluded.
+ */
+export type TransientRemoveMap = Omit<
+  RemoveImportersDependenciesMap,
+  'modifiedDependencies'
+>
+
+/**
+ * Dependency names the user asked for on the command line, keyed by the
+ * {@link DepID} of the node receiving them. Snapshotted before
+ * manifest-derived deltas are merged into `add`, so it is the only
+ * reliable signal that a spec came from an explicit request.
+ */
+export type ExplicitAddMap = Map<DepID, Set<string>>
 
 export type BuildIdealAddOptions = {
   /**
@@ -40,4 +73,85 @@ export type BuildIdealPackageInfoOptions = {
    * A {@link PackageInfoClient} instance to read manifest info from.
    */
   packageInfo: PackageInfoClient
+}
+
+/**
+ * Represents an ongoing append operation for a node and its dependencies.
+ */
+export type AppendNodeEntry = {
+  node: Node
+  deps: Dependency[]
+  modifierRefs?: Map<string, ModifierActiveEntry>
+  depth: number
+  peerContext: PeerContext
+  updateContext: {
+    putEntries: () => PeerContextEntryInput[] | undefined
+    resolvePeerDeps: () => void
+  }
+}
+
+/**
+ * The result of processing a given placed node in the graph.
+ */
+export type ProcessPlacementResultEntry = Omit<
+  AppendNodeEntry,
+  'depth'
+>
+
+/**
+ * The result of processing placement for nodes to be added to the graph.
+ */
+export type ProcessPlacementResult = ProcessPlacementResultEntry[]
+
+/**
+ * Entry in a peer context representing a resolved peer dependency.
+ */
+export type PeerContextEntry = {
+  /**
+   * True if this entry is currently being resolved and track by this
+   * peer context set, false in case this entry was inherit from a previous
+   * peer context set and should not be considered for resolution.
+   */
+  active: boolean
+  /**
+   * Full Spec objects that are part of this peer context entry, keyed by
+   * `peerSpecKey()` so textually identical specs collapse into one entry
+   * instead of piling up per dependent.
+   */
+  specs: Map<string, Spec>
+  /**
+   * `specs` is shared with the entry this one was forked from or into.
+   * Write through `ownSpecs()` so the other side keeps its snapshot.
+   */
+  sharedSpecs?: boolean
+  /** The target Node that satisfies all specs for this peer context entry */
+  target: Node | undefined
+  /** The type of dependency this entry represents */
+  type: DependencySaveType
+  /** Context dependent nodes that had dependencies resolved to this entry */
+  contextDependents: Set<Node>
+}
+
+/**
+ * Input for adding an entry to peer contexts.
+ */
+export type PeerContextEntryInput = {
+  /** Node that depends on this resolved peer context set entry */
+  dependent?: Node
+  /** Node this peer context entry resolves to */
+  target?: Node
+} & Dependency
+
+/**
+ * Represents resolved peer dependencies in a given append-nodes context.
+ */
+export type PeerContext = Map<string, PeerContextEntry> & {
+  index?: number
+  /**
+   * Bumped whenever an entry is added or an entry's target changes, i.e.
+   * whenever the name -> target mapping a fork snapshots moves. Part of
+   * the fork cache key so a base that moved cannot hand out the fork
+   * taken before the move.
+   */
+  rev?: number
 }

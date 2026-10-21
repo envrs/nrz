@@ -1,101 +1,87 @@
 {
   "name": "@nrz/graph",
   "description": "A library that helps understanding & expressing what happens on an install",
-  "version": "0.0.0-0.1730239248325",
+  "version": "1.5.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/graph"
   },
-  "tshy": {
-    "selfLink": false,
-    "dialects": [
-      "esm"
-    ],
-    "sourceDialects": [
-      "@nrz/source"
-    ],
-    "exports": {
-      "./package.json": "./package.json",
-      ".": "./src/index.ts",
-      "./browser": "./src/browser.ts"
-    }
-  },
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
+    "@nrz/cmd-shim": "workspace:*",
     "@nrz/dep-id": "workspace:*",
+    "@nrz/dss-breadcrumb": "workspace:*",
     "@nrz/error-cause": "workspace:*",
     "@nrz/fast-split": "workspace:*",
+    "@nrz/graph-run": "workspace:*",
+    "@nrz/init": "workspace:*",
     "@nrz/output": "workspace:*",
     "@nrz/package-info": "workspace:*",
     "@nrz/package-json": "workspace:*",
     "@nrz/pick-manifest": "workspace:*",
-    "@nrz/registry-client": "workspace:*",
+    "@nrz/query": "workspace:*",
     "@nrz/rollback-remove": "workspace:*",
     "@nrz/run": "workspace:*",
     "@nrz/satisfies": "workspace:*",
-    "@nrz/semver": "workspace:*",
+    "@nrz/security-archive": "workspace:*",
     "@nrz/spec": "workspace:*",
     "@nrz/types": "workspace:*",
+    "@nrz/nrz-json": "workspace:*",
     "@nrz/workspaces": "workspace:*",
-    "graph-run": "catalog:",
     "path-scurry": "catalog:",
-    "promise-call-limit": "^3.0.2"
+    "promise-call-limit": "catalog:"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@types/eslint__js": "catalog:",
     "@types/node": "catalog:",
-    "chalk": "catalog:",
     "eslint": "catalog:",
     "prettier": "catalog:",
     "tap": "catalog:",
     "tar": "catalog:",
-    "tshy": "catalog:",
+    "typedoc": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
   },
   "license": "BSD-2-Clause-Patent",
   "engines": {
-    "node": ">=22",
-    "pnpm": "9"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "format": "prettier --write . --log-level warn --ignore-path ../../.prettierignore --cache",
     "format:check": "prettier --check . --ignore-path ../../.prettierignore --cache",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
-    "prepare": "tshy",
-    "presnap": "tshy",
+    "prepack": "tsc -p tsconfig.publish.json && ../../scripts/update-dist-exports.ts",
     "snap": "tap",
-    "pretest": "tshy",
     "test": "tap",
-    "posttest": "tsc --project tsconfig.test.json",
-    "watch": "tshy --watch"
+    "posttest": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
   },
   "tap": {
     "extends": "../../tap-config.yaml"
   },
   "prettier": "../../.prettierrc.js",
-  "module": "./dist/esm/index.js",
+  "module": "./src/index.ts",
   "type": "module",
   "exports": {
     "./package.json": "./package.json",
     ".": {
       "import": {
-        "@nrz/source": "./src/index.ts",
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
+        "default": "./src/index.ts"
       }
     },
     "./browser": {
       "import": {
-        "@nrz/source": "./src/browser.ts",
-        "types": "./dist/esm/browser.d.ts",
-        "default": "./dist/esm/browser.js"
+        "default": "./src/browser.ts"
       }
     }
   },
   "files": [
     "dist"
-  ]
+  ],
+  "bugs": {
+    "url": "https://github.com/khulnasoft/nrz/issues"
+  },
+  "homepage": "https://github.com/khulnasoft/nrz/tree/main/src/graph#readme"
 }

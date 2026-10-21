@@ -1,0 +1,45 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/commands/login.ts > TAP > must match snapshot 1`] = `
+Usage:
+
+\`\`\`
+nrz login
+\`\`\`
+
+Authenticate against a registry, and store the token in the appropriate config file for later use.
+
+There is no default registry, so a registry must either already be configured or be provided with \`--registry=<url>\`. On success the registry is written to the project's \`nrz.json\`, so that it applies to this project only. Pass \`--config=user\` to configure it for every project instead.
+
+## Options
+
+### registry
+
+Registry URL to authenticate against. Saved to nrz.json.
+
+\`\`\`
+--registry=<url>
+\`\`\`
+
+### identity
+
+Identity namespace used to store auth tokens.
+
+\`\`\`
+--identity=<name>
+\`\`\`
+
+### config
+
+Which config file to write the registry to. Defaults to \`project\`.
+
+\`\`\`
+--config=<user | project>
+\`\`\`
+
+`

@@ -1,11 +1,11 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
-import { type PackageInfoClient } from '@nrz/package-info'
-import { type RollbackRemove } from '@nrz/rollback-remove'
-import { Spec } from '@nrz/spec'
-import { resolve } from 'path'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { RollbackRemove } from '@nrz/rollback-remove'
+import { getOptions, Spec } from '@nrz/spec'
+import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { type Diff } from '../../src/diff.ts'
+import type { Diff } from '../../src/diff.ts'
 
 import { addNodes } from '../../src/reify/add-nodes.ts'
 
@@ -21,6 +21,11 @@ const mockPackageInfo = {
       throw new Error('failer fails to extract')
     }
     extracted.push([spec, target])
+    return {
+      integrity:
+        'sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000==',
+      resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+    }
   },
 } as unknown as PackageInfoClient
 
@@ -35,6 +40,15 @@ const node = (props: Record<string, any>) => ({
   resolvedLocation: (scurry: PathScurry) =>
     scurry.cwd.resolve(props.location).fullpath(),
 })
+
+const configData = {
+  registry: 'https://registry.npmjs.org/',
+  // the `npm` alias is no longer built in; configure it so the default
+  // registry DepID hydrates back to the `npm` alias name
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
+
+const specOptions = getOptions(configData)
 
 const diff = {
   to: {
@@ -135,16 +149,61 @@ const diff = {
         isOptional: isOptionalTrue,
         edgesIn: new Set(),
       }),
+      // this one is already extracted, so skip it
+      node({
+        id: joinDepIDTuple([
+          'registry',
+          '',
+          'already-extracted@1.2.3',
+        ]),
+        inNrzStore: inNrzStoreTrue,
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple([
+            'registry',
+            '',
+            'already-extracted@1.2.3',
+          ]) +
+          '/node_modules/already-extracted',
+        name: 'already-extracted',
+        manifest: {
+          name: 'already-extracted',
+          version: '1.2.3',
+        },
+        isOptional: isOptionalFalse,
+        extracted: true,
+      }),
     ]),
   },
 } as unknown as Diff
 
-const scurry = new PathScurry(t.testdirName)
+// existing targets get moved away first
+const target = (name: string) => ({
+  [joinDepIDTuple(['registry', '', `${name}@1.2.3`])]: {
+    node_modules: { [name]: {} },
+  },
+})
+const scurry = new PathScurry(
+  t.testdir({
+    node_modules: {
+      '.nrz': {
+        ...target('foo'),
+        ...target('bar'),
+        ...target('failer'),
+        ...target('already-extracted'),
+      },
+    },
+  }),
+)
 
 await Promise.all(
-  addNodes(diff, scurry, mockRemover, {}, mockPackageInfo).map(x =>
-    x(),
-  ),
+  addNodes(
+    diff,
+    scurry,
+    mockRemover,
+    getOptions(configData),
+    mockPackageInfo,
+  ).map(x => x()),
 )
 
 t.notMatch(
@@ -179,23 +238,41 @@ t.strictSame(removed, [
   ),
 ])
 
-t.strictSame(extracted, [
+// verify that already-extracted node was not removed or extracted
+t.notMatch(
+  removed,
   [
-    Spec.parse('foo@1.2.3'),
     resolve(
       t.testdirName,
       'node_modules/.nrz/' +
-        joinDepIDTuple(['registry', '', 'foo@1.2.3']) +
-        '/node_modules/foo',
+        joinDepIDTuple(['registry', '', 'already-extracted@1.2.3']) +
+        '/node_modules/already-extracted',
     ),
   ],
+  'already-extracted node should not be removed',
+)
+
+t.strictSame(
+  extracted,
   [
-    Spec.parse('bar@1.2.3'),
-    resolve(
-      t.testdirName,
-      'node_modules/.nrz/' +
-        joinDepIDTuple(['registry', '', 'bar@1.2.3']) +
-        '/node_modules/bar',
-    ),
+    [
+      Spec.parse('foo', '1.2.3', specOptions),
+      resolve(
+        t.testdirName,
+        'node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'foo@1.2.3']) +
+          '/node_modules/foo',
+      ),
+    ],
+    [
+      Spec.parse('bar', '1.2.3', specOptions),
+      resolve(
+        t.testdirName,
+        'node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'bar@1.2.3']) +
+          '/node_modules/bar',
+      ),
+    ],
   ],
-])
+  'already-extracted node should not be in extracted list',
+)

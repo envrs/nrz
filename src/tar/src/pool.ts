@@ -1,98 +1,111 @@
-import { error } from '@nrz/error-cause'
-import os from 'os'
-import { UnpackRequest } from './unpack-request.ts'
+import { readFile } from 'node:fs/promises'
+import { linkFromStore } from './link-tree.ts'
+import type {
+  LinkFromStoreOptions,
+  StoreLinkResult,
+} from './link-tree.ts'
+import type { StoreIndex } from './store-index.ts'
+import type { TarballFormat } from '@nrz/types'
 import {
-  isResponseOK,
-  type ResponseError,
-  type ResponseOK,
-  Worker,
-} from './worker.ts'
-
-export * from './worker.ts'
+  unpack,
+  unpackFileParallel,
+  unpackFileSync,
+  unpackParallel,
+  unpackSync,
+  unpackToStoreSync,
+} from './unpack.ts'
 
 /**
- * Automatically expanding/contracting set of workers to maximize parallelism
- * of unpack operations up to 1 less than the number of CPUs (or 1).
+ * Which decompress/write pair {@link Pool} uses, from `NRZ_TAR_SYNC`.
+ * Both explicit values are field kill switches: either restores an
+ * older behaviour without a release.
  *
- * `pool.unpack(tarData, target)` will perform the unpack operation
- * synchronously, in one of these workers, and returns a promise when the
- * worker has confirmed completion of the task.
+ * - unset (default): inflate on libuv's threadpool, write on the main
+ *   thread. Each half is the faster of its two options, and nothing
+ *   ties them together.
+ * - `1`: inflate and write on the main thread -- the pre-parallel
+ *   default, for a host where the threadpool hop costs more than the
+ *   overlap saves.
+ * - `0`: the fully async writers, off the main thread throughout.
+ */
+const mode = process.env.NRZ_TAR_SYNC
+
+/**
+ * Unpacks tarballs into place.
+ *
+ * Decompression runs on libuv's threadpool, so packages inflate in
+ * parallel; the files are then written synchronously on the main
+ * thread, which is measurably faster than the async writers (the libuv
+ * round trip per file costs more than the IO). `NRZ_TAR_SYNC` switches
+ * that pairing; see the constant above.
+ *
+ * There is no queue here. The only limiter is the caller's: reify caps
+ * extraction at `Math.max(availableParallelism() - 1, 1) * 8` in flight
+ * (`@nrz/graph`, `src/reify/index.ts`). A consumer that is not reify
+ * is unbounded -- add your own cap. How many inflate at once is capped
+ * lower and elsewhere, by `UV_THREADPOOL_SIZE` (4 by default).
  */
 export class Pool {
   /**
-   * Number of workers to emplly. Defaults to 1 less than the number of
-   * CPUs, or 1.
+   * Provide the tardata to be unpacked, and the location where it's to be
+   * placed. Resolves when the tarball has been extracted.
    */
-  /* c8 ignore next */
-  jobs: number = 8 * (Math.max(os.availableParallelism(), 2) - 1)
-  /**
-   * Set of currently active worker threads
-   */
-  workers = new Set<Worker>()
-  /**
-   * Queue of requests awaiting an available worker
-   */
-  queue: UnpackRequest[] = []
-  /**
-   * Requests that have been assigned to a worker, but have not yet
-   * been confirmed completed.
-   */
-  pending = new Map<number, UnpackRequest>()
+  async unpack(
+    tarData: Buffer,
+    target: string,
+    format?: TarballFormat,
+  ): Promise<void> {
+    if (mode === '0') return unpack(tarData, target, format)
+    if (mode === '1') return unpackSync(tarData, target, format)
+    return unpackParallel(tarData, target, format)
+  }
 
-  // handle a message from the worker
-  #onMessage(w: Worker, m: ResponseError | ResponseOK) {
-    const { id } = m
-    // a request has been met or failed, report and either
-    // pick up the next item in the queue, or terminate worker
-    const ur = this.pending.get(id)
-    /* c8 ignore next */
-    if (!ur) return
-    if (isResponseOK(m)) {
-      ur.resolve()
-      /* c8 ignore start - nearly impossible in normal circumstances */
-    } else {
-      const message =
-        m.error instanceof Error ? m.error.message : String(m.error)
-      ur.reject(
-        error(message || 'failed without error message', {
-          found: m,
-          cause: m.error,
-        }),
+  /**
+   * Same, reading the tarball from a file and skipping `offset` leading
+   * bytes, so a cache entry is unpacked without loading it into the
+   * registry client's in-memory cache.
+   */
+  async unpackFile(
+    file: string,
+    target: string,
+    offset = 0,
+    format?: TarballFormat,
+  ): Promise<void> {
+    if (mode === '0') {
+      return unpack(
+        (await readFile(file)).subarray(offset),
+        target,
+        format,
       )
     }
-    /* c8 ignore stop */
-    const next = this.queue.shift()
-    if (!next) {
-      this.workers.delete(w)
-    } else {
-      void w.process(next)
+    if (mode === '1') {
+      return unpackFileSync(file, target, offset, format)
     }
-  }
-
-  // create a new worker
-  #createWorker(req: UnpackRequest) {
-    const w: Worker = new Worker((m: ResponseError | ResponseOK) =>
-      this.#onMessage(w, m),
-    )
-    this.workers.add(w)
-    void w.process(req)
+    return unpackFileParallel(file, target, offset, format)
   }
 
   /**
-   * Provide the tardata to be unpacked, and the location where it's to be
-   * placed. Will create a new worker up to the `jobs` value, and then start
-   * pushing in the queue for workers to pick up as they become available.
-   *
-   * Returned promise resolves when the provided tarball has been extracted.
+   * Hardlink (or copy) a global store entry into `target`. Resolves
+   * how, with the index, or false on a store miss. See
+   * {@link linkFromStore}.
    */
-  async unpack(tarData: Buffer, target: string) {
-    const ur = new UnpackRequest(tarData, target)
-    this.pending.set(ur.id, ur)
-    if (this.workers.size < this.jobs) {
-      this.#createWorker(ur)
-    } else {
-      this.queue.push(ur)
-    }
-    return ur.promise
+  async linkFromStore(
+    storeEntry: string,
+    target: string,
+    opts?: LinkFromStoreOptions,
+  ): Promise<StoreLinkResult> {
+    return linkFromStore(storeEntry, target, opts)
+  }
+
+  /**
+   * Explode a tarball into `dir` for the global store. See
+   * {@link unpackToStoreSync}.
+   */
+  async unpackToStore(
+    tarData: Buffer,
+    dir: string,
+    format?: TarballFormat,
+  ): Promise<{ index: StoreIndex }> {
+    return unpackToStoreSync(tarData, dir, format)
   }
 }

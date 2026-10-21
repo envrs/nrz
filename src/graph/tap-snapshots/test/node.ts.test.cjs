@@ -6,25 +6,37 @@
  */
 'use strict'
 exports[`test/node.ts > TAP > Node > should print with special tag name 1`] = `
-Node [@nrz/graph.Node] {
+@nrz/graph.Node {
+  confused: false,
+  extracted: false,
   edgesIn: Set(0) {},
   edgesOut: Map(0) {},
-  id: 'file·.',
+  workspaces: undefined,
+  id: 'file~_d',
   importer: true,
   mainImporter: true,
   graph: {},
   integrity: undefined,
+  resolvedFromLockfile: false,
   manifest: [Object],
   projectRoot: #
   registry: undefined,
+  modifier: undefined,
   version: '1.0.0',
-  resolved: undefined
+  resolved: undefined,
+  platform: undefined,
+  bins: undefined,
+  bindingGyp: undefined,
+  built: false,
+  buildState: 'none',
+  peerSetHash: undefined,
+  detached: false
 }
 `
 
 exports[`test/node.ts > TAP > Node > should serialize node to JSON 1`] = `
 {
-  "id": "file·.",
+  "id": "file~_d",
   "name": "root",
   "version": "1.0.0",
   "location": "./path/to/importer",
@@ -35,7 +47,9 @@ exports[`test/node.ts > TAP > Node > should serialize node to JSON 1`] = `
   },
   "projectRoot": "{ROOT}",
   "dev": false,
-  "optional": false
+  "optional": false,
+  "confused": false,
+  "buildState": "none"
 }
 `
 
@@ -71,6 +85,34 @@ exports[`test/node.ts > TAP > Node > should stringify remote node 1`] = `
 remote(https://x.com/x.tgz):x@1.0.0
 `
 
+exports[`test/node.ts > TAP > Node > should stringify remote node as expected 1`] = `
+remote(https://example.com/x.tgz)
+`
+
+exports[`test/node.ts > TAP > Node > should stringify remote node with integrity 1`] = `
+Object {
+  "buildState": "none",
+  "confused": false,
+  "dev": false,
+  "id": "remote~https_c++example.com+x.tgz",
+  "importer": false,
+  "integrity": "sha512-deadbeef",
+  "location": "./node_modules/.nrz/remote~https_c++example.com+x.tgz/node_modules/remote~https_c++example.com+x.tgz",
+  "manifest": Object {
+    "dist": Object {
+      "integrity": "sha512-deadbeef",
+    },
+  },
+  "modifier": undefined,
+  "name": "remote~https_c++example.com+x.tgz",
+  "optional": false,
+  "platform": undefined,
+  "projectRoot": "{ROOT}",
+  "resolved": "https://example.com/x.tgz",
+  "version": undefined,
+}
+`
+
 exports[`test/node.ts > TAP > Node > should stringify remote node with no manifest 1`] = `
 remote(https://x.com/x.tgz)
 `
@@ -81,4 +123,55 @@ root:root
 
 exports[`test/node.ts > TAP > Node > should stringify workspace node 1`] = `
 workspace:a
+`
+
+exports[`test/node.ts > TAP > node with peerSetHash > should serialize node with peerSetHash 1`] = `
+Object {
+  "buildState": "none",
+  "confused": false,
+  "dev": false,
+  "id": "~npm~test-peer@2.0.0~peer.abc123",
+  "importer": false,
+  "integrity": undefined,
+  "location": "./node_modules/.nrz/~npm~test-peer@2.0.0~peer.abc123/node_modules/test-peer",
+  "manifest": Object {
+    "name": "test-peer",
+    "version": "2.0.0",
+  },
+  "modifier": undefined,
+  "name": "test-peer",
+  "optional": false,
+  "peerSetHash": "peer.abc123",
+  "platform": undefined,
+  "projectRoot": "{ROOT}",
+  "resolved": undefined,
+  "version": "2.0.0",
+}
+`
+
+exports[`test/node.ts > TAP > rawManifest getter and setter > should serialize node to JSON 1`] = `
+Object {
+  "buildState": "none",
+  "confused": true,
+  "dev": false,
+  "id": "~npm~foo@1.0.0",
+  "importer": false,
+  "integrity": undefined,
+  "location": "./node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo",
+  "manifest": Object {
+    "name": "foo",
+    "version": "1.0.0",
+  },
+  "modifier": undefined,
+  "name": "foo",
+  "optional": false,
+  "platform": undefined,
+  "projectRoot": "{ROOT}",
+  "rawManifest": Object {
+    "name": "test",
+    "version": "1.0.0",
+  },
+  "resolved": undefined,
+  "version": "1.0.0",
+}
 `

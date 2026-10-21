@@ -1,0 +1,451 @@
+---
+title: Migrating from yarn to nrz
+sidebar:
+  label: From yarn
+  order: 2
+---
+
+This guide covers migration from both **yarn v1 (classic)** and **yarn
+v2+ (berry)**. Key differences are called out where they apply.
+
+## Quick Start
+
+<Code
+  code={`# Install nrz globally
+$ npm install -g nrz
+
+# Configure a registry -- nrz has no default
+
+$ nrz config set registry=https://registry.npmjs.org/
+
+# In your existing project, run:
+
+$ nrz install $ nrz build`} title="Terminal" lang="bash" />
+
+Unlike yarn, **nrz has no default registry** — commands that resolve
+or fetch packages fail with a config error until one is set. The
+snippet above points it at the public npm registry; if you have a
+nrz.io account, run
+[`nrz setup`](/client/registries#getting-started-with-nrz-setup)
+instead to configure your account's registry aliases. See
+[Registries](/client/registries).
+
+nrz reads your existing `package.json` files and resolves
+dependencies. The `yarn.lock` file is not migrated — nrz performs a
+fresh resolution and creates `nrz-lock.json`.
+
+---
+
+## Command Mapping
+
+| yarn                             | nrz                             | Notes                                                                 |
+| -------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| `yarn` / `yarn install`          | `nrz install`                   | Does **not** run lifecycle scripts                                    |
+| `yarn add <pkg>`                 | `nrz install <pkg>`             |                                                                       |
+| `yarn add -D <pkg>`              | `nrz install -D <pkg>`          |                                                                       |
+| `yarn remove <pkg>`              | `nrz uninstall <pkg>`           |                                                                       |
+| `yarn run <script>`              | `nrz run <script>`              |                                                                       |
+| `yarn <script>`                  | `nrz run <script>`              | See [fallback-command](/client/configuring#--fallback-commandcommand) |
+| `yarn dlx <pkg>` / `npx <pkg>`   | `nrx <pkg>`                     | Run remote packages                                                   |
+| `yarn exec <cmd>`                | `nrz exec <cmd>`                |                                                                       |
+| `yarn init`                      | `nrz init`                      |                                                                       |
+| `yarn pack`                      | `nrz pack`                      |                                                                       |
+| `yarn npm publish`               | `nrz publish`                   |                                                                       |
+| `yarn npm login`                 | `nrz login`                     |                                                                       |
+| `yarn npm whoami`                | `nrz whoami`                    |                                                                       |
+| `yarn workspaces list`           | `nrz list`                      |                                                                       |
+| `yarn why <pkg>`                 | `nrz query '#<pkg>'`            | DSS query; see [Selectors](/client/selectors)                         |
+| `yarn install --frozen-lockfile` | `nrz install --frozen-lockfile` |                                                                       |
+| `yarn install --immutable`       | `nrz install --expect-lockfile` |                                                                       |
+| `yarn config set <key> <val>`    | `nrz config set <key>=<val>`    |                                                                       |
+| `yarn up <pkg>`                  | `nrz install <pkg>`             | Re-resolves to latest matching                                        |
+
+### Shorthand Script Execution
+
+Yarn lets you run scripts without `run` (e.g., `yarn build`). nrz
+supports this via the `fallback-command` config:
+
+<Code
+  code="$ nrz config set fallback-command=run-exec"
+  title="Terminal"
+  lang="bash"
+/>
+
+After setting this, `nrz build` will first check for a nrz command
+named `build`, and if none matches, look for a `package.json` script.
+
+---
+
+## Configuration
+
+### .yarnrc.yml / .yarnrc → nrz.json
+
+yarn v1 uses `.yarnrc` and `.npmrc`. yarn v2+ uses `.yarnrc.yml`. nrz
+uses `nrz.json`.
+
+**yarn v2+ example:**
+
+<Code
+  code={`# .yarnrc.yml (yarn berry)
+npmRegistryServer: "https://registry.internal.company.com/"
+npmScopes:
+  mycompany:
+    npmRegistryServer: "https://npm.mycompany.com/"
+    npmAuthToken: "abc123"`}
+  title=".yarnrc.yml"
+  lang="yaml"
+/>
+
+**nrz equivalent:**
+
+<Code
+  code={JSON.stringify(
+    {
+      registry: 'https://registry.internal.company.com/',
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Auth tokens are stored separately in nrz's keychain, not in config
+files. See [Authentication](#authentication) below.
+
+**yarn v1 example:**
+
+<Code
+  code={`# .npmrc (yarn classic)
+registry=https://registry.internal.company.com/
+@mycompany:registry=https://npm.mycompany.com/`}
+  title=".npmrc"
+  lang="ini"
+/>
+
+Same `nrz.json` as above.
+
+---
+
+## Registry Configuration
+
+### Scoped Registries
+
+Both yarn and nrz support scope-to-registry mapping:
+
+<Code
+  code={JSON.stringify(
+    {
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+### Named Registry Aliases
+
+nrz also supports [named registry aliases](/client/registries), which
+are more explicit than scoped registries. Dependencies reference a
+named registry directly, removing ambiguity:
+
+<Code
+  code={JSON.stringify(
+    {
+      registries: {
+        internal: 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      dependencies: {
+        '@mycompany/utils': 'internal:@mycompany/utils@^2.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json"
+  lang="json"
+/>
+
+---
+
+## Authentication
+
+yarn v1 stores tokens in `.npmrc`. yarn v2+ stores them in
+`.yarnrc.yml`. Both approaches risk accidental commits of secrets.
+
+nrz stores auth tokens in an XDG-compliant keychain file, separate
+from project configuration.
+
+<Code
+  code={`# Log in to default registry
+$ nrz login
+
+# Log in to a custom registry
+
+$ nrz login --registry=https://npm.mycompany.com/`} title="Terminal"
+lang="bash" />
+
+### CI Environments
+
+<Code
+  code={`# yarn v2+
+YARN_NPM_AUTH_TOKEN=abc123 yarn install
+
+# nrz
+
+NRZ_TOKEN=abc123 nrz install`} title="Terminal" lang="bash" />
+
+See [Authentication](/client/auth) for full details.
+
+---
+
+## Lockfile
+
+yarn v1 uses `yarn.lock` (custom format). yarn v2+ also uses
+`yarn.lock` (YAML-based). nrz uses `nrz-lock.json`.
+
+When you first run `nrz install`, nrz creates `nrz-lock.json` from a
+fresh resolution. Your `yarn.lock` is not read.
+
+**What to do:**
+
+1. Run `nrz install` to generate `nrz-lock.json`
+2. Commit `nrz-lock.json`
+3. Optionally remove `yarn.lock` once you've fully switched
+
+---
+
+## Install Script Protection
+
+This is a major difference from yarn.
+
+**yarn v1** runs all lifecycle scripts automatically. **yarn v2+**
+runs scripts for direct dependencies but blocks transitive dependency
+scripts by default (you can allowlist via `.yarnrc.yml`).
+
+**nrz** goes further: `nrz install` runs **no scripts at all** by
+default. The build step is completely separate:
+
+<Code
+  code={`# Phase 1: Install (no code executes)
+$ nrz install
+
+# Phase 2: Build (runs scripts, skipping known malware)
+
+$ nrz build`} title="Terminal" lang="bash" />
+
+By default, `nrz build` uses the target
+`:scripts:not(:built):not(:malware)` — it only runs scripts for
+packages that need building and aren't flagged as malware by
+[Socket](https://socket.dev/).
+
+You can target scripts precisely:
+
+<Code
+  code={`# Only allow specific trusted packages
+$ nrz build --target="#esbuild, #node-gyp"
+
+# Persist your choice
+
+$ nrz config set "command.build.target=#esbuild, #node-gyp"`}
+title="Terminal" lang="bash" />
+
+See [`nrz build`](/client/commands/build) for full details.
+
+---
+
+## Workspaces
+
+### yarn v1
+
+yarn v1 defines workspaces in the root `package.json`:
+
+<Code
+  code={JSON.stringify(
+    {
+      private: true,
+      workspaces: ['packages/*'],
+    },
+    null,
+    2,
+  )}
+  title="package.json (yarn v1)"
+  lang="json"
+/>
+
+### yarn v2+
+
+yarn v2+ is similar but also supports the `workspaces` field in
+`.yarnrc.yml` for additional filtering.
+
+### nrz
+
+**Your existing yarn workspaces just work.** nrz reads the
+`workspaces` field of the root `package.json`, in both the array form
+above and the object form, where the `nohoist` key is parsed and
+ignored. `nrz install` copies the globs to `nrz.json` as a plain
+array, dropping `nohoist`:
+
+<Code
+  code={JSON.stringify(
+    {
+      private: true,
+      workspaces: {
+        packages: ['packages/*'],
+        nohoist: ['**/react-native'],
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json (yarn v1, object form)"
+  lang="json"
+/>
+
+Exclusion patterns such as `!packages/legacy` are honored and copied
+too. `package.json` is left as-is for yarn. Commit `nrz.json`:
+`nrz ci` reads workspaces from it only. The `workspaces` field of
+`.yarnrc.yml` is not read, so any yarn v2+ filtering defined there
+needs to move.
+
+Edit `nrz.json` to use nrz's **named workspace groups** for targeted
+operations. If `nrz.json` has a `workspaces` field it wins outright,
+and the `package.json` field is ignored rather than merged, so later
+`package.json` edits need copying too:
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: {
+        apps: 'apps/*',
+        libs: ['packages/*', 'shared/*'],
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+<Code
+  code={`# Run tests only in the libs group
+$ nrz run test -g libs
+
+# Run build across all workspaces
+
+$ nrz run build --recursive`} title="Terminal" lang="bash" />
+
+### Workspace Commands
+
+| yarn                            | nrz                                               |
+| ------------------------------- | ------------------------------------------------- |
+| `yarn workspace <name> <cmd>`   | `cd <path> && nrz <cmd>` or `nrz <cmd> -w <path>` |
+| `yarn workspaces foreach <cmd>` | `nrz <cmd> --recursive`                           |
+
+See [Workspaces](/client/workspaces) for full details.
+
+---
+
+## Resolutions → Graph Modifiers
+
+yarn uses `resolutions` in `package.json` to force dependency
+versions. nrz uses [Graph Modifiers](/client/graph-modifiers) in
+`nrz.json`.
+
+<Code
+  code={JSON.stringify(
+    {
+      resolutions: {
+        lodash: '^4.17.21',
+        'express/qs': '6.10.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json (yarn)"
+  lang="json"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      modifiers: {
+        '#lodash': '^4.17.21',
+        ':root > #express > #qs': '=6.10.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Graph Modifiers use DSS selectors, which give you more precise control
+over which instances of a dependency are affected.
+
+---
+
+## Plug'n'Play (PnP)
+
+If you're using yarn v2+ with Plug'n'Play (no `node_modules`), the
+switch to nrz means going back to a `node_modules`-based layout. This
+is generally straightforward — nrz creates a standard `node_modules`
+directory.
+
+If your project relies on PnP-specific features (like `.pnp.cjs`
+loaders), you'll need to remove those references from your build
+tooling and runtime configuration.
+
+---
+
+## Features Not in nrz
+
+Some yarn-specific features don't have direct equivalents:
+
+- **Plug'n'Play / Zero-Installs** — nrz uses `node_modules`
+- **Constraints** — Use nrz's [DSS query system](/client/selectors)
+  for dependency policy enforcement
+- **Patches** (`yarn patch`) — Not yet available in nrz
+- **Protocols** (`portal:`, `patch:`) — nrz supports `file:`,
+  `workspace:`, `git:`, and `registry:` specifiers
+
+---
+
+## Migration Checklist
+
+1. Install nrz: `npm install -g nrz`
+2. Create `nrz.json` with your registry configuration
+3. Move scoped registry config from `.yarnrc.yml` / `.npmrc` to
+   `nrz.json`
+4. Leave your `workspaces` field in `package.json` — `nrz install`
+   copies it to `nrz.json`
+5. Move `resolutions` from `package.json` to `modifiers` in `nrz.json`
+6. If using PnP, remove `.pnp.cjs`, `.pnp.loader.mjs`, and related
+   `.yarnrc.yml` settings
+7. Run `nrz install` then `nrz build`
+8. Commit `nrz.json` and `nrz-lock.json`
+9. Update CI scripts: replace `yarn install --immutable` with
+   `nrz install --expect-lockfile && nrz build`
+10. Update CI auth: replace `YARN_NPM_AUTH_TOKEN` with `NRZ_TOKEN`
+11. Update any `yarn dlx` usage to `nrx`

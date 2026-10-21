@@ -1,0 +1,448 @@
+---
+title: Migrating from npm to nrz
+sidebar:
+  label: From npm
+  order: 1
+---
+
+## Quick Start
+
+<Code
+  code={`# Install nrz globally
+$ npm install -g nrz
+
+# Configure the npm registry alias -- nrz has no default
+
+$ nrz config set registries=npm=https://registry.npmjs.org/
+
+# In your existing project, run:
+
+$ nrz install $ nrz build`} title="Terminal" lang="bash" />
+
+That's it for basic usage. nrz reads your existing `package.json` and
+resolves dependencies. Below are the details on what's different and
+how to handle specific scenarios.
+
+### First: configure your registry
+
+Unlike npm, **nrz has no default registry**. Commands that resolve or
+fetch packages fail with a config error until one is set:
+
+```
+Config Error: Missing registry configuration.
+
+nrz has no default registry. Run `nrz setup` to get configured.
+
+See https://docs.nrz.khulnasoft.com/cli for other ways to set a registry.
+```
+
+If you have a nrz.io account, the guided path is
+[`nrz setup`](/client/registries#getting-started-with-nrz-setup),
+which configures your account's registry aliases for you.
+
+To instead keep npm's behavior, point the `npm` alias at the public
+npm registry:
+
+<Code
+  code={`$ nrz config set registries=npm=https://registry.npmjs.org/`}
+  title="Terminal"
+  lang="bash"
+/>
+
+Commands that install packages (`nrz install`, `nrz update`,
+`nrz uninstall`, `nrz ci`, `nrx`/`nrz exec`) require that alias
+specifically (or the one named by `default-registry-alias`, if you
+changed it). A scalar `--registry` / `NRZ_REGISTRY` is enough for
+other registry-hitting commands (for example `nrz ping`), but not for
+install.
+
+Or set it in `nrz.json`, pass `--registries npm=<url>` per command, or
+export `NRZ_REGISTRIES`. See [Registries](/client/registries).
+
+---
+
+## Command Mapping
+
+| npm                            | nrz                                        | Notes                                           |
+| ------------------------------ | ------------------------------------------ | ----------------------------------------------- |
+| `npm install`                  | `nrz install`                              | Does **not** run lifecycle scripts              |
+| `npm install <pkg>`            | `nrz install <pkg>`                        | Same behavior                                   |
+| `npm install -D <pkg>`         | `nrz install -D <pkg>`                     | Same flags                                      |
+| `npm uninstall <pkg>`          | `nrz uninstall <pkg>`                      | Aliases: `rm`, `u`                              |
+| `npm run <script>`             | `nrz run <script>`                         | Aliases: `r`, `run-script`                      |
+| `npm test`                     | `nrz run test`                             | No `nrz test` shorthand                         |
+| `npm start`                    | `nrz run start`                            | No `nrz start` shorthand                        |
+| `npx <pkg>`                    | `nrx <pkg>`                                | Run remote packages                             |
+| `npm exec <cmd>`               | `nrz exec <cmd>`                           | Local bins on PATH                              |
+| `npm init`                     | `nrz init`                                 | Creates `package.json`                          |
+| `npm pack`                     | `nrz pack`                                 |                                                 |
+| `npm publish`                  | `nrz publish`                              |                                                 |
+| `npm login`                    | `nrz login`                                |                                                 |
+| `npm whoami`                   | `nrz whoami`                               |                                                 |
+| `npm ls`                       | `nrz list`                                 | Alias: `ls`                                     |
+| `npm query`                    | `nrz query`                                | Uses DSS, not CSS selectors                     |
+| `npm ci`                       | `nrz install --expect-lockfile`            | Strict lockfile mode                            |
+| `npm install --ignore-scripts` | `nrz install`                              | Default behavior                                |
+| `npm audit`                    | `nrz query ':malware'`                     | More powerful; see [Security](/client/security) |
+| `npm config set <key>=<val>`   | `nrz config set <key>=<val>`               | Writes to `nrz.json`                            |
+| `npm overrides`                | [Graph Modifiers](/client/graph-modifiers) | DSS-based, more precise                         |
+
+---
+
+## Configuration
+
+### .npmrc → nrz.json
+
+npm reads configuration from `.npmrc` files (INI format, multiple
+locations). nrz uses a single `nrz.json` file in your project root,
+plus an optional user-level `nrz.json` in the XDG config directory.
+
+<Code
+  code={`# .npmrc (npm)
+registry=https://registry.internal.company.com/
+@mycompany:registry=https://npm.mycompany.com/
+save-exact=true`}
+  title=".npmrc"
+  lang="ini"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      registry: 'https://registry.internal.company.com/',
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+To create this file interactively:
+
+<Code
+  code={`$ nrz config set registry=https://registry.internal.company.com/
+$ nrz config set scoped-registries=@mycompany=https://npm.mycompany.com/`}
+  title="Terminal"
+  lang="bash"
+/>
+
+### User vs Project Config
+
+| npm                          | nrz                           |
+| ---------------------------- | ----------------------------- |
+| `~/.npmrc` (user)            | XDG config dir `nrz/nrz.json` |
+| `.npmrc` (project)           | `nrz.json` (project root)     |
+| `$PREFIX/etc/npmrc` (global) | No global config file         |
+
+View config locations:
+
+<Code
+  code={`$ nrz config location --config=user
+$ nrz config location --config=project`}
+  title="Terminal"
+  lang="bash"
+/>
+
+---
+
+## Registry Configuration
+
+nrz handles registries similarly to npm, with some additions.
+
+### Scoped Registries
+
+npm's scoped registries map directly:
+
+<Code
+  code={`# npm (.npmrc)
+@mycompany:registry=https://npm.mycompany.com/`}
+  title=".npmrc"
+  lang="ini"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+### Named Registry Aliases
+
+nrz also supports [named registry aliases](/client/registries), which
+are more explicit than scope-based mapping. This is a nrz-specific
+feature:
+
+<Code
+  code={JSON.stringify(
+    {
+      registries: {
+        internal: 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Then reference packages explicitly:
+
+<Code
+  code="$ nrz install internal:@mycompany/utils@^2.0"
+  title="Terminal"
+  lang="bash"
+/>
+
+---
+
+## Authentication
+
+### Tokens
+
+npm stores auth tokens in `.npmrc`. nrz stores them in an
+XDG-compliant keychain file, which is less likely to be accidentally
+committed to source control.
+
+<Code
+  code={`# npm: tokens live in .npmrc (risky if committed)
+//registry.npmjs.org/:_authToken=npm_abc123
+
+# nrz: log in interactively
+
+$ nrz login
+
+# nrz: or for custom registries
+
+$ nrz login --registry=https://npm.mycompany.com/`} title="Terminal"
+lang="bash" />
+
+### CI Environments
+
+<Code
+  code={`# npm
+NPM_TOKEN=abc123 npm install
+
+# nrz
+
+NRZ_TOKEN=abc123 nrz install`} title="Terminal" lang="bash" />
+
+For non-default registries, replace non-alphanumeric characters in the
+URL with `_`:
+
+<Code
+  code="NRZ_TOKEN_https_npm_mycompany_com=abc123 nrz install"
+  title="Terminal"
+  lang="bash"
+/>
+
+See [Authentication](/client/auth) for full details.
+
+---
+
+## Lockfile
+
+npm uses `package-lock.json`. nrz uses `nrz-lock.json`.
+
+When you first run `nrz install`, nrz resolves from your
+`package.json` and creates `nrz-lock.json`. Your existing
+`package-lock.json` is not read or migrated — nrz performs a fresh
+resolution.
+
+**What to do:**
+
+1. Run `nrz install` to generate `nrz-lock.json`
+2. Commit `nrz-lock.json` to source control
+3. Optionally remove `package-lock.json` (or keep it if you're running
+   both tools during a transition period)
+
+### CI / Frozen Lockfile
+
+<Code
+  code={`# npm
+$ npm ci
+
+# nrz
+
+$ nrz install --expect-lockfile`} title="Terminal" lang="bash" />
+
+---
+
+## Install Script Protection
+
+This is the biggest behavioral difference from npm.
+
+**npm** runs all lifecycle scripts (`preinstall`, `install`,
+`postinstall`) automatically during `npm install`. This is a known
+supply chain attack vector.
+
+**nrz** separates installation into two phases:
+
+1. **`nrz install`** — Downloads and extracts packages. No scripts
+   run.
+2. **`nrz build`** — Runs lifecycle scripts selectively.
+
+<Code
+  code={`# Install packages (safe — no code executes)
+$ nrz install
+
+# Run build scripts, automatically excluding packages flagged as malware
+
+$ nrz build`} title="Terminal" lang="bash" />
+
+By default, `nrz build` uses the target
+`:scripts:not(:built):not(:malware)`, which skips packages with known
+malware alerts.
+
+You can be more selective:
+
+<Code
+  code={`# Only allow specific packages to run scripts
+$ nrz build --target="#esbuild, #node-gyp"
+
+# Or allow scripts for direct dependencies only
+
+$ nrz build --target=":root > :scripts"`} title="Terminal" lang="bash"
+/>
+
+If you need legacy npm behavior (not recommended):
+
+<Code
+  code="$ nrz install --allow-scripts='*'"
+  title="Terminal"
+  lang="bash"
+/>
+
+See [`nrz build`](/client/commands/build) for full details.
+
+---
+
+## Workspaces
+
+**Your existing npm workspaces just work.** nrz reads the `workspaces`
+field of the root `package.json`, and `nrz install` copies it to
+`nrz.json`:
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: ['packages/*'],
+    },
+    null,
+    2,
+  )}
+  title="package.json"
+  lang="json"
+/>
+
+Exclusion patterns such as `!packages/legacy` are honored and copied
+too. `package.json` is left as-is for npm. Commit `nrz.json`: `nrz ci`
+reads workspaces from it only.
+
+Edit `nrz.json` to use nrz's named groups, which let you run
+operations against a subset of your workspaces:
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: {
+        apps: 'apps/*',
+        libs: 'packages/*',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+### Key Differences
+
+- **Precedence** — if `nrz.json` has a `workspaces` field it wins
+  outright, and the `package.json` field is ignored rather than
+  merged. Once copied, later `package.json` edits are ignored by nrz:
+  update `nrz.json` too.
+- **Named groups** — supported only in `nrz.json`, since a
+  `package.json` using them would be meaningless to npm.
+
+### Workspace Commands
+
+| npm                               | nrz                               |
+| --------------------------------- | --------------------------------- |
+| `npm run test -w packages/a`      | `nrz run test -w packages/a`      |
+| `npm run test --workspaces`       | `nrz run test --recursive`        |
+| `npm install <pkg> -w packages/a` | `nrz install <pkg> -w packages/a` |
+
+See [Workspaces](/client/workspaces) for full details.
+
+---
+
+## Overrides → Graph Modifiers
+
+npm uses `overrides` in `package.json` to force dependency versions.
+nrz uses [Graph Modifiers](/client/graph-modifiers) in `nrz.json`,
+which are powered by DSS selectors and offer more precise targeting.
+
+<Code
+  code={JSON.stringify(
+    {
+      overrides: {
+        lodash: '^4.17.21',
+        'express>qs': '6.10.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json (npm)"
+  lang="json"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      modifiers: {
+        '#lodash': '^4.17.21',
+        ':root > #express > #qs': '=6.10.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Graph Modifiers use CSS-like specificity rules when multiple selectors
+match the same dependency.
+
+---
+
+## Migration Checklist
+
+1. Install nrz: `npm install -g nrz`
+2. In your project root, create `nrz.json` with your registry config
+   (or use `nrz config set`)
+3. Move any scoped registry config from `.npmrc` to `nrz.json`
+4. Leave your `workspaces` field in `package.json` — `nrz install`
+   copies it to `nrz.json`
+5. Move `overrides` from `package.json` to `modifiers` in `nrz.json`
+6. Run `nrz install` then `nrz build`
+7. Commit `nrz.json` and `nrz-lock.json`
+8. Update CI scripts: replace `npm ci` with
+   `nrz install --expect-lockfile && nrz build`
+9. Update CI auth: replace `NPM_TOKEN` with `NRZ_TOKEN`
+10. Update any `npx` usage to `nrx`

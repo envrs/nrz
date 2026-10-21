@@ -1,18 +1,18 @@
-import { type PackageInfoClient } from '@nrz/package-info'
-import { RollbackRemove } from '@nrz/rollback-remove'
+import { graphStep } from '@nrz/output'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { RollbackRemove } from '@nrz/rollback-remove'
 import { availableParallelism } from 'node:os'
 import { callLimit } from 'promise-call-limit'
-import {
-  load as loadActual,
-  type LoadOptions,
-} from '../actual/load.ts'
-import {
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
+import type { DepID } from '@nrz/dep-id'
+import type { LoadOptions } from '../actual/load.ts'
+import { load as loadActual } from '../actual/load.ts'
+import type {
+  AddImportersDependenciesMap,
+  RemoveImportersDependenciesMap,
 } from '../dependencies.ts'
 import { Diff } from '../diff.ts'
-import { type Graph } from '../graph.ts'
-import { lockfile } from '../index.ts'
+import type { Graph } from '../graph.ts'
+import type { GraphModifier } from '../modifiers.ts'
 import {
   lockfileData,
   saveData,
@@ -22,10 +22,18 @@ import { addEdges } from './add-edges.ts'
 import { addNodes } from './add-nodes.ts'
 import { build } from './build.ts'
 import { deleteEdges } from './delete-edges.ts'
+import {
+  carryBuildState,
+  checkNeededBuild,
+} from './check-needed-build.ts'
 import { deleteNodes } from './delete-nodes.ts'
+import { internalHoist } from './internal-hoist.ts'
+import { pruneUnsupportedOptional } from './optional-fail.ts'
 import { rollback } from './rollback.ts'
 import { updatePackageJson } from './update-importers-package-json.ts'
-import { graphStep } from '@nrz/output'
+import { copyFileSync } from 'node:fs'
+import { binChmodAll } from './bin-chmod.ts'
+import { filterNodesByQuery } from '../filter-nodes-by-query.ts'
 
 const limit = Math.max(availableParallelism() - 1, 1) * 8
 
@@ -34,19 +42,39 @@ const limit = Math.max(availableParallelism() - 1, 1) * 8
 
 export type ReifyOptions = LoadOptions & {
   add?: AddImportersDependenciesMap
+  allowScripts: string
   remove?: RemoveImportersDependenciesMap
   graph: Graph
   actual?: Graph
   packageInfo: PackageInfoClient
+  modifiers?: GraphModifier
+  remover: RollbackRemove
+  update?: boolean
+  saveExact?: boolean
+  savePrefix?: string
+}
+
+export type ReifyResult = {
+  /**
+   * The diff object that was used to reify the project.
+   */
+  diff: Diff
+  /**
+   * Optional queue of DepIDs that requires building (running lifecycle scripts
+   * and binary linking) after the reification is complete.
+   */
+  buildQueue?: DepID[]
 }
 
 /**
  * Make the current project match the supplied graph.
  */
-export const reify = async (options: ReifyOptions) => {
+export const reify = async (
+  options: ReifyOptions,
+): Promise<ReifyResult> => {
   const done = graphStep('reify')
 
-  const { graph, scurry } = options
+  const { graph, scurry, remover } = options
 
   const actual =
     options.actual ??
@@ -56,12 +84,87 @@ export const reify = async (options: ReifyOptions) => {
     })
 
   const diff = new Diff(actual, graph)
-  const remover = new RollbackRemove()
+  carryBuildState(diff)
+
+  // normalise importer edge specs and compute the package.json changes
+  // before deciding whether anything needs reifying: an add whose target
+  // is already in place has no node diff but still has a saved value to
+  // persist. `Diff` compares edge targets only, so the rewrite is safe
+  // after it was built.
+  const saveImportersPackageJson =
+    /* c8 ignore next */
+    (
+      options.add?.modifiedDependencies ||
+      options.remove?.modifiedDependencies
+    ) ?
+      updatePackageJson({
+        add: options.add,
+        remove: options.remove,
+        graph,
+        packageJson: options.packageJson,
+        saveExact: options.saveExact,
+        savePrefix: options.savePrefix,
+      })
+    : undefined
+
+  const noModifiedDependencies =
+    !options.add?.modifiedDependencies &&
+    !options.remove?.modifiedDependencies
+  // Skip optional-only diffs only after a prior reify wrote lockfiles.
+  // Otherwise a first install of an optional-only tree would never extract.
+  const hasLockfiles =
+    !!scurry.lstatSync('nrz-lock.json') &&
+    !!scurry.lstatSync('node_modules/.nrz-lock.json')
+  // a removal is never optional-only: deleting is what reify is for
+  const skipOptionalOnly =
+    noModifiedDependencies &&
+    diff.optionalOnly &&
+    !diff.nodes.delete.size &&
+    !diff.edges.delete.size
+  const skippable =
+    skipOptionalOnly && !options.update && hasLockfiles
+  const res: ReifyResult = { diff }
+  if (!diff.hasChanges() || skippable) {
+    // Even when there are no changes to reify, ensure lockfiles
+    // exist on disk. This handles the case where a project has no
+    // dependencies (or only workspace importers) but still needs
+    // lockfiles written on the first install. A stale flag means
+    // lockfile data changed w/o a node diff (edge spec/type, options,
+    // dev/optional flags), which the lockfiles have to carry.
+    if (!hasLockfiles || graph.lockfileStale) {
+      // with no diff at all the ideal graph is the actual graph, so the
+      // hidden lockfile can be written from it; an optional-only diff
+      // being skipped may only refresh the main lockfile
+      if (!hasLockfiles || !diff.hasChanges()) saveHidden(options)
+      const lfData = lockfileData(options)
+      saveData(lfData, scurry.resolve('nrz-lock.json'), false)
+    }
+    saveImportersPackageJson?.()
+    // Even with no reify changes, report nodes that still need building.
+    // Build state is persisted in the hidden lockfile and loaded into the
+    // actual graph, so check there for pending builds.
+    const pending = [...actual.nodes.values()]
+      .filter(n => n.buildState === 'needed')
+      .map(n => n.id)
+    if (pending.length) {
+      res.buildQueue = pending
+    }
+
+    done()
+    return res
+  }
+
   let success = false
   try {
-    await reify_(options, diff, remover)
+    const { buildQueue } = await reify_(
+      options,
+      diff,
+      remover,
+      saveImportersPackageJson,
+    )
     remover.confirm()
     success = true
+    res.buildQueue = buildQueue
   } finally {
     /* c8 ignore start */
     if (!success) {
@@ -71,29 +174,29 @@ export const reify = async (options: ReifyOptions) => {
   }
 
   done()
+
+  return res
 }
 
 const reify_ = async (
   options: ReifyOptions,
   diff: Diff,
   remover: RollbackRemove,
-) => {
-  const { add, remove, packageInfo, packageJson, scurry } = options
-  const saveImportersPackageJson =
-    add?.modifiedDependencies || remove?.modifiedDependencies ?
-      updatePackageJson({
-        add,
-        remove,
-        graph: options.graph,
-        packageJson,
-      })
-    : undefined
+  saveImportersPackageJson?: () => void,
+): Promise<Omit<ReifyResult, 'diff'>> => {
+  const res: Omit<ReifyResult, 'diff'> = {}
+  const { packageInfo, packageJson, scurry, allowScripts } = options
 
   // before anything else happens, grab the ideal tree as it was resolved
   // so that we can store it in the lockfile. We do this here so that
   // any failed/removed optional deps are not reflected in the lockfile
   // data as it is saved.
   const lfData = lockfileData(options)
+
+  // unsupported optional deps are dropped only after that, so the
+  // lockfile keeps them for other platforms
+  pruneUnsupportedOptional(diff)
+
   const actions: (() => Promise<unknown>)[] = addNodes(
     diff,
     scurry,
@@ -106,28 +209,44 @@ const reify_ = async (
   if (actions.length) await callLimit(actions, { limit })
 
   // create all node_modules symlinks, and link bins to nm/.bin
-  const edgeActions: Promise<unknown>[] = addEdges(
-    diff,
-    packageJson,
-    scurry,
-    remover,
+  const edgeActions = addEdges(diff, scurry, remover)
+  if (edgeActions.length) await callLimit(edgeActions, { limit })
+
+  await internalHoist(diff.to, options, remover)
+
+  // looks up all nodes setting buildState = 'needed'
+  // on nodes that require building
+  checkNeededBuild({ diff, scurry, packageJson })
+
+  // Filter nodes allowed to run scripts if allowScripts query is provided
+  const allowScriptsNodes = await filterNodesByQuery(
+    diff.to,
+    allowScripts,
   )
-  if (edgeActions.length) await Promise.all(edgeActions)
 
-  // run lifecycles and chmod bins
-  await build(diff, packageJson, scurry)
+  // ensure that all added bins are chmod +x
+  await binChmodAll(diff.nodes.add, scurry)
 
-  // save the lockfile
-  lockfile.save(options)
+  // run install lifecycle scripts and link any binary files
+  await build(diff, packageJson, scurry, allowScriptsNodes)
+
+  // set the buildQueue on the result object containing
+  // an array with all the ids of nodes that need building
+  res.buildQueue = [...diff.to.nodes.values()]
+    .filter(node => node.buildState === 'needed')
+    .map(node => node.id)
 
   // if we had to change the actual graph along the way,
   // make sure we do not leave behind any unreachable nodes
+  // TODO: add tests to cover this
+  /* c8 ignore start */
   if (diff.hadOptionalFailures) {
     for (const node of options.graph.gc().values()) {
       diff.nodes.add.delete(node)
       diff.nodes.delete.add(node)
     }
   }
+  /* c8 ignore stop */
   saveHidden(options)
 
   // delete garbage from the store.
@@ -141,6 +260,28 @@ const reify_ = async (
   // updates package.json files if anything was added / removed
   saveImportersPackageJson?.()
 
+  // an integrity first learned while extracting -- a git or remote dep,
+  // or a registry tarball verified against the digest the registry sent
+  // with it -- was not known when lfData was captured above. pin it, so
+  // the next install checks the same bytes.
+  for (const node of diff.nodes.add) {
+    const lfNode = lfData.nodes[node.id]
+    if (lfNode && node.integrity && !lfNode[2]) {
+      lfNode[2] = node.integrity
+    }
+  }
+
   // write the ideal graph data to the lockfile
   saveData(lfData, scurry.resolve('nrz-lock.json'), false)
+
+  // update the store config reference if a config file was used
+  if (scurry.lstatSync('nrz.json')) {
+    copyFileSync(
+      scurry.resolve('nrz.json'),
+      scurry.resolve('node_modules/.nrz/nrz.json'),
+    )
+  }
+
+  // returns the result object
+  return res
 }

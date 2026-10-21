@@ -1,0 +1,53 @@
+import t from 'tap'
+import type { LoadedConfig } from '../src/config/index.ts'
+
+t.test('createGetAuthHeader', async t => {
+  const calls: [string, string, string[]][] = []
+  const seen: unknown[] = []
+  const { createGetAuthHeader } = await t.mockImport<
+    typeof import('../src/query-auth.ts')
+  >('../src/query-auth.ts', {
+    '@nrz/registry-client': {
+      registryKeys: (o: unknown) => {
+        seen.push(o)
+        return ['k']
+      },
+      getTokenByURL: async (
+        url: string,
+        identity: string,
+        keys: string[],
+      ) => {
+        calls.push([url, identity, keys])
+        return url.startsWith('http://example.com/private/') ?
+            'Bearer test-token'
+          : undefined
+      },
+    },
+  })
+
+  const conf = {
+    options: { identity: 'myid' },
+  } as unknown as LoadedConfig
+  const getAuthHeader = createGetAuthHeader(conf)
+
+  t.equal(
+    await getAuthHeader('http://example.com/private/registry/a'),
+    'Bearer test-token',
+    'should return token for known registry',
+  )
+  t.equal(
+    await getAuthHeader('http://example.com/other/a'),
+    undefined,
+    'should return undefined for unknown registry',
+  )
+  t.strictSame(
+    calls,
+    [
+      ['http://example.com/private/registry/a', 'myid', ['k']],
+      ['http://example.com/other/a', 'myid', ['k']],
+    ],
+    'should forward url, identity and configured registry keys',
+  )
+  t.equal(seen.length, 1, 'keys computed once')
+  t.equal(seen[0], conf.options, 'from config options')
+})

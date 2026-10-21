@@ -1,0 +1,1008 @@
+/**
+ * Module that handles all nrz configuration needs
+ *
+ * Project-level configs are set in a `nrz.json` file in the local project
+ * if present, and are layered over the user-level configs in the appropriate
+ * XDG config path. See `./merge-layers.ts` for the layering rules.
+ *
+ * Command-specific configuration can be specified by putting options in a
+ * field in the `command` object. For example:
+ *
+ * ```json
+ * {
+ *   "registry": "https://registry.npmjs.org/",
+ *   "command": {
+ *     "publish": {
+ *       "registry": "http://registry.internal"
+ *     }
+ *   }
+ * }
+ * ```
+ * @module
+ */
+
+import { error } from '@nrz/error-cause'
+import { PackageInfoClient } from '@nrz/package-info'
+import { PackageJson } from '@nrz/package-json'
+import { storeRoot } from '@nrz/registry-client/store-root'
+import { cloneAvailable } from '@nrz/tar/clonefile'
+import { resetCaches } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import { getOptions } from '@nrz/spec'
+import {
+  assertRecordStringString,
+  assertRecordStringT,
+  isObject,
+  isRecordStringString,
+} from '@nrz/types'
+import type { Validator, WhichConfig } from '@nrz/nrz-json'
+import { find, load, reload, save } from '@nrz/nrz-json'
+import { Monorepo } from '@nrz/workspaces'
+import type { Jack, OptionsResults, Unwrap } from 'jackspeak'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { PathScurry } from 'path-scurry'
+import type { Commands, RecordField } from './definition.ts'
+import {
+  commands,
+  definition,
+  defaultValues,
+  getCommand,
+  isRecordField,
+  recordFields,
+  storeLinkers,
+} from './definition.ts'
+import { merge } from './merge.ts'
+import { cloneLayer, mergeLayers } from './merge-layers.ts'
+import { assertSpecAliases } from './spec-aliases.ts'
+export {
+  commands,
+  definition,
+  isRecordField,
+  recordFields,
+  type Commands,
+}
+
+export const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
+
+export type RecordPairs = Record<string, unknown>
+export type RecordString = Record<string, string>
+
+// turn a set of pairs into a Record object.
+// if a kv pair doesn't have a = character, set to `''`
+const reducePairs = <T extends string[]>(
+  pairs: T,
+): RecordString | T => {
+  const record: RecordString = {}
+  for (const kv of pairs) {
+    const eq = kv.indexOf('=')
+    if (eq === -1) record[kv] = ''
+    else {
+      const key = kv.substring(0, eq)
+      const val = kv.substring(eq + 1)
+      record[key] = val
+    }
+  }
+  return record
+}
+
+const isRecordFieldValue = (k: string, v: unknown): v is string[] =>
+  Array.isArray(v) &&
+  recordFields.includes(k as (typeof recordFields)[number])
+
+export type PairsAsRecords = ConfigOptionsNoExtras & {
+  command?: {
+    [k in keyof Commands]?: ConfigOptionsNoExtras
+  }
+}
+
+/**
+ * One `nrz.json` file's `config` object, in record form. Every field is
+ * optional, since a config file only sets what it sets.
+ */
+export type ConfigFileLayer = Partial<PairsAsRecords>
+
+/**
+ * `registries` alias names are used as spec prefixes, where `~` is
+ * reserved, and an empty name has nothing to prefix with.
+ */
+export const assertRegistryKeys = (
+  registries: unknown,
+  file: string,
+) => {
+  if (!registries || typeof registries !== 'object') return
+  const obj =
+    Array.isArray(registries) ?
+      reducePairs(registries as string[])
+    : (registries as RecordPairs)
+  for (const key of Object.keys(obj)) {
+    if (key === '' || key.includes('~')) {
+      throw error('Reserved character found in registries name', {
+        code: 'ECONFIG',
+        path: file,
+        found: key,
+      })
+    }
+  }
+}
+
+export const pairsToRecords = (
+  obj:
+    NonNullable<ConfigFileData> | OptionsResults<ConfigDefinitions>,
+): PairsAsRecords => {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [
+      k,
+      k === 'command' && v && typeof v === 'object' ?
+        Object.fromEntries(
+          Object.entries(v).map(([k, v]) => [
+            k,
+            pairsToRecords(v as NonNullable<ConfigFileData>),
+          ]),
+        )
+      : isRecordFieldValue(k, v) ? reducePairs(v)
+      : v,
+    ]),
+    // hard cast because TS can't see through the entries/fromEntries
+  ) as unknown as PairsAsRecords
+}
+
+export const recordsToPairs = (obj: RecordPairs): RecordPairs => {
+  return Object.fromEntries(
+    Object.entries(obj)
+      .filter(
+        ([k]) =>
+          !(
+            k === 'scurry' ||
+            k === 'packageJson' ||
+            k === 'monorepo' ||
+            k === 'projectRoot' ||
+            k === 'storeRoot' ||
+            k === 'packageInfo'
+          ),
+      )
+      .map(([k, v]) => [
+        k,
+        k === 'command' && v && typeof v === 'object' ?
+          // each command's own block gets converted too, mirroring
+          // pairsToRecords
+          Object.fromEntries(
+            Object.entries(v).map(([k, v]) => [
+              k,
+              recordsToPairs(v as RecordPairs),
+            ]),
+          )
+        : (
+          !v ||
+          typeof v !== 'object' ||
+          Array.isArray(v) ||
+          !isRecordField(k)
+        ) ?
+          v
+        : Object.entries(v).map(([k, v]) => `${k}=${v}`),
+      ]),
+  )
+}
+
+const kRecord = Symbol('parsed key=value record')
+
+// jackspeak's env var name for a field
+const envKey = (k: string) =>
+  `NRZ_${k.replace(/[^a-zA-Z0-9]+/g, '_').toUpperCase()}`
+
+// `parse()` writes every resolved value to `NRZ_*`, so a nested nrz
+// can't tell inherited env from env set for it. this holds the
+// parent's explicit values and the `NRZ_*` env it wrote.
+const kParentEnv = '__NRZ_INTERNAL_EXPLICIT'
+type ParentEnv = { explicit: RecordPairs; env: RecordString }
+const parentEnv = (): ParentEnv | undefined => {
+  try {
+    const p = JSON.parse(process.env[kParentEnv] ?? '') as unknown
+    return (
+        isObject(p) &&
+          isObject(p.explicit) &&
+          Object.entries(p.explicit).every(([k, v]) =>
+            isRecordField(k) ?
+              Array.isArray(v) && v.every(x => typeof x === 'string')
+            : !isObject(v),
+          ) &&
+          isRecordStringString(p.env)
+      ) ?
+        (p as ParentEnv)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// last pair per key wins, keeping the first one's position
+const dedupePairs = (pairs: string[]) => [
+  ...new Map(
+    pairs.map(p => {
+      const eq = p.indexOf('=')
+      return [eq === -1 ? p : p.substring(0, eq), p]
+    }),
+  ).values(),
+]
+
+export type ConfigDataNoCommand = {
+  [
+    k in keyof OptionsResults<ConfigDefinitions>
+  ]?: OptionsResults<ConfigDefinitions>[k]
+}
+
+/**
+ * Config data can be any options, and also a 'command' field which
+ * contains command names and override options for that command.
+ */
+export type ConfigData = ConfigDataNoCommand & {
+  command?: {
+    [k in keyof Commands]?: ConfigDataNoCommand
+  }
+}
+
+export type ConfigFileDataNoCommand = {
+  [k in keyof ConfigDataNoCommand]: k extends (
+    OptListKeys<ConfigDataNoCommand>
+  ) ?
+    RecordString | string[]
+  : ConfigDataNoCommand[k]
+}
+
+/**
+ * Config data as it appears in the config field of the nrz.json, with kv pair
+ * lists stored as `Record<string, string>` and
+ */
+export type ConfigFileData = ConfigFileDataNoCommand & {
+  command?: {
+    [k in keyof Commands]?: ConfigFileDataNoCommand
+  }
+}
+
+export type ConfigOptionsNoExtras = {
+  [k in keyof OptionsResults<ConfigDefinitions>]: k extends (
+    RecordField
+  ) ?
+    RecordString
+  : k extends 'command' ? never
+  : OptionsResults<ConfigDefinitions>[k]
+}
+
+export type ConfigOptions = ConfigOptionsNoExtras &
+  Pick<SpecOptions, 'catalog' | 'catalogs'> & {
+    packageJson: PackageJson
+    scurry: PathScurry
+    projectRoot: string
+    /** global store root, under `cache` */
+    storeRoot: string
+    monorepo?: Monorepo
+    packageInfo: PackageInfoClient
+    /** aborted when the command fails */
+    signal: AbortSignal
+  }
+
+/**
+ * The base config definition set as a type
+ */
+export type ConfigDefinitions = Unwrap<typeof definition>
+
+export type StringListKeys<O> = {
+  [k in keyof O]: O[k] extends string[] | undefined ? k : never
+}
+export type OptListKeys<O> = Exclude<
+  StringListKeys<O>[keyof StringListKeys<O>],
+  undefined
+>
+
+/**
+ * Class that handles configuration for nrz.
+ *
+ * Call {@link Config.load} to get one of these.
+ */
+export class Config {
+  /**
+   * The {@link https://npmjs.com/jackspeak | JackSpeak} object
+   * representing nrz's configuration
+   */
+  jack: Jack<ConfigDefinitions>
+
+  /**
+   * Parsed values in effect
+   */
+  values?: OptionsResults<ConfigDefinitions>
+
+  /**
+   * Command-specific config values
+   */
+  commandValues: {
+    [cmd in Commands[keyof Commands]]?: ConfigData
+  } = {}
+
+  /**
+   * A flattened object of the parsed configuration
+   */
+  get options(): ConfigOptions {
+    if (this.#options) return this.#options
+    const scurry = new PathScurry(this.projectRoot)
+    const packageJson = new PackageJson()
+    const asRecords = pairsToRecords(this.parse().values)
+    const extras = {
+      projectRoot: this.projectRoot,
+      signal: this.#abort.signal,
+      storeRoot: storeRoot(asRecords.cache),
+      scurry,
+      packageJson,
+      monorepo: Monorepo.maybeLoad(this.projectRoot, {
+        scurry,
+        packageJson,
+        load: {
+          paths: asRecords.workspace,
+          groups: asRecords['workspace-group'],
+        },
+      }),
+      catalog: load<Record<string, string>>(
+        'catalog',
+        assertRecordStringString,
+      ),
+      catalogs: load<Record<string, Record<string, string>>>(
+        'catalogs',
+        o =>
+          assertRecordStringT(
+            o,
+            isRecordStringString,
+            'Record<string, Record<string, string>>',
+          ),
+      ),
+    }
+
+    const options: Omit<ConfigOptions, 'packageInfo'> = Object.assign(
+      asRecords,
+      extras,
+    )
+
+    // Ensure spec-related options (registries, jsr-registries, git hosts, etc.)
+    // are always filled with defaults. Some downstream libraries (eg. @nrz/dep-id)
+    // expect these defaults to be present even when the user didn't configure them.
+    Object.assign(
+      options,
+      getOptions(
+        options as unknown as SpecOptions,
+      ) as unknown as SpecOptions,
+    )
+
+    this.#options = Object.assign(options, {
+      packageInfo: new PackageInfoClient(options),
+      [kCustomInspect]() {
+        return Object.fromEntries(
+          Object.entries(options).filter(
+            ([k]) =>
+              k !== 'monorepo' &&
+              k !== 'scurry' &&
+              k !== 'packageJson' &&
+              k !== 'packageInfo' &&
+              k !== 'signal',
+          ),
+        )
+      },
+    })
+    return this.#options
+  }
+
+  /**
+   * Reset the options value, optionally setting a new project root
+   * to recalculate the options.
+   */
+  resetOptions(projectRoot: string = process.cwd()) {
+    this.projectRoot = projectRoot
+    this.#options = undefined
+    resetCaches()
+  }
+
+  // memoized options() getter value
+  #options?: ConfigOptions
+
+  #abort = new AbortController()
+
+  /** Abort requests still in flight */
+  abort() {
+    this.#abort.abort()
+  }
+
+  /**
+   * positional arguments to the nrz process
+   */
+  positionals?: string[]
+
+  /**
+   * Original arguments used for parsing (stored for reload purposes)
+   * @internal
+   */
+  #originalArgs?: string[]
+
+  /**
+   * The root of the project where a nrz.json, nrz.json,
+   * package.json, or .git was found. Not necessarily the `process.cwd()`,
+   * though that is the default location.
+   *
+   * Never walks up as far as `$HOME`. So for example, if a project is in
+   * `~/projects/xyz`, then the highest dir it will check is `~/projects`
+   */
+  projectRoot: string
+
+  /**
+   * `Record<alias, canonical name>` to dereference command aliases.
+   */
+  commands: Commands
+
+  /**
+   * Which command name to use for overriding with command-specific values,
+   * determined from the argv when parse() is called.
+   */
+  command?: Commands[keyof Commands]
+
+  constructor(
+    jack: Jack<ConfigDefinitions> = definition,
+    projectRoot = process.cwd(),
+  ) {
+    this.projectRoot = projectRoot
+    this.commands = commands
+    this.jack = jack
+  }
+
+  /**
+   * Parse the arguments and set configuration and positionals accordingly.
+   */
+  parse(args: string[] = process.argv): this & ParsedConfig {
+    if (isParsed(this)) return this
+
+    // Store the original args for potential reload
+    this.#originalArgs = [...args]
+
+    // an invalid env linker is treated as unpack
+    const badLinker = process.env.NRZ_STORE_LINKER
+    const fixLinker =
+      badLinker !== undefined &&
+      !(storeLinkers as readonly string[]).includes(badLinker)
+    if (fixLinker) process.env.NRZ_STORE_LINKER = 'unpack'
+
+    const envKeys = Object.keys(defaultValues).filter(
+      k => process.env[envKey(k)] !== undefined,
+    )
+    const parent = parentEnv()
+    // file layer values, before env replaces them
+    const fileValues = this.#defaults()
+    this.jack.loadEnvDefaults()
+    const envValues = this.#defaults()
+    const p = this.jack.parseRaw(args)
+    const cliKeys = Object.keys(p.values)
+
+    const fallback = getCommand(p.values['fallback-command'])
+    this.command = getCommand(p.positionals[0])
+
+    const cmdOrFallback = this.command ?? fallback
+    const cmdSpecific =
+      cmdOrFallback && this.commandValues[cmdOrFallback]
+    const cmdPairs = cmdSpecific ? recordsToPairs(cmdSpecific) : {}
+    if (cmdSpecific) this.jack.setConfigValues(cmdPairs)
+
+    // ok, applied cmd-specific defaults, do rest of the parse
+    this.jack.applyDefaults(p)
+
+    // `auto` only hardlinks from the global store on linux: on APFS a
+    // hardlink is the slowest way to place a file, so darwin clones
+    // instead, when its node can load `node:ffi` to call clonefile(2)
+    // with, and win32 (and darwin without it) unpack by default. the
+    // env layer is rewritten too, so `explicit` records the resolved
+    // value.
+    if (
+      p.values['store-linker'] === 'auto' &&
+      process.platform !== 'linux'
+    ) {
+      const linker = cloneAvailable() ? 'clone' : 'unpack'
+      p.values['store-linker'] = linker
+      envValues['store-linker'] = linker
+    }
+
+    // what was set on the cli or env for this run. record fields hold
+    // only those pairs, env then cli, so later ones win per key.
+    const values = p.values as RecordPairs
+    const explicit: RecordPairs = {}
+    for (const k of new Set([...envKeys, ...cliKeys])) {
+      const cli = cliKeys.includes(k) ? values[k] : undefined
+      const env = this.#explicitEnv(k, envValues[k], parent)
+      if (isRecordField(k)) {
+        const pairs = [
+          ...((env ?? []) as string[]),
+          ...((cli ?? []) as string[]),
+        ]
+        if (pairs.length) explicit[k] = dedupePairs(pairs)
+      } else if (cli !== undefined) explicit[k] = cli
+      // a command block beats env for scalars
+      else if (env !== undefined && !(k in cmdPairs))
+        explicit[k] = env
+    }
+    this.explicit = explicit
+    // record fields merge per key: file (or command block) -> env -> cli
+    for (const k of recordFields) {
+      const env = envKeys.includes(k) ? envValues[k] : []
+      const cli = cliKeys.includes(k) ? values[k] : []
+      const pairs = [...(env as string[]), ...(cli as string[])]
+      if (!pairs.length) continue
+      const base = (k in cmdPairs ? cmdPairs[k] : fileValues[k]) ?? []
+      values[k] = dedupePairs([...(base as string[]), ...pairs])
+    }
+    // skipped for `nrz config`, so a bad alias can be removed
+    if (cmdOrFallback !== 'config') {
+      assertSpecAliases(pairsToRecords(p.values))
+    }
+    this.jack.writeEnv(p)
+    process.env[kParentEnv] = JSON.stringify({
+      explicit,
+      env: Object.fromEntries(
+        Object.keys(defaultValues).flatMap(k => {
+          const v = process.env[envKey(k)]
+          return v === undefined ? [] : [[envKey(k), v]]
+        }),
+      ),
+    } satisfies ParentEnv)
+
+    if (this.command) p.positionals.shift()
+    else this.command = getCommand(p.values['fallback-command'])
+
+    Object.assign(this, p)
+
+    // `--verbose` is shorthand for `--loglevel=verbose`. Only apply it
+    // when loglevel is still at its default so an explicit `--loglevel`
+    // always wins.
+    if (p.values.verbose && p.values.loglevel === 'info') {
+      p.values.loglevel = 'verbose'
+    }
+
+    const { loglevel } = p.values
+    if (fixLinker && loglevel !== 'silent' && loglevel !== 'error') {
+      // eslint-disable-next-line no-console
+      console.error(
+        `Warning: invalid NRZ_STORE_LINKER ${JSON.stringify(badLinker)}, using ${p.values['store-linker']}`,
+      )
+    }
+
+    /* c8 ignore start - unpossible */
+    if (!isParsed(this)) throw error('failed to parse config')
+    /* c8 ignore stop */
+
+    return this
+  }
+
+  /**
+   * Values set on the command line or via `NRZ_*` env for this run.
+   * Record fields hold only those `key=value` pairs, not the ones from
+   * config files.
+   *
+   * `NRZ_*` env left as a parent nrz process wrote it only counts for
+   * what was explicit in that parent.
+   */
+  explicit: ConfigData = {}
+
+  // a field's explicit env value: all of it at the top level, the new
+  // pairs (or changed scalar) when inherited from a parent nrz. once a
+  // script changes a record var, the parent's explicit pairs are dropped.
+  #explicitEnv(
+    k: string,
+    value: unknown,
+    parent?: ParentEnv,
+  ): unknown {
+    const cur = process.env[envKey(k)]
+    if (cur === undefined) return undefined
+    const written = parent?.env[envKey(k)]
+    if (cur === written) return parent?.explicit[k]
+    if (!isRecordField(k) || written === undefined) return value
+    const old = new Set(written.split('\n'))
+    return (value as string[]).filter(p => !old.has(p))
+  }
+
+  // the current jack defaults, ie config file (+ env, once loaded) values
+  #defaults(): RecordPairs {
+    const d = { values: {}, positionals: [] }
+    this.jack.applyDefaults(
+      d as unknown as Parameters<typeof this.jack.applyDefaults>[0],
+    )
+    return d.values
+  }
+
+  /**
+   * Get a `key=value` list option value as an object.
+   *
+   * For example, a list option with a vlaue of `['key=value', 'xyz=as=df' ]`
+   * would be returned as `{key: 'value', xyz: 'as=df'}`
+   *
+   * Results are memoized, so subsequent calls for the same key will return the
+   * same object. If new strings are added to the list, then the memoized value
+   * is *not* updated, so only use once configurations have been fully loaded.
+   *
+   * If the config value is not set at all, an empty object is returned.
+   */
+  getRecord(k: OptListKeys<ConfigData>): RecordString {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const pairs = this.get(k) as
+      (string[] & { [kRecord]?: RecordString }) | undefined
+    if (!pairs) return {}
+    if (pairs[kRecord]) return pairs[kRecord]
+    const kv = pairs.reduce((kv: RecordString, pair) => {
+      const eq = pair.indexOf('=')
+      if (eq === -1) return kv
+      const key = pair.substring(0, eq)
+      const val = pair.substring(eq + 1)
+      kv[key] = val
+      return kv
+    }, {})
+    Object.assign(pairs, { [kRecord]: kv })
+    return kv
+  }
+
+  /**
+   * Get a configuration value.
+   *
+   * Note: `key=value` pair configs are returned as a string array. To get them
+   * as an object, use {@link Config#getRecord}.
+   */
+  get<K extends keyof OptionsResults<ConfigDefinitions>>(
+    k: K,
+  ): OptionsResults<ConfigDefinitions>[K] {
+    /* c8 ignore next -- impossible but TS doesn't know that */
+    return (this.values ?? this.parse().values)[k]
+  }
+
+  /**
+   * Write the config values to the user or project config file.
+   */
+  async writeConfigFile(
+    this: LoadedConfig,
+    which: WhichConfig,
+    values: NonNullable<ConfigFileData>,
+  ) {
+    save('config', pairsToRecords(values), which)
+    await this.#reloadConfig()
+  }
+
+  /**
+   * Fold in the provided fields with the existing properties
+   * in the config file.
+   */
+  async addConfigToFile(
+    this: LoadedConfig,
+    which: WhichConfig,
+    values: NonNullable<ConfigFileData>,
+  ) {
+    // normalize both sides to record form first, so that a record field
+    // written as a `key=value` list in an existing file is still merged key
+    // by key, rather than replaced wholesale.
+    return this.writeConfigFile(
+      which,
+      merge(
+        pairsToRecords(
+          (await this.#maybeLoadConfigFile(which)) ?? {},
+        ),
+        pairsToRecords(values),
+      ),
+    )
+  }
+
+  // called in this weird bound way so that it can be used by the
+  // nrz-json config loading module.
+  #validator: Validator<ConfigFileData> = function (
+    this: Config,
+    c: unknown,
+    file: string,
+  ) {
+    this.#validateConfig(c, file)
+  }.bind(this)
+
+  #validateConfig(
+    c: unknown,
+    file: string,
+  ): asserts c is ConfigFileData {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) {
+      throw error('invalid config, expected object', {
+        path: file,
+        found: c,
+        wanted: 'ConfigFileData',
+      })
+    }
+
+    const { command, ...values } = c as RecordPairs
+
+    assertRegistryKeys(values.registries, file)
+    if (command && typeof command === 'object') {
+      for (const opts of Object.values(command)) {
+        if (opts && typeof opts === 'object') {
+          assertRegistryKeys((opts as RecordPairs).registries, file)
+        }
+      }
+    }
+
+    // validate this layer on its own, so that an invalid value is blamed on
+    // the file it actually came from. `mergeLayers` on a single layer just
+    // strips the `null`s, which mean "remove this field" rather than being
+    // a value jack should ever see.
+    const layer = cloneLayer(pairsToRecords(c as ConfigFileData))
+    const { command: _cmd, ...single } = mergeLayers([layer])
+    try {
+      this.jack.validate(recordsToPairs(single))
+    } catch (er) {
+      /* c8 ignore next - for TS */
+      if (er instanceof Error) {
+        // jack only attaches the source path when going through
+        // setConfigValues(), and the CLI's "Problem in Config File" banner
+        // keys off it.
+        /* c8 ignore next - jack always throws with a cause object */
+        const cause = typeof er.cause === 'object' ? er.cause : {}
+        er.cause = { ...cause, path: file }
+      }
+      throw er
+    }
+
+    this.#layers[file === find('user') ? 'user' : 'project'] = layer
+    this.#applyLayers()
+  }
+
+  /**
+   * The raw config data from each `nrz.json` file, normalized to record
+   * form, before the layers are merged together. `undefined` for a layer
+   * with no file, or a file with no `config` field.
+   */
+  get layers(): Readonly<{ [k in WhichConfig]?: ConfigFileLayer }> {
+    return this.#layers
+  }
+
+  #layers: { [k in WhichConfig]?: ConfigFileLayer } = {}
+
+  /**
+   * Recompute the jack defaults and {@link Config#commandValues} from
+   * {@link Config#layers}.
+   *
+   * Everything is derived from `#layers`, and every known field is applied,
+   * so this is idempotent: re-reading a config file (which
+   * `addConfigToFile` and `deleteConfigKeys` both do) can't stack the user
+   * layer back on top of the project layer, and a field a layer stopped
+   * setting goes back to its definitional default.
+   */
+  #applyLayers() {
+    const { command, ...values } = mergeLayers([
+      this.#layers.user,
+      this.#layers.project,
+    ])
+
+    this.commandValues = {}
+    for (const [c, opts] of Object.entries(command ?? {})) {
+      const cmd = getCommand(c)
+      if (cmd && opts && typeof opts === 'object') {
+        this.commandValues[cmd] = opts as ConfigData
+      }
+    }
+
+    const pairs = recordsToPairs(values)
+    const applied: RecordPairs = {}
+    for (const [field, dflt] of Object.entries(defaultValues)) {
+      applied[field] = field in pairs ? pairs[field] : dflt
+    }
+    this.jack.setConfigValues(applied)
+    this.#options = undefined
+  }
+
+  /**
+   * if the file exists, parse and load it. returns object if data was
+   * loaded, or undefined if not.
+   */
+  async #maybeLoadConfigFile(whichConfig: WhichConfig) {
+    const data = load('config', this.#validator, whichConfig)
+    if (
+      data === undefined &&
+      this.#layers[whichConfig] !== undefined
+    ) {
+      // the file (or its `config` field) went away, so the validator never
+      // ran. drop the layer it left behind.
+      delete this.#layers[whichConfig]
+      this.#applyLayers()
+    }
+    return data
+  }
+
+  /**
+   * Deletes the specified config fields from the named file
+   * Returns `true` if anything was changed.
+   */
+  async deleteConfigKeys(
+    this: LoadedConfig,
+    which: WhichConfig,
+    fields: string[],
+  ) {
+    const data = await this.#maybeLoadConfigFile(which)
+    if (!data) return false
+    let didSomething = false
+    for (const f of fields) {
+      const [key, ...sk] = f.split('.') as [
+        h: string,
+        ...rest: string[],
+      ]
+      const subs = sk.join('.')
+      const k = key as keyof ConfigDefinitions
+      const v = data[k]
+      if (v === undefined) continue
+      if (subs && v && typeof v === 'object') {
+        if (Array.isArray(v)) {
+          const i = v.findIndex(subvalue =>
+            subvalue.startsWith(`${subs}=`),
+          )
+          if (i !== -1) {
+            if (v.length === 1) delete data[k]
+            else v.splice(i, 1)
+            didSomething = true
+          }
+        } else {
+          if (v[subs] !== undefined) {
+            delete v[subs]
+            if (Object.keys(v).length === 0) delete data[k]
+            didSomething = true
+          }
+        }
+      } else {
+        didSomething = true
+        delete data[k]
+      }
+    }
+    if (didSomething) await this.writeConfigFile(which, data)
+    return didSomething
+  }
+
+  /**
+   * Edit the user or project configuration file.
+   *
+   * If the file isn't present, then it starts with `{}` so the user has
+   * something to work with.
+   *
+   * If the result is not valid, or no config settings are contained in the
+   * file after editing, then it's restored to what it was before, which might
+   * mean deleting the file.
+   */
+  async editConfigFile(
+    this: LoadedConfig,
+    which: WhichConfig,
+    edit: (file: string) => Promise<void> | void,
+  ) {
+    // load the file as a backup
+    // call the edit function
+    // reload it
+    const file = find(which)
+    const backup = await readFile(file, 'utf8').catch(() => undefined)
+    if (!backup) {
+      await writeFile(
+        file,
+        JSON.stringify({ config: {} }, null, 2) + '\n',
+      )
+    }
+    let valid = false
+    try {
+      await edit(file)
+      // force it to reload the file and validate it again
+      // if this fails, we roll back.
+      const result = reload('config', which)
+      save('config', result ?? {}, which)
+      valid = true
+    } finally {
+      if (!valid) {
+        // TODO: maybe write the file to a re-edit backup location?
+        // then you could do `nrz config edit retry` or something.
+        if (backup) {
+          await writeFile(file, backup)
+          reload(which)
+        } else {
+          await rm(file, { force: true })
+        }
+      }
+    }
+  }
+
+  /**
+   * Find the local config file and load both it and the user-level config in
+   * the XDG config home.
+   */
+  async loadConfigFile(): Promise<this> {
+    await this.#maybeLoadConfigFile('user')
+    this.projectRoot = dirname(find('project', this.projectRoot))
+    await this.#maybeLoadConfigFile('project')
+    return this
+  }
+
+  /**
+   * Clear cached config values to force re-reading from updated files.
+   * @internal
+   */
+  async #reloadConfig() {
+    // Clear the memoized options to force recalculation
+    this.#options = undefined
+  }
+
+  /**
+   * Force a complete reload of config files from disk.
+   * This clears all caches and re-reads config files.
+   * Useful for long-running processes that need to pick up config changes.
+   */
+  async reloadFromDisk(): Promise<void> {
+    // Clear the memoized options to force recalculation
+    this.#options = undefined
+
+    // Clear the parsed state to force re-parsing
+    // This is crucial because parse() returns early if already parsed
+    this.values = undefined
+    this.positionals = undefined
+    this.command = undefined
+
+    // Clear nrz-json caches for both user and project configs
+    // This ensures that the next time config files are read, they'll be re-read from disk
+    const { unload } = await import('@nrz/nrz-json')
+    unload('user')
+    unload('project')
+
+    // Force reload of config files by calling the load methods again
+    // This will re-read the files and re-apply them to the jack parser
+    await this.#maybeLoadConfigFile('user')
+    await this.#maybeLoadConfigFile('project')
+
+    // Re-parse to pick up the updated config values using the original arguments
+    this.parse(this.#originalArgs)
+  }
+
+  /**
+   * cache of the loaded config
+   */
+  static #loaded: LoadedConfig | undefined
+
+  /**
+   * Load the configuration and return a Promise to a
+   * {@link Config} object
+   */
+  static async load(
+    projectRoot = process.cwd(),
+    argv = process.argv,
+    /**
+     * only used in tests, resets the memoization
+     * @internal
+     */
+    reload = false,
+  ): Promise<LoadedConfig> {
+    if (this.#loaded && !reload) return this.#loaded
+    const a = new Config(definition, projectRoot)
+    const b = await a.loadConfigFile()
+    this.#loaded = b.parse(argv)
+    return this.#loaded
+  }
+}
+
+const isParsed = (c: Config): c is ParsedConfig =>
+  !!(c.values && c.positionals && c.command)
+
+export type ParsedConfig = Config & {
+  command: NonNullable<Config['command']>
+  values: OptionsResults<ConfigDefinitions>
+  positionals: string[]
+}
+
+/**
+ * A fully loaded {@link Config} object
+ */
+export type LoadedConfig = ParsedConfig
+
+/**
+ * Which `nrz.json` a command that persists settings should write to.
+ *
+ * `--config=user` and `--config=project` are explicit. Anything else means
+ * the caller's own default, since `--config` also takes `all` (its default,
+ * meaningful only for `nrz config` reads).
+ */
+export const configWriteTarget = (
+  conf: Pick<LoadedConfig, 'get'>,
+  fallback: WhichConfig,
+): WhichConfig => {
+  const which = conf.get('config')
+  return which === 'user' || which === 'project' ? which : fallback
+}

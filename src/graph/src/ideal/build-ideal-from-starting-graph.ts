@@ -1,14 +1,19 @@
-import { type Graph } from '../graph.ts'
 import { getImporterSpecs } from './get-importer-specs.ts'
-import { type AddNodesOptions, addNodes } from './add-nodes.ts'
 import {
-  type RemoveNodesOptions,
-  removeNodes,
-} from './remove-nodes.ts'
+  canonicalizePeerIds,
+  hasProvisionalPeerIds,
+} from './canonicalize-peer-ids.ts'
+import { movePeerStoreDirs } from './move-peer-store-dirs.ts'
+import { refreshIdealGraph } from './refresh-ideal-graph.ts'
+import { resolveSaveType } from '../resolve-save-type.ts'
+import type { PackageJson } from '@nrz/package-json'
+import type { RefreshIdealGraphOptions } from './refresh-ideal-graph.ts'
+import type { ExplicitAddMap } from './types.ts'
+import type { Graph } from '../graph.ts'
 
-export type BuildIdealFromStartingGraphOptions = AddNodesOptions &
-  RemoveNodesOptions & {
-    projectRoot: string
+export type BuildIdealFromStartingGraphOptions =
+  RefreshIdealGraphOptions & {
+    packageJson: PackageJson
   }
 
 /**
@@ -21,11 +26,23 @@ export type BuildIdealFromStartingGraphOptions = AddNodesOptions &
 export const buildIdealFromStartingGraph = async (
   options: BuildIdealFromStartingGraphOptions,
 ): Promise<Graph> => {
+  // a graph loaded from a lockfile written by this code is canonical by
+  // construction; only a structural write during this build, or
+  // provisional ids left by an older lockfile, can change that
+  const mutationsBefore = options.graph.mutations
+
   // Gets a map of dependencies that are keyed to its importer node ids,
   // merging values already found in the graph with user specified values.
   // Any dependencies that are already satisfied in the starting `graph`
   // are going to be pruned from the resulting object.
   const importerSpecs = getImporterSpecs(options)
+
+  // snapshot what the user actually asked for before the merge below
+  // folds manifest-derived deltas into `options.add`
+  const explicit: ExplicitAddMap = new Map()
+  for (const [id, deps] of options.add) {
+    explicit.set(id, new Set(deps.keys()))
+  }
 
   // merge modifiedDependencies flags
   options.add.modifiedDependencies =
@@ -35,36 +52,90 @@ export const buildIdealFromStartingGraph = async (
     options.remove.modifiedDependencies ||
     importerSpecs.remove.modifiedDependencies
 
-  // merge values found on importer specs with
+  // merge values found on node specs with
   // user-provided values from `options.add`
-  for (const [importerId, deps] of importerSpecs.add) {
-    if (!options.add.has(importerId)) {
-      options.add.set(importerId, deps)
+  for (const [nodeId, deps] of importerSpecs.add) {
+    const node = options.graph.nodes.get(nodeId)
+    /* c8 ignore next - impossible */
+    if (!node) continue
+
+    if (!options.add.has(nodeId)) {
+      options.add.set(nodeId, deps)
       continue
     }
 
-    // merge any deps found when reading the importers manifest
+    // merge any deps found when reading the nodes manifest
     // with the ones provided by the user in the `add` options,
     // user-provided deps should take precedence
     for (const [depName, dep] of deps) {
-      if (!options.add.get(importerId)?.has(depName)) {
-        options.add.get(importerId)?.set(depName, dep)
+      if (!options.add.get(nodeId)?.has(depName)) {
+        options.add.get(nodeId)?.set(depName, dep)
       }
+
+      // update the save type for deps when using an implicit type
+      dep.type = resolveSaveType(node, depName, dep.type)
     }
   }
 
-  // add nodes, fetching remote manifests for each dependency to be added
-  await addNodes(options)
+  // merge values found on node specs with
+  // user-provided values from `options.remove`
+  for (const [nodeId, deps] of importerSpecs.remove) {
+    if (!options.remove.has(nodeId)) {
+      options.remove.set(nodeId, deps)
+      continue
+    }
 
-  // move things into their default locations, if possible
-  for (const node of options.graph.nodes.values()) {
-    node.setDefaultLocation()
+    // merge any deps found when reading the nodes manifest
+    // with the ones provided by the user in the `remove` options
+    for (const depName of deps) {
+      options.remove.get(nodeId)?.add(depName)
+    }
   }
 
-  // removes any dependencies that are listed in the `remove` option
-  removeNodes({ ...options, remove: importerSpecs.remove })
+  // an importer edge whose lockfile spec or type no longer matches
+  // package.json while its target still satisfies it: rewrite both so
+  // the rebuild reads the manifest values and the lockfile is saved
+  // carrying them
+  for (const [edge, dep] of importerSpecs.staleSpecs) {
+    edge.spec = dep.spec
+    edge.type = resolveSaveType(edge.from, edge.name, dep.type)
+  }
+  if (importerSpecs.staleSpecs.size) {
+    options.graph.lockfileStale = true
+  }
+
+  // importer edges a `-` modifier now removes: drop them, gc() takes
+  // whatever only they reached
+  for (const edge of importerSpecs.removedEdges) {
+    edge.from.edgesOut.delete(edge.name)
+    edge.to?.edgesIn.delete(edge)
+    options.graph.edges.delete(edge)
+    options.graph.lockfileStale = true
+  }
+
+  // refreshs the current graph adding the nodes marked for addition
+  // and removing the ones marked for removal, while also recalculating
+  // peer dependencies and default locations
+  await refreshIdealGraph({
+    ...options,
+    explicit,
+    transientAdd: importerSpecs.transientAdd,
+    transientRemove: importerSpecs.transientRemove,
+  })
 
   options.graph.gc()
+
+  if (
+    options.graph.mutations !== mutationsBefore ||
+    hasProvisionalPeerIds(options.graph)
+  ) {
+    await movePeerStoreDirs(
+      canonicalizePeerIds(options.graph),
+      options,
+    )
+  }
+
+  options.graph.recomputeFlags()
 
   return options.graph
 }

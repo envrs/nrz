@@ -1,0 +1,841 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/config/definition.ts > TAP > commands 1`] = `
+Object {
+  "?": "help",
+  "access": "access",
+  "add": "install",
+  "b": "build",
+  "bugs": "bugs",
+  "build": "build",
+  "cache": "cache",
+  "ci": "ci",
+  "config": "config",
+  "create": "create",
+  "deprecate": "deprecate",
+  "dist-tag": "dist-tag",
+  "docs": "docs",
+  "exec": "exec",
+  "exec-cache": "exec-cache",
+  "exec-local": "exec-local",
+  "h": "help",
+  "help": "help",
+  "i": "install",
+  "info": "view",
+  "init": "init",
+  "install": "install",
+  "list": "list",
+  "login": "login",
+  "logout": "logout",
+  "ls": "list",
+  "outdated": "outdated",
+  "p": "pkg",
+  "pack": "pack",
+  "ping": "ping",
+  "pkg": "pkg",
+  "profile": "profile",
+  "pub": "publish",
+  "publish": "publish",
+  "q": "query",
+  "query": "query",
+  "r": "run",
+  "registry": "registry",
+  "repo": "repo",
+  "rm": "uninstall",
+  "run": "run",
+  "run-exec": "run-exec",
+  "run-script": "run",
+  "rx": "run-exec",
+  "setup": "setup",
+  "show": "view",
+  "skills": "skills",
+  "token": "token",
+  "u": "update",
+  "uninstall": "uninstall",
+  "unpublish": "unpublish",
+  "update": "update",
+  "version": "version",
+  "view": "view",
+  "whoami": "whoami",
+  "x": "exec",
+  "xc": "exec-cache",
+  "xl": "exec-local",
+}
+`
+
+exports[`test/config/definition.ts > TAP > definition 1`] = `
+Object {
+  "access": Object {
+    "description": "Set the access level of the package",
+    "type": "string",
+    "validOptions": Array [
+      "public",
+      "restricted",
+    ],
+  },
+  "all": Object {
+    "description": "Show all commands, bins, and flags",
+    "short": "a",
+    "type": "boolean",
+  },
+  "allow-scripts": Object {
+    "description": String(
+      Filter which packages are allowed to run lifecycle scripts using DSS query syntax. When provided, only packages matching the query will execute their install, preinstall, postinstall, prepare, preprepare, and postprepare scripts. Defaults to ':not(*)' which means no scripts will be run.
+      Example: --allow-scripts=":root > *, #my-package" Runs scripts only for direct dependencies of the current project and any occurrences of a specific dependency with the name "my-package" anywhere in the dependency graph.
+    ),
+    "hint": "query",
+    "type": "string",
+  },
+  "allow-skills": Object {
+    "description": String(
+      Link the agent skills (folders with a \`SKILL.md\`) shipped by installed packages matching this DSS query into the project's agent skill dirs (see \`skills-dir\`) after \`install\`, \`ci\`, \`update\` or \`uninstall\`. End a selector with \`:skill(<name>, …)\` to pick single skills (\`*\` globs, double-quoted names). Unset (the default) or \`:not(*)\` links nothing and skips all skills work.
+
+      \`nrz install --allow-skills=<query>\` saves the query to the project \`nrz.json\`; \`nrz skills link [<query>]\` sets, saves and applies it.
+
+      Example: --allow-skills="#agent-browser:skill(agent-browser)" Links the agent-browser skill from a package with the same name.
+    ),
+    "hint": "query",
+    "type": "string",
+  },
+  "arch": Object {
+    "description": "CPU architecture to use as the selector when choosing packages based on their \`cpu\` value.",
+    "type": "string",
+  },
+  "bail": Object {
+    "description": "When running scripts across multiple workspaces, stop on the first failure.",
+    "short": "b",
+    "type": "boolean",
+  },
+  "before": Object {
+    "description": "Do not install any packages published after this date",
+    "hint": "date",
+    "type": "string",
+  },
+  "brotli-tarballs": Object {
+    "description": String(
+      Resolve to the Brotli (\`.tar.br\`) tarball when the registry advertises one for a version, transferring far less than the gzip \`.tgz\`.
+
+      The \`.tar.br\` is its own artifact and hashes differently, so a version installed this way records that hash in \`nrz-lock.json\`. An existing lockfile keeps whichever artifact it already pinned; set \`--no-brotli-tarballs\` before resolving to pin the \`.tgz\` instead.
+    ),
+    "type": "boolean",
+  },
+  "cache": Object {
+    "description": "Location of the nrz on-disk cache. Defaults to the platform-specific directory recommended by the XDG specification.",
+    "hint": "path",
+    "type": "string",
+  },
+  "call": Object {
+    "description": String(
+      When running \`nrz exec\`, provide an arbitrary command string to execute after installing and adding any specified package bins to the PATH.
+
+      If a package is specified (via positionals or \`--package\`), it will be installed and its executables added to the PATH before the \`--call\` command runs.
+
+      The command string is executed via the configured \`script-shell\`, or the \`SHELL\` environment variable, falling back to \`/bin/sh\` on Unix or \`cmd.exe\` on Windows. On Unix, the shell is invoked with \`-c\`; on Windows with \`/c\`.
+
+      Example: \`nrz exec create-react-app --call="echo $PWD"\` \`nrz exec --call="echo $PWD" --scope=":workspace"\`
+    ),
+    "hint": "cmd",
+    "type": "string",
+  },
+  "color": Object {
+    "description": "Use colors (Default for TTY)",
+    "short": "c",
+    "type": "boolean",
+  },
+  "commit": Object {
+    "description": String(
+      Create the version commit in \`nrz version\`.
+
+      Set \`--no-commit\` to leave the bumped \`package.json\` uncommitted while still creating the git tag. Implied by \`--no-git-tag-version\`.
+    ),
+    "type": "boolean",
+  },
+  "config": Object {
+    "description": "Specify which configuration to show or operate on when running \`nrz config\` commands, and which file \`nrz skills link\` saves \`allow-skills\` to. For read operations (get, pick, list): \`all\` shows merged configuration from both user and project files (default). For write operations (set, delete, edit): defaults to \`project\`. \`user\` shows/modifies only user-level configuration, \`project\` shows/modifies only project-level configuration.",
+    "hint": "all | user | project",
+    "type": "string",
+    "validOptions": Array [
+      "all",
+      "user",
+      "project",
+    ],
+  },
+  "dashboard-root": Object {
+    "description": "The root directory to use for the dashboard browser-based UI. If not set, the user home directory is used.",
+    "hint": "path",
+    "multiple": true,
+    "type": "string",
+  },
+  "default-registry-alias": Object {
+    "description": String(
+      The name of the registry alias (a key in \`--registries\`) that bare specifiers (e.g. \`express@latest\`) and transitive dependencies without an explicit registry protocol resolve through, when neither \`--registry\` nor a matching \`--scoped-registries\` entry applies.
+
+      Defaults to \`npm\`. Note that the \`npm\` alias has **no** built-in URL -- it must be configured (for example via \`nrz setup\`, which points it at your nrz.io registry), otherwise bare specifiers will have no registry to resolve against.
+    ),
+    "hint": "name",
+    "type": "string",
+  },
+  "dry-run": Object {
+    "description": "Run command without making any changes",
+    "type": "boolean",
+  },
+  "editor": Object {
+    "description": String(
+      The blocking editor to use for \`nrz config edit\` and any other cases where a file should be opened for editing.
+
+      Defaults to the \`EDITOR\` or \`VISUAL\` env if set, or \`notepad.exe\` on Windows, or \`vi\` elsewhere.
+    ),
+    "hint": "program",
+    "type": "string",
+  },
+  "expect-lockfile": Object {
+    "description": "Fail if lockfile is missing or out of date. Used by ci command to enforce lockfile integrity.",
+    "type": "boolean",
+  },
+  "expect-results": Object {
+    "description": String(
+      When running \`nrz query\`, this option allows you to set a expected number of resulting items.
+
+      Accepted values are numbers and strings.
+
+      Strings starting with \`>\`, \`<\`, \`>=\` or \`<=\` followed by a number can be used to check if the result is greater than or less than a specific number.
+    ),
+    "hint": "value",
+    "type": "string",
+    "validate": Function validate(v),
+  },
+  "fallback-command": Object {
+    "description": String(
+      The command to run when the first argument doesn't match any known commands.
+
+      For pnpm-style behavior, set this to 'run-exec'. e.g:
+
+      \`\`\`
+      ​nrz config set fallback-command=run-exec
+      \`\`\`
+
+
+    ),
+    "hint": "command",
+    "type": "string",
+    "validOptions": Array [
+      "access",
+      "bugs",
+      "build",
+      "cache",
+      "ci",
+      "config",
+      "create",
+      "deprecate",
+      "dist-tag",
+      "docs",
+      "exec",
+      "exec-local",
+      "help",
+      "init",
+      "install",
+      "login",
+      "logout",
+      "list",
+      "ls",
+      "outdated",
+      "pack",
+      "ping",
+      "pkg",
+      "profile",
+      "publish",
+      "query",
+      "registry",
+      "repo",
+      "run-exec",
+      "run",
+      "setup",
+      "skills",
+      "token",
+      "uninstall",
+      "unpublish",
+      "update",
+      "exec-cache",
+      "version",
+      "view",
+      "whoami",
+    ],
+  },
+  "fetch-retries": Object {
+    "description": "Number of retries to perform when encountering network errors or likely-transient errors from git hosts.",
+    "hint": "n",
+    "type": "number",
+  },
+  "fetch-retry-factor": Object {
+    "description": "The exponential backoff factor to use when retrying requests due to network issues.",
+    "hint": "n",
+    "type": "number",
+  },
+  "fetch-retry-maxtimeout": Object {
+    "description": "Maximum number of milliseconds between two retries",
+    "hint": "n",
+    "type": "number",
+  },
+  "fetch-retry-mintimeout": Object {
+    "description": "Number of milliseconds before starting first retry",
+    "hint": "n",
+    "type": "number",
+  },
+  "force": Object {
+    "description": "Force potentially dangerous operations, such as unpublishing an entire package.",
+    "short": "f",
+    "type": "boolean",
+  },
+  "frozen-lockfile": Object {
+    "description": "Fail if lockfile is missing or out of sync with package.json. Prevents any lockfile modifications.",
+    "type": "boolean",
+  },
+  "git-host-archives": Object {
+    "description": String(
+      Similar to the \`--git-host <name>=<template>\` option, this option can define a template string that will be expanded to provide the URL to download a pre-built tarball of the git repository.
+
+      In addition to the n-th path portion expansions performed by \`--git-host\`, this field will also expand the string \`$committish\` in the template, replacing it with the resolved git committish value to be fetched.
+    ),
+    "hint": "name=template",
+    "multiple": true,
+    "short": "A",
+    "type": "string",
+  },
+  "git-hosts": Object {
+    "description": String(
+      Map a shorthand name to a git remote URL template.
+
+      The \`template\` may contain placeholders, which will be swapped with the relevant values.
+
+      \`$1\`, \`$2\`, etc. are replaced with the appropriate n-th path portion. For example, \`github:user/project\` would replace the \`$1\` in the template with \`user\`, and \`$2\` with \`project\`.
+    ),
+    "hint": "name=template",
+    "multiple": true,
+    "short": "G",
+    "type": "string",
+  },
+  "git-shallow": Object {
+    "description": String(
+      Set to force \`--depth=1\` on all git clone actions. When set explicitly to false with --no-git-shallow, then \`--depth=1\` will not be used.
+
+      When not set explicitly, \`--depth=1\` will be used for git hosts known to support this behavior.
+    ),
+    "type": "boolean",
+  },
+  "git-tag-version": Object {
+    "description": String(
+      Commit and tag the version change made by \`nrz version\`.
+
+      Set \`--no-git-tag-version\` to bump the version in \`package.json\` without touching git at all, so that a series of bumps can be committed together.
+    ),
+    "type": "boolean",
+  },
+  "help": Object {
+    "description": "Print helpful information",
+    "short": "h",
+    "type": "boolean",
+  },
+  "identity": Object {
+    "description": String(
+      Provide a string to define an identity for storing auth information when logging into registries.
+
+      Authentication tokens will be stored in the XDG data directory, in \`nrz/auth/\${identity}/keychain.json\`.
+
+      If no identity is provided, then the default \`''\` will be used, storing the file at \`nrz/auth/keychain.json\`.
+
+      May only contain lowercase alphanumeric characters.
+    ),
+    "hint": "name",
+    "short": "i",
+    "type": "string",
+    "validate": Function validate(v),
+  },
+  "if-present": Object {
+    "description": String(
+      When running scripts across multiple packages, only include packages that have the script.
+
+      If this is not set, then the run will fail if any packages do not have the script.
+
+      This will default to true if --scope, --workspace,
+      --workspace-group, or --recursive is set. Otherwise, it will default to false.
+    ),
+    "type": "boolean",
+  },
+  "jsr-registries": Object {
+    "description": String(
+      Map alias names to JSR.io registry urls.
+
+      For example, \`--jsr-registries acme=https://jsr.acme.io/\` would tell nrz to fetch any packages with the \`acme:\` registry prefix from the \`https://jsr.acme.io/\` registry, using the "npm Compatibility" translation. So for example, the package \`acme:@foo/bar\` would fetch the \`@jsr/foo__bar\` package from the \`jsr.acme.io\` registry.
+
+      By default the \`jsr\` alias is always mapped to \`https://npm.jsr.io/\`, so existing \`jsr:\` packages will be fetched from the public \`jsr\` registry appropriately.
+    ),
+    "hint": "name=url",
+    "multiple": true,
+    "type": "string",
+  },
+  "libc": Object {
+    "description": "Override the libc family to use as the selector when choosing packages based on their \`libc\` value (e.g. glibc, musl). By default, this is auto-detected on Linux systems.",
+    "type": "string",
+  },
+  "lockfile-only": Object {
+    "description": "Only update the lockfile (nrz-lock.json) and package.json files, skip all node_modules operations including package extraction and filesystem changes.",
+    "type": "boolean",
+  },
+  "loglevel": Object {
+    "description": String(
+      Sets the verbosity of diagnostic logging written to stderr (registry requests, warnings, etc). This is independent of \`--view\`, which controls a command's result output on stdout.
+
+      - silent: No diagnostic logging.
+      - error: Only errors.
+      - warn: Errors and warnings.
+      - info: Default. High-level progress.
+      - verbose: Adds per-request logging (each registry URL with its cache/stale/fetch outcome and status code).
+      - debug: Everything, including low-level detail.
+
+      \`--verbose\` is shorthand for \`--loglevel=verbose\`.
+    ),
+    "hint": "level",
+    "type": "string",
+    "validOptions": Array [
+      "silent",
+      "error",
+      "warn",
+      "info",
+      "verbose",
+      "debug",
+    ],
+  },
+  "migrate-workspaces": Object {
+    "description": String(
+      Save workspaces read from the \`workspaces\` field of the root \`package.json\` or from \`pnpm-workspace.yaml\` to the project \`nrz.json\` on \`nrz install\`. \`nrz.json\` then takes precedence.
+
+      Set \`--no-migrate-workspaces\` to skip this; an already saved \`workspaces\` field stays until removed.
+    ),
+    "type": "boolean",
+  },
+  "no-bail": Object {
+    "description": "When running scripts across multiple workspaces, continue on failure, running the script for all workspaces.",
+    "short": "B",
+    "type": "boolean",
+  },
+  "no-color": Object {
+    "description": "Do not use colors (Default for non-TTY)",
+    "short": "C",
+    "type": "boolean",
+  },
+  "node-version": Object {
+    "description": "Node version to use when choosing packages based on their \`engines.node\` value.",
+    "hint": "version",
+    "type": "string",
+  },
+  "os": Object {
+    "description": "The operating system to use as the selector when choosing packages based on their \`os\` value.",
+    "type": "string",
+  },
+  "otp": Object {
+    "description": "Provide an OTP to use when publishing a package.",
+    "type": "string",
+  },
+  "package": Object {
+    "description": "When running \`nrz exec\`, this allows you to explicitly set the package to search for bins. If not provided, then nrz will interpret the first argument as the package, and attempt to run the default executable.",
+    "hint": "p",
+    "type": "string",
+  },
+  "publish-directory": Object {
+    "description": "Directory to use for pack and publish operations instead of the current directory. The directory must exist and nothing will be copied to it.",
+    "hint": "path",
+    "type": "string",
+  },
+  "recursive": Object {
+    "description": String(
+      Run an operation across multiple workspaces.
+
+      No effect when used in non-monorepo projects.
+
+      Implied by setting --workspace or --workspace-group. If not set, then the action is run on the project root.
+    ),
+    "short": "r",
+    "type": "boolean",
+  },
+  "registries": Object {
+    "description": String(
+      Specify named registry hosts by their prefix. To choose which alias is used for non-namespaced specifiers, use the \`--default-registry-alias\` option.
+
+      Prefixes can be used as a package alias. For example:
+
+      \`\`\`
+      ​nrz --registries loc=http://reg.local install foo@loc:foo@1.x
+      \`\`\`
+
+      There is **no** built-in \`npm\` registry URL; the \`npm\` alias must be configured (e.g. via \`nrz setup\`) before it can be used. The \`gh\` alias has a built-in default that can be overridden here. A name used by \`--jsr-registries\` or \`--git-hosts\` (e.g. \`jsr\`, \`github\`), or a built-in protocol (e.g. \`file\`), is an error.
+
+      Aliases given on the command line or in \`NRZ_REGISTRIES\` (newline-delimited) merge with the configured ones, later sources winning per key. Pass \`--save-config\` to \`install\`, \`add\` or \`update\` to save them to \`nrz.json\`.
+    ),
+    "hint": "name=url",
+    "multiple": true,
+    "type": "string",
+  },
+  "registry": Object {
+    "description": String(
+      Sets the registry for fetching packages, when no registry is explicitly set on a specifier.
+
+      For example, \`express@latest\` will be resolved by looking up the metadata from this registry.
+
+      There is **no default**. When unset, bare specifiers fall back to the registry alias named by \`--default-registry-alias\` (\`npm\` by default). If that alias is also unconfigured, commands that need a registry fail with a config error. Run \`nrz setup\` (or \`nrz login\`) to configure one.
+
+      See https://docs.nrz.khulnasoft.com/cli
+    ),
+    "hint": "url",
+    "type": "string",
+  },
+  "save-config": Object {
+    "description": "Save the registry and git host options given on the command line or via \`NRZ_*\` env (\`--registry\`, \`--registries\`, \`--default-registry-alias\`, \`--scoped-registries\`, \`--jsr-registries\`, \`--git-hosts\`, \`--git-host-archives\`) to the project \`nrz.json\` (or the user one with \`--config=user\`) after a successful \`install\`, \`add\` or \`update\`. Values a config file already has are left alone.",
+    "type": "boolean",
+  },
+  "save-dev": Object {
+    "description": "Save installed packages to a package.json file as devDependencies",
+    "short": "D",
+    "type": "boolean",
+  },
+  "save-exact": Object {
+    "description": "Save installed packages to package.json with an exact version rather than using the default semver range operator (e.g. \`1.2.3\` instead of \`^1.2.3\`).",
+    "short": "E",
+    "type": "boolean",
+  },
+  "save-optional": Object {
+    "description": "Save installed packages to a package.json file as optionalDependencies",
+    "short": "O",
+    "type": "boolean",
+  },
+  "save-peer": Object {
+    "description": "Save installed packages to a package.json file as peerDependencies",
+    "type": "boolean",
+  },
+  "save-prefix": Object {
+    "description": "The version prefix to use when saving dependencies to package.json (e.g. \`^\`, \`~\`, \`>=\`, or empty string for exact versions). Defaults to \`^\`. Ignored when \`--save-exact\` is set.",
+    "type": "string",
+  },
+  "save-prod": Object {
+    "description": "Save installed packages into dependencies specifically. This is useful if a package already exists in devDependencies or optionalDependencies, but you want to move it to be a non-optional production dependency.",
+    "short": "P",
+    "type": "boolean",
+  },
+  "save-types": Object {
+    "description": "Also save the matching \`@types/*\` package as a devDependency for each added registry package that ships no TypeScript types of its own.",
+    "type": "boolean",
+  },
+  "scope": Object {
+    "description": "Set to filter the scope of an operation using a DSS Query.",
+    "hint": "query",
+    "short": "s",
+    "type": "string",
+  },
+  "scoped-registries": Object {
+    "description": String(
+      Map package name scopes to registry URLs.
+
+      For example, \`--scoped-registries @acme=https://registry.acme/\` would tell nrz to fetch any packages named \`@acme/...\` from the \`https://registry.acme/\` registry.
+
+      Note: this way of specifying registries is more ambiguous, compared with using the \`--registries\` field and explicit prefixes, because instead of failing when the configuration is absent, it will instead attempt to fetch from the default registry.
+
+      By comparison, using \`--registries acme=https://registry.acme/\` and then specifying dependencies such as \`"foo": "acme:foo@1.x"\` means that regardless of the name, the package will be fetched from the explicitly named registry, or fail if no registry is defined with that name.
+
+      However, custom registry aliases are not supported by other package managers.
+    ),
+    "hint": "@scope=url",
+    "multiple": true,
+    "type": "string",
+  },
+  "script-shell": Object {
+    "description": String(
+      The shell to use when executing \`package.json#scripts\`.
+
+      For \`nrz exec\` and \`nrz exec-local\`, this is never set, meaning that command arguments are run exactly as provided.
+
+      For \`nrz run\` (and other things that run lifecycle scripts in \`package.json#scripts\`), the entire command with all arguments is provided as a single string, meaning that some value must be provided for shell interpretation, and so for these contexts, the \`script-shell\` value will default to \`/bin/sh\` on POSIX systems or \`cmd.exe\` on Windows.
+    ),
+    "hint": "program",
+    "type": "string",
+  },
+  "skills-dir": Object {
+    "description": "Dirs to link agent skills into (see \`allow-skills\`), relative to the project root. Replaces detection: \`.agents/skills\`, plus \`<folder>/skills\` for each agent folder at the project root (e.g. \`.claude/\`), \`.claude/skills\` inside Claude Code, and existing \`.<name>/skills\` dirs. An empty list (\`[]\` in nrz.json, or \`--skills-dir=\`) links nothing. Each dir must be inside the project, not in node_modules.",
+    "hint": "path",
+    "multiple": true,
+    "type": "string",
+  },
+  "stale-while-revalidate-factor": Object {
+    "description": String(
+      If the server does not serve a \`stale-while-revalidate\` value in the \`cache-control\` header, then this multiplier is applied to the \`max-age\` or \`s-maxage\` values.
+
+      By default, this is \`60\`, so for example a response that is cacheable for 5 minutes will allow a stale response while revalidating for up to 5 hours.
+
+      If the server *does* provide a \`stale-while-revalidate\` value, then that is always used.
+
+      Set to 0 to prevent any \`stale-while-revalidate\` behavior unless explicitly allowed by the server's \`cache-control\` header.
+    ),
+    "hint": "n",
+    "type": "number",
+  },
+  "store-linker": Object {
+    "description": String(
+      How packages are placed in \`node_modules\`. Every linker but \`unpack\` fills a global store under \`cache\` in the background, then places packages from it.
+
+      - auto: Default. On Linux, hardlink from the global store, copying any file that cannot be linked. On macOS, clone from it, on a Node with \`node:ffi\` (26.1 and later, and \`--allow-ffi\` under \`--permission\`); a hardlink is the slowest way to place a file on APFS, so macOS without it, and Windows, unpack by default.
+      - hardlink: Hardlink from the global store on every platform.
+      - clone: Clone each package directory from the global store copy-on-write (\`clonefile\`, macOS on APFS). Files share storage with the store until edited, so editing in place is safe. Unpacks where cloning fails.
+      - copy: Copy from the global store. Use this when editing files in \`node_modules\` in place, since a hardlink shares its content with every project.
+      - unpack: Unpack each package tarball, skipping the global store.
+
+      A hardlinked package is copied right before its install scripts run, so they don't change its files in the store; a cloned one needs no copy. An invalid \`NRZ_STORE_LINKER\` warns and uses \`unpack\`.
+    ),
+    "hint": "auto | hardlink | clone | copy | unpack",
+    "type": "string",
+    "validOptions": Array [
+      "auto",
+      "hardlink",
+      "clone",
+      "copy",
+      "unpack",
+    ],
+  },
+  "tag": Object {
+    "description": "Default \`dist-tag\` to install or publish",
+    "type": "string",
+  },
+  "target": Object {
+    "description": "Set to select packages using a DSS Query selector.",
+    "hint": "query",
+    "short": "t",
+    "type": "string",
+  },
+  "telemetry": Object {
+    "description": String(
+      Enable anonymous usage telemetry.
+
+      nrz collects anonymized usage data to help improve the tool. No personally identifiable information is ever sent.
+
+      Set \`--no-telemetry\` or \`NRZ_TELEMETRY=0\` or \`DO_NOT_TRACK=1\` to opt out.
+    ),
+    "type": "boolean",
+  },
+  "verbose": Object {
+    "description": "Shorthand for \`--loglevel=verbose\`. Streams each registry request to stderr with its cache/fetch outcome and status code, useful for debugging request behavior.",
+    "type": "boolean",
+  },
+  "version": Object {
+    "description": "Print the version",
+    "short": "v",
+    "type": "boolean",
+  },
+  "view": Object {
+    "description": String(
+      Configures the output format for commands.
+
+      Defaults to \`human\` if stdout is a TTY, or \`json\` if it is not.
+
+      - human: Maximally ergonomic output reporting for human consumption.
+      - json: Parseable JSON output for machines.
+      - inspect: Output results with \`util.inspect\`.
+      - mermaid: Output mermaid diagramming syntax. (Only relevant for certain commands.)
+      - svg: Render the dependency graph as an SVG image and open it. (Only relevant for certain commands.)
+      - png: Render the dependency graph as a PNG image and open it. (Only relevant for certain commands.)
+      - count: Output the number of dependency relationships in the result set.
+      - silent: Suppress all output to stdout.
+
+      If the requested view format is not supported for the current command, or if no option is provided, then it will fall back to the default.
+    ),
+    "hint": "output",
+    "type": "string",
+    "validOptions": Array [
+      "human",
+      "json",
+      "mermaid",
+      "svg",
+      "png",
+      "count",
+      "inspect",
+      "silent",
+    ],
+  },
+  "workspace": Object {
+    "description": String(
+      Set to limit the spaces being worked on when working on workspaces.
+
+      Can be paths or glob patterns matching paths.
+
+      Specifying workspaces by package.json name is not supported.
+    ),
+    "hint": "ws",
+    "multiple": true,
+    "short": "w",
+    "type": "string",
+  },
+  "workspace-group": Object {
+    "description": "Specify named workspace group names to load and operate on when doing recursive operations on workspaces.",
+    "multiple": true,
+    "type": "string",
+  },
+  "yes": Object {
+    "description": "Automatically accept any confirmation prompts",
+    "short": "y",
+    "type": "boolean",
+  },
+}
+`
+
+exports[`test/config/definition.ts > TAP > getSortedCliDefinitions > sorted CLI definitions 1`] = `
+Array [
+  "--access=<access>",
+  "--all",
+  "--allow-scripts=<query>",
+  "--allow-skills=<query>",
+  "--arch=<arch>",
+  "--bail",
+  "--before=<date>",
+  "--brotli-tarballs",
+  "--cache=<path>",
+  "--call=<cmd>",
+  "--color",
+  "--commit",
+  "--config=<all | user | project>",
+  "--dashboard-root=<path>",
+  "--default-registry-alias=<name>",
+  "--dry-run",
+  "--editor=<program>",
+  "--expect-lockfile",
+  "--expect-results=<value>",
+  "--fallback-command=<command>",
+  "--fetch-retries=<n>",
+  "--fetch-retry-factor=<n>",
+  "--fetch-retry-maxtimeout=<n>",
+  "--fetch-retry-mintimeout=<n>",
+  "--force",
+  "--frozen-lockfile",
+  "--git-host-archives=<name=template>",
+  "--git-hosts=<name=template>",
+  "--git-shallow",
+  "--git-tag-version",
+  "--help",
+  "--identity=<name>",
+  "--if-present",
+  "--jsr-registries=<name=url>",
+  "--libc=<libc>",
+  "--lockfile-only",
+  "--loglevel=<level>",
+  "--migrate-workspaces",
+  "--no-bail",
+  "--no-color",
+  "--node-version=<version>",
+  "--os=<os>",
+  "--otp=<otp>",
+  "--package=<p>",
+  "--publish-directory=<path>",
+  "--recursive",
+  "--registries=<name=url>",
+  "--registry=<url>",
+  "--save-config",
+  "--save-dev",
+  "--save-exact",
+  "--save-optional",
+  "--save-peer",
+  "--save-prefix=<save-prefix>",
+  "--save-prod",
+  "--save-types",
+  "--scope=<query>",
+  "--scoped-registries=<@scope=url>",
+  "--script-shell=<program>",
+  "--skills-dir=<path>",
+  "--stale-while-revalidate-factor=<n>",
+  "--store-linker=<auto | hardlink | clone | copy | unpack>",
+  "--tag=<tag>",
+  "--target=<query>",
+  "--telemetry",
+  "--verbose",
+  "--version",
+  "--view=<output>",
+  "--workspace=<ws>",
+  "--workspace-group=<workspace-group>",
+  "--yes",
+]
+`
+
+exports[`test/config/definition.ts > TAP > getSortedKeys > sorted keys 1`] = `
+Array [
+  "access",
+  "all",
+  "allow-scripts",
+  "allow-skills",
+  "arch",
+  "bail",
+  "before",
+  "brotli-tarballs",
+  "cache",
+  "call",
+  "color",
+  "commit",
+  "config",
+  "dashboard-root",
+  "default-registry-alias",
+  "dry-run",
+  "editor",
+  "expect-lockfile",
+  "expect-results",
+  "fallback-command",
+  "fetch-retries",
+  "fetch-retry-factor",
+  "fetch-retry-maxtimeout",
+  "fetch-retry-mintimeout",
+  "force",
+  "frozen-lockfile",
+  "git-host-archives",
+  "git-hosts",
+  "git-shallow",
+  "git-tag-version",
+  "help",
+  "identity",
+  "if-present",
+  "jsr-registries",
+  "libc",
+  "lockfile-only",
+  "loglevel",
+  "migrate-workspaces",
+  "no-bail",
+  "no-color",
+  "node-version",
+  "os",
+  "otp",
+  "package",
+  "publish-directory",
+  "recursive",
+  "registries",
+  "registry",
+  "save-config",
+  "save-dev",
+  "save-exact",
+  "save-optional",
+  "save-peer",
+  "save-prefix",
+  "save-prod",
+  "save-types",
+  "scope",
+  "scoped-registries",
+  "script-shell",
+  "skills-dir",
+  "stale-while-revalidate-factor",
+  "store-linker",
+  "tag",
+  "target",
+  "telemetry",
+  "verbose",
+  "version",
+  "view",
+  "workspace",
+  "workspace-group",
+  "yes",
+]
+`

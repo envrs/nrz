@@ -1,23 +1,30 @@
-import { type PackageInfoClient } from '@nrz/package-info'
-import {
-  load as loadActual,
-  type LoadOptions as LoadActualOptions,
-} from '../actual/load.ts'
-import {
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
-  type Dependency,
-} from '../dependencies.ts'
-import { type Graph } from '../graph.ts'
+import { error } from '@nrz/error-cause'
+import { graphStep } from '@nrz/output'
+import { load as loadActual } from '../actual/load.ts'
 import { load as loadVirtual } from '../lockfile/load.ts'
 import { buildIdealFromStartingGraph } from './build-ideal-from-starting-graph.ts'
-import { type DepID } from '@nrz/dep-id'
-import { graphStep } from '@nrz/output'
+import { prefetchResolve } from './prefetch-resolve.ts'
+import { isPathSecurityError } from '../path-security-error.ts'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { LoadOptions as LoadActualOptions } from '../actual/load.ts'
+import type {
+  AddImportersDependenciesMap,
+  RemoveImportersDependenciesMap,
+  Dependency,
+} from '../dependencies.ts'
+import type { Graph } from '../graph.ts'
+import { splitDepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import type { RollbackRemove } from '@nrz/rollback-remove'
 
 const getMap = <T extends Map<any, any>>(m?: T) =>
   m ?? (new Map() as T)
 
 export type BuildIdealOptions = LoadActualOptions & {
+  /**
+   * An actual graph
+   */
+  actual?: Graph
   /**
    * A `Map` in which keys are {@link DepID} linking to another `Map` in which
    * keys are the dependency names and values are {@link Dependency}. This
@@ -32,9 +39,30 @@ export type BuildIdealOptions = LoadActualOptions & {
    */
   remove?: RemoveImportersDependenciesMap
   /**
+   * A {@link RollbackRemove} instance to handle extraction rollbacks
+   */
+  remover: RollbackRemove
+  /**
    * A {@link PackageInfoClient} instance to read manifest info from.
    */
   packageInfo: PackageInfoClient
+}
+
+/**
+ * Validates that a file dependency node exists in the graph after
+ * a successful graph build. This helps providing an actionable error
+ * message in case the current working directory is a linked nested
+ * folder that hasn't yet been added as a dependency to an importer
+ * in the project.
+ */
+const validateFileDepNode = (graph: Graph, id: DepID) => {
+  const [type, path] = splitDepID(id)
+  if (type === 'file' && !graph.nodes.get(id)) {
+    throw error(
+      'The current working dir is not a dependency of this project',
+      { path },
+    )
+  }
 }
 
 /**
@@ -61,7 +89,25 @@ export const build = async (
       mainManifest,
       monorepo,
     })
-  } catch {
+  } catch (err) {
+    // a path-safety verdict must not be silently rebuilt away
+    if (isPathSecurityError(err)) throw err
+    // Check if this is a lockfile version mismatch
+    const cause = (
+      err as Error & {
+        cause?: { code?: string; found?: number; wanted?: number }
+      }
+    ).cause
+    if (cause?.code === 'ELOCKFILEVERSION') {
+      // If lockfile is from a different nrz version, hard fail
+      if (
+        typeof cause.found === 'number' &&
+        typeof cause.wanted === 'number'
+      ) {
+        throw err
+      }
+      // TODO: add warning to CLI layer via @nrz/output when available
+    }
     graph = loadActual({
       ...options,
       mainManifest,
@@ -69,14 +115,39 @@ export const build = async (
     })
   }
 
-  const res = await buildIdealFromStartingGraph({
-    ...options,
-    scurry,
-    add: getMap(options.add),
-    graph,
-    packageInfo,
-    remove: getMap(options.remove),
-  })
+  // Start resolving the importers' dependencies server-side, one request
+  // to the default registry. manifest() picks the answers up as they land,
+  // and nothing reads them once the ideal graph is built.
+  const releaseResolve = prefetchResolve(graph, packageInfo, options)
+
+  let res
+  try {
+    res = await buildIdealFromStartingGraph({
+      ...options,
+      scurry,
+      add: getMap(options.add),
+      graph,
+      packageInfo,
+      remove: getMap(options.remove),
+      actual: options.actual,
+    })
+  } finally {
+    releaseResolve()
+  }
   done()
+
+  // when adding or removing a new dependency from a file dep,
+  // validate the receiver node was present in the graph
+  if (options.add) {
+    for (const [addKey, value] of options.add.entries()) {
+      if (value.size) validateFileDepNode(res, addKey)
+    }
+  }
+  if (options.remove) {
+    for (const [removeKey, value] of options.remove.entries()) {
+      if (value.size) validateFileDepNode(res, removeKey)
+    }
+  }
+
   return res
 }

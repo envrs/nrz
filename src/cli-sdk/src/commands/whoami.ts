@@ -1,0 +1,66 @@
+import { error } from '@nrz/error-cause'
+import { RegistryClient, assertOk } from '@nrz/registry-client'
+import type { JSONField } from '@nrz/types'
+import { commandUsage } from '../config/usage.ts'
+import { resolveRegistry } from '../require-registry.ts'
+import type { CommandFn, CommandUsage } from '../index.ts'
+import type { Views } from '../view.ts'
+
+export const needsRegistry = true
+
+export const usage: CommandUsage = () =>
+  commandUsage({
+    command: 'whoami',
+    usage: [''],
+    description: `Look up the username for the currently active token,
+                  when logged into a registry.
+
+                  Target a specific configured registry by alias with
+                  \`nrz registry <alias> whoami\`.`,
+    options: {
+      registry: {
+        value: '<url>',
+        description:
+          'Registry URL to query for authenticated user info.',
+      },
+      identity: {
+        value: '<name>',
+        description:
+          'Identity namespace used to look up auth tokens.',
+      },
+    },
+  })
+
+type CommandResult = {
+  username?: JSONField
+}
+
+export const views = {
+  human: r => r.username,
+  json: r => r,
+} as const satisfies Views<CommandResult>
+
+export const command: CommandFn<CommandResult> = async conf => {
+  const rc = new RegistryClient(conf.options)
+  const url = new URL('-/whoami', await resolveRegistry(conf))
+  const response = await rc.request(url, { useCache: false })
+  assertOk(response, {
+    message: 'Failed to look up the current user',
+    url,
+    advice: statusCode =>
+      statusCode === 401 || statusCode === 403 ?
+        `Not logged in to ${url.origin}. Run \`nrz login\` and try again.`
+      : undefined,
+  })
+  const { username } = response.json()
+  if (typeof username !== 'string' || !username) {
+    throw error('Registry did not report a username', {
+      code: 'EREQUEST',
+      url,
+      wanted: 'a `username` string',
+      found: username,
+      response,
+    })
+  }
+  return { username }
+}

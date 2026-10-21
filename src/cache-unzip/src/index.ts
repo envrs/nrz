@@ -1,12 +1,34 @@
-import { spawn } from 'child_process'
+import type { Integrity } from '@nrz/types'
+import { spawn } from 'node:child_process'
+import module from 'node:module'
 import { __CODE_SPLIT_SCRIPT_NAME } from './unzip.ts'
 
-let didProcessBeforeExitHook = false
-const registered = new Map<string, Set<string>>()
+const isDeno =
+  (globalThis as typeof globalThis & { Deno?: any }).Deno != undefined
 
-export const register = (path: string, key: string): void => {
-  const r = registered.get(path) ?? new Set<string>()
-  r.add(key)
+let didProcessBeforeExitHook = false
+type Registered = {
+  keys: Map<string, Integrity | undefined>
+  store?: string
+}
+const registered = new Map<string, Registered>()
+
+/**
+ * Queue the cache entry at `key` in the cache folder `path` for the
+ * background child. Pass the global store root as `store` to also
+ * explode it there (only when `NRZ_STORE_LINKER` enables the store),
+ * and the tarball's `integrity` if its entry may only be cached under
+ * that.
+ */
+export const register = (
+  path: string,
+  key: string,
+  store?: string,
+  integrity?: Integrity,
+): void => {
+  const r: Registered = registered.get(path) ?? { keys: new Map() }
+  r.keys.set(key, integrity ?? r.keys.get(key))
+  r.store ??= store
   registered.set(path, r)
   if (!didProcessBeforeExitHook) {
     didProcessBeforeExitHook = true
@@ -15,18 +37,50 @@ export const register = (path: string, key: string): void => {
 }
 
 const handleBeforeExit = () => {
-  for (const [path, r] of registered) {
+  // The compile cache is enabled in-process by the CLI entry, which does
+  // not propagate to child processes, so the worker has to be pointed at
+  // it through the environment to skip re-compiling its bundle.
+  const compileCacheDir = module.getCompileCacheDir()
+  for (const [path, { keys, store }] of registered) {
     /* c8 ignore next */
-    if (!r.size) return
-    const args = [__CODE_SPLIT_SCRIPT_NAME, path]
+    if (!keys.size) return
+    const env = { ...process.env }
+    if (compileCacheDir) env.NODE_COMPILE_CACHE ??= compileCacheDir
+    const args = []
+    // Deno on Windows does not support detached processes
+    // https://github.com/denoland/deno/issues/25867
+    // TODO: figure out something better to do here?
+    const detached = !(isDeno && process.platform === 'win32')
+    // If we are running deno from source we need to add the
+    // unstable flags we need. The '-A' flag does not need
+    // to be passed in as Deno supplies that automatically.
+    if (isDeno) {
+      args.push(
+        '--unstable-node-globals',
+        '--unstable-bare-node-builtins',
+      )
+    }
+    args.push(__CODE_SPLIT_SCRIPT_NAME, path)
+    if (store) args.push(store)
     registered.delete(path)
     const proc = spawn(process.execPath, args, {
-      detached: true,
+      detached,
       stdio: ['pipe', 'ignore', 'ignore'],
+      env,
     })
-    for (const key of r) {
-      proc.stdin.write(`${key}\0`)
+    for (const [key, integrity] of keys) {
+      proc.stdin.write(
+        integrity ? `${key}\t${integrity}\0` : `${key}\0`,
+      )
     }
-    proc.unref()
+    proc.stdin.end()
+    // Another Deno oddity. Calling unref on a spawned process will kill the
+    // process unless it is detached. https://github.com/denoland/deno/issues/21446
+    // So in this case Deno on Windows will be slower to exit the main process
+    // since it will wait for the child process to exit.
+    // TODO: figure out something better to do here?
+    if (detached) {
+      proc.unref()
+    }
   }
 }

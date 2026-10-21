@@ -1,34 +1,129 @@
 import { spawn as spawnGit } from '@nrz/git'
 import { Spec } from '@nrz/spec'
-import { Pool } from '@nrz/tar'
-import { type Manifest } from '@nrz/types'
+import { Pool, unpackToStoreSync } from '@nrz/tar'
+import type {
+  LinkFromStoreOptions,
+  StoreIndex,
+  StoreLinker,
+} from '@nrz/tar'
+import { integrityHex } from '@nrz/types'
+import type { Integrity, Manifest } from '@nrz/types'
+import { unload } from '@nrz/nrz-json'
 import { Workspace } from '@nrz/workspaces'
-import { lstatSync, readFileSync, readlinkSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { resolve as pathResolve } from 'node:path'
+import { basename, dirname, resolve as pathResolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { brotliCompressSync, gunzipSync } from 'node:zlib'
+import * as util from 'node:util'
+import type { Test } from 'tap'
 import t from 'tap'
 import { x as tarX } from 'tar'
-import {
-  extract,
-  manifest,
-  PackageInfoClient,
-  packument,
-  resolve,
-  tarball,
+import type {
+  PackageInfoClientExtractOptions,
+  PackageInfoClientOptions,
+  PackageInfoClientRequestOptions,
 } from '../src/index.ts'
+import { cacheKey } from '@nrz/registry-client'
+import { CacheEntry } from '@nrz/registry-client/cache-entry'
+import unzipMain from '@nrz/cache-unzip/unzip'
+// not exported: what the background revalidation child runs
+import { revalidateEntry } from '../../registry-client/src/revalidate-entry.ts'
+import {
+  PackageInfoClient,
+  PACKUMENT_ACCEPT,
+  resetCapabilities,
+} from '../src/index.ts'
+import { drainer } from './fixtures/drainer.ts'
 
 t.saveFixture = true
+
+// helper methods only for test
+const extract = (
+  spec: string | Spec,
+  dir: string,
+  options?: PackageInfoClientOptions &
+    PackageInfoClientExtractOptions,
+) => {
+  return new PackageInfoClient({
+    ...options,
+    cache: t.testdirName,
+  }).extract(spec, dir, options)
+}
+
+const resolve = (
+  spec: string | Spec,
+  options?: PackageInfoClientOptions &
+    PackageInfoClientRequestOptions,
+) => {
+  return new PackageInfoClient({
+    ...options,
+    cache: t.testdirName,
+  }).resolve(spec, options)
+}
+
+const packument = (
+  spec: string | Spec,
+  options?: PackageInfoClientOptions &
+    PackageInfoClientRequestOptions,
+) => {
+  return new PackageInfoClient({
+    ...options,
+    cache: t.testdirName,
+  }).packument(spec, options)
+}
+
+const manifest = (
+  spec: string | Spec,
+  options?: PackageInfoClientOptions &
+    PackageInfoClientRequestOptions,
+) => {
+  return new PackageInfoClient({
+    ...options,
+    cache: t.testdirName,
+  }).manifest(spec, options)
+}
 
 const fixtures = pathResolve(import.meta.dirname, 'fixtures')
 const pakuAbbrev = JSON.parse(
   readFileSync(pathResolve(fixtures, 'abbrev-full.json'), 'utf8'),
 )
 const tgzAbbrev = readFileSync(fixtures + '/abbrev-2.0.0.tgz')
+const tgzAbbrevSha512 = createHash('sha512')
+  .update(tgzAbbrev)
+  .digest('base64')
+const tarAbbrev = tgzAbbrevUnzipped()
+const tarAbbrevSha512 = createHash('sha512')
+  .update(tarAbbrev)
+  .digest('base64')
 const tgzFile = String(
   pathToFileURL(pathResolve(fixtures, 'abbrev-2.0.0.tgz')),
 )
+// the same package recompressed, the way the registry serves an
+// alternate: a distinct artifact with its own bytes and its own hash
+const brAbbrev = brotliCompressSync(tgzAbbrevUnzipped())
+const brAbbrevSha512 = createHash('sha512')
+  .update(brAbbrev)
+  .digest('base64')
+const brAbbrevIntegrity: Integrity = `sha512-${brAbbrevSha512}`
+
+function tgzAbbrevUnzipped() {
+  return gunzipSync(tgzAbbrev)
+}
 
 const shaRE = /^[0-9a-f]{40}$/
 
@@ -50,11 +145,76 @@ const PORT = 15443 + Number(process.env.TAP_CHILD_ID || 0)
 const etag = '"yolo"'
 const server = createServer((req, res) => {
   res.setHeader('connection', 'close')
-  switch (req.url) {
+  // `?stable` packument fixtures: a `stable-*` package answers a packument
+  // whose newest version is a prerelease that `latest` does not point at,
+  // and drops those versions -- and the dist-tag pointing at one -- when
+  // the request carries `?stable`, the way the registry filters it.
+  const stablePaku = /^\/(stable-[a-z-]+)(\?stable)?$/.exec(
+    req.url ?? '',
+  )
+  if (stablePaku) {
+    const [, name = '', filtered] = stablePaku
+    stableRequests.push(req.url ?? '')
+    const at = (version: string): Manifest => ({
+      name,
+      version,
+      dist: {
+        tarball: `${defaultRegistry}${name}/-/${name}-${version}.tgz`,
+      },
+    })
+    const json = JSON.stringify({
+      name,
+      'dist-tags':
+        filtered ?
+          { latest: '1.1.0' }
+        : { latest: '1.1.0', next: '2.0.0-rc.1' },
+      versions: {
+        '1.0.0': at('1.0.0'),
+        '1.1.0': at('1.1.0'),
+        ...(filtered ? {} : { '2.0.0-rc.1': at('2.0.0-rc.1') }),
+      },
+    })
+    res.setHeader('content-type', 'application/json')
+    res.setHeader('content-length', json.length)
+    if (stableDelay) {
+      setTimeout(() => res.end(json), stableDelay)
+      return
+    }
+    return res.end(json)
+  }
+  // Everything below is a registry that does not serve the filter, and so
+  // ignores the unknown parameter and answers the full packument -- what
+  // the client counts on while the capability document is still in flight.
+  switch (req.url?.replace(/\?stable$/, '')) {
+    case '/redirect/abbrev-2.0.0.tgz': {
+      // a remote url that redirects to the bytes, the way GitHub
+      // archive and release asset urls do
+      redirectTgzRequests++
+      res.statusCode = 302
+      res.setHeader('location', '/abbrev/-/abbrev-2.0.0.tgz')
+      return res.end()
+    }
     case '/abbrev/-/abbrev-2.0.0.tgz': {
+      abbrevTgzRequests++
       res.setHeader('content-type', 'application/octet-stream')
       res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader(
+        'integrity',
+        pakuAbbrev.versions['2.0.0'].dist.integrity,
+      )
       return res.end(tgzAbbrev)
+    }
+    case '/acme/npm/expired': {
+      // what the nrz registry's edge answers when a token's `exp` has passed
+      const json = JSON.stringify({
+        code: 'TokenExpiredError',
+        message:
+          'Token expired. Authenticate again to get a new token.',
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      res.statusCode = 401
+      return res.end(json)
     }
     case '/deleted': {
       const json = '{"error": "deleted"}'
@@ -64,6 +224,7 @@ const server = createServer((req, res) => {
     }
     case '/no-dist': {
       const json = JSON.stringify({
+        name: 'no-dist',
         'dist-tags': { latest: '1.2.3' },
         versions: {
           '1.2.3': {
@@ -77,6 +238,7 @@ const server = createServer((req, res) => {
     }
     case '/no-tgz': {
       const json = JSON.stringify({
+        name: 'no-tgz',
         'dist-tags': { latest: '1.2.3' },
         versions: {
           '1.2.3': {
@@ -116,6 +278,467 @@ const server = createServer((req, res) => {
       res.setHeader('content-length', j.byteLength)
       return res.end(j)
     }
+    case '/moving': {
+      movingRequests++
+      // etag tracks the dist-tag, so an unchanged packument 304s and a
+      // moved one comes back 200
+      const tag = `"${movingLatest}"`
+      if (req.headers['if-none-match'] === tag) {
+        res.statusCode = 304
+        return res.end()
+      }
+      const json = Buffer.from(
+        JSON.stringify({
+          name: 'moving',
+          'dist-tags': { latest: movingLatest },
+          versions: {
+            '1.0.0': { name: 'moving', version: '1.0.0' },
+            '2.0.0': { name: 'moving', version: '2.0.0' },
+          },
+        }),
+      )
+      res.setHeader('cache-control', 'public, max-age=3600')
+      res.setHeader('etag', tag)
+      res.setHeader('content-length', json.byteLength)
+      return res.end(json)
+    }
+    case '/coalesced': {
+      coalescedPackumentRequests++
+      coalescedPackumentAccept = req.headers.accept
+      const json = Buffer.from(JSON.stringify(pakuAbbrev))
+      res.setHeader('content-length', json.byteLength)
+      setTimeout(() => res.end(json), 50)
+      return
+    }
+    case '/corrupted/-/corrupted-1.0.0.tgz': {
+      // Serve a tarball whose content does NOT match the integrity
+      // in the manifest (simulates a supply-chain attack / registry bug)
+      const corrupted = Buffer.from(tgzAbbrev)
+      // Flip some bytes to corrupt it while keeping gzip magic
+      corrupted[100] = (corrupted[100]! ^ 0xff) & 0xff
+      corrupted[101] = (corrupted[101]! ^ 0xff) & 0xff
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', corrupted.byteLength)
+      res.setHeader(
+        'integrity',
+        pakuAbbrev.versions['2.0.0'].dist.integrity,
+      )
+      return res.end(corrupted)
+    }
+    case '/corrupted': {
+      const json = JSON.stringify({
+        name: 'corrupted',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'corrupted',
+            version: '1.0.0',
+            dist: {
+              tarball: `${defaultRegistry}corrupted/-/corrupted-1.0.0.tgz`,
+              integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+            },
+          },
+        },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/corrupted-no-header/-/corrupted-no-header-1.0.0.tgz': {
+      // corrupted, no integrity header: checked against dist.integrity
+      const corrupted = Buffer.from(tgzAbbrev)
+      corrupted[100] = (corrupted[100]! ^ 0xff) & 0xff
+      corrupted[101] = (corrupted[101]! ^ 0xff) & 0xff
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', corrupted.byteLength)
+      // NOTE: no 'integrity' header set here
+      return res.end(corrupted)
+    }
+    case '/corrupted-no-header': {
+      const json = JSON.stringify({
+        name: 'corrupted-no-header',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'corrupted-no-header',
+            version: '1.0.0',
+            dist: {
+              tarball: `${defaultRegistry}corrupted-no-header/-/corrupted-no-header-1.0.0.tgz`,
+              integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+            },
+          },
+        },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/corrupted-once/-/corrupted-once-1.0.0.tgz': {
+      // First request: serve corrupted tarball.
+      // Second request: serve correct tarball.
+      // This simulates a CDN serving stale/corrupted data that gets
+      // fixed on retry.
+      corruptedOnceServed++
+      if (corruptedOnceServed <= 1) {
+        const corrupted = Buffer.from(tgzAbbrev)
+        corrupted[100] = (corrupted[100]! ^ 0xff) & 0xff
+        corrupted[101] = (corrupted[101]! ^ 0xff) & 0xff
+        res.setHeader('content-type', 'application/octet-stream')
+        res.setHeader('content-length', corrupted.byteLength)
+        res.setHeader(
+          'integrity',
+          pakuAbbrev.versions['2.0.0'].dist.integrity,
+        )
+        return res.end(corrupted)
+      }
+      // Second request: correct tarball
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader(
+        'integrity',
+        pakuAbbrev.versions['2.0.0'].dist.integrity,
+      )
+      return res.end(tgzAbbrev)
+    }
+    case '/corrupted-once': {
+      const json = JSON.stringify({
+        name: 'corrupted-once',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'corrupted-once',
+            version: '1.0.0',
+            dist: {
+              tarball: `${defaultRegistry}corrupted-once/-/corrupted-once-1.0.0.tgz`,
+              integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+            },
+          },
+        },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    // flaky: corrupt body while flakyCorrupt is set. plain: uncompressed tar
+    case '/flaky':
+    case '/plain': {
+      const name = req.url.replace(/\?stable$/, '').slice(1)
+      const json = JSON.stringify({
+        name,
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name,
+            version: '1.0.0',
+            dist: {
+              tarball: `${defaultRegistry}${name}/-/${name}-1.0.0.tgz`,
+              integrity:
+                name === 'plain' ?
+                  `sha512-${tarAbbrevSha512}`
+                : pakuAbbrev.versions['2.0.0'].dist.integrity,
+            },
+          },
+        },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/flaky/-/flaky-1.0.0.tgz': {
+      const body = Buffer.from(tgzAbbrev)
+      if (flakyCorrupt) body[100] = (body[100]! ^ 0xff) & 0xff
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', body.byteLength)
+      return res.end(body)
+    }
+    case '/plain/-/plain-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tarAbbrev.byteLength)
+      return res.end(tarAbbrev)
+    }
+    // nrz packuments: no dist.integrity, registry-relative tarball paths
+    // v2 packuments: dist.tarball is the basename, in the package's
+    // `/-/` directory
+    case '/v2':
+    case '/@scope/v2': {
+      const name = req.url.slice(1)
+      const scoped = name.startsWith('@')
+      const json = JSON.stringify({
+        name,
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name,
+            version: '1.0.0',
+            dist: {
+              tarball: 'v2-1.0.0.tgz',
+              ...(scoped && {
+                alternates: [
+                  { kind: 'tar.br', tarball: 'v2-1.0.0.tar.br' },
+                ],
+              }),
+            },
+          },
+        },
+      })
+      res.setHeader(
+        'content-type',
+        'application/vnd.nrz.packument-v2+json',
+      )
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/v2/-/v2-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${tgzAbbrevSha512}:`)
+      return res.end(tgzAbbrev)
+    }
+    case '/digest':
+    case '/digest-bad':
+    case '/digest-missing': {
+      const name = req.url.replace(/\?stable$/, '').slice(1)
+      const json = JSON.stringify({
+        name,
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name,
+            version: '1.0.0',
+            dist: { tarball: `${name}/-/${name}-1.0.0.tgz` },
+          },
+        },
+      })
+      res.setHeader(
+        'content-type',
+        'application/vnd.nrz.packument-v1+json',
+      )
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/digest/-/digest-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${tgzAbbrevSha512}:`)
+      return res.end(tgzAbbrev)
+    }
+    case '/digest-bad/-/digest-bad-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${'0'.repeat(86)}==:`)
+      // agrees with the bogus digest: a server-sent integrity header
+      // never stands in for hashing the body
+      res.setHeader('integrity', `sha512-${'0'.repeat(86)}==`)
+      return res.end(tgzAbbrev)
+    }
+    case '/digest-missing/-/digest-missing-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      return res.end(tgzAbbrev)
+    }
+    case '/no-integrity/-/no-integrity-1.0.0.tgz': {
+      // Serve a valid tarball for a package with no dist.integrity
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      return res.end(tgzAbbrev)
+    }
+    // a nrz packument advertising a brotli alternate, and the artifact
+    // it points at. `brotli-404` advertises one the server does not have.
+    case '/brotli-pinned': {
+      const json = JSON.stringify({
+        name: 'brotli-pinned',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'brotli-pinned',
+            version: '1.0.0',
+            dist: {
+              tarball: 'brotli-pinned/-/brotli-pinned-1.0.0.tgz',
+              alternates: [
+                {
+                  kind: 'tar.br',
+                  tarball: 'brotli-pinned-1.0.0.tar.br',
+                  integrity: brAbbrevIntegrity,
+                },
+              ],
+            },
+          },
+        },
+      })
+      res.setHeader(
+        'content-type',
+        'application/vnd.nrz.packument-v1+json',
+      )
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/brotli-pinned/-/brotli-pinned-1.0.0.tar.br': {
+      // No Repr-Digest header here. The packument's hash is the check.
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', brAbbrev.byteLength)
+      return res.end(brAbbrev)
+    }
+    case '/brotli-odd': {
+      // an alternate the protocol allows but this client does not use:
+      // the reference is not the .tgz's sibling, so neither the format
+      // nor the lockfile url could be re-derived from it
+      const json = JSON.stringify({
+        name: 'brotli-odd',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'brotli-odd',
+            version: '1.0.0',
+            dist: {
+              tarball: 'brotli-odd/-/brotli-odd-1.0.0.tgz',
+              alternates: [{ kind: 'tar.br', tarball: './artifact' }],
+            },
+          },
+        },
+      })
+      res.setHeader(
+        'content-type',
+        'application/vnd.nrz.packument-v1+json',
+      )
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/brotli-odd/-/brotli-odd-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${tgzAbbrevSha512}:`)
+      return res.end(tgzAbbrev)
+    }
+    case '/brotli':
+    case '/brotli-404':
+    case '/brotli-nodigest':
+    case '/brotli-bad': {
+      const name = req.url.replace(/\?stable$/, '').slice(1)
+      const json = JSON.stringify({
+        name,
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name,
+            version: '1.0.0',
+            dist: {
+              tarball: `${name}/-/${name}-1.0.0.tgz`,
+              alternates: [
+                { kind: 'tar.br', tarball: `${name}-1.0.0.tar.br` },
+              ],
+            },
+          },
+        },
+      })
+      res.setHeader(
+        'content-type',
+        'application/vnd.nrz.packument-v1+json',
+      )
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/brotli/-/brotli-1.0.0.tar.br': {
+      brotliRequests++
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', brAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${brAbbrevSha512}:`)
+      return res.end(brAbbrev)
+    }
+    case '/brotli-nodigest/-/brotli-nodigest-1.0.0.tar.br': {
+      // no repr-digest at all: nothing pins these bytes
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', brAbbrev.byteLength)
+      return res.end(brAbbrev)
+    }
+    case '/brotli-bad/-/brotli-bad-1.0.0.tar.br': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', brAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${'0'.repeat(86)}==:`)
+      return res.end(brAbbrev)
+    }
+    case '/brotli/-/brotli-1.0.0.tgz':
+    case '/brotli-404/-/brotli-404-1.0.0.tgz': {
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      res.setHeader('repr-digest', `sha-512=:${tgzAbbrevSha512}:`)
+      return res.end(tgzAbbrev)
+    }
+    case '/plain/-/plain-1.0.0.tar': {
+      // a remote tarball that is not gzipped
+      plainTarRequests++
+      res.setHeader('content-type', 'application/octet-stream')
+      res.setHeader('content-length', tarAbbrev.byteLength)
+      return res.end(tarAbbrev)
+    }
+    case '/no-type/-/no-type-1.0.0.tgz': {
+      // a remote tarball served without a content-type
+      noTypeRequests++
+      res.setHeader('content-length', tgzAbbrev.byteLength)
+      return res.end(tgzAbbrev)
+    }
+    case '/no-type/-/no-type-1.0.0.tar': {
+      // the same, not gzipped
+      noTypeTarRequests++
+      res.setHeader('content-length', tarAbbrev.byteLength)
+      return res.end(tarAbbrev)
+    }
+    case '/-/nrz/resolve': {
+      let reqBody = ''
+      req.on('data', (c: Buffer) => (reqBody += String(c)))
+      req.on('end', () => {
+        resolveRequests.push(JSON.parse(reqBody))
+        const lines = resolveRecords.map(r => JSON.stringify(r))
+        const ndjson = lines.join('\n') + '\n'
+        res.statusCode = 207
+        res.setHeader('content-type', 'application/x-ndjson')
+        res.setHeader('content-length', ndjson.length)
+        // held open, so a test can look at what manifest() does while a
+        // resolve is still streaming; or trickled, one record per interval,
+        // for a stream that keeps delivering
+        if (resolveTrickleMs) {
+          res.removeHeader('content-length')
+          lines.forEach((line, i) =>
+            setTimeout(
+              () => {
+                res.write(line + '\n')
+                if (i === lines.length - 1) res.end()
+              },
+              resolveTrickleMs * (i + 1),
+            ),
+          )
+        } else if (resolveHoldMs)
+          setTimeout(() => res.end(ndjson), resolveHoldMs)
+        else res.end(ndjson)
+      })
+      return
+    }
+
+    case '/-/nrz/capabilities': {
+      capabilitiesRequests++
+      const json = JSON.stringify(capabilitiesDocument)
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('cache-control', 'public, max-age=86400')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
+    case '/no-integrity': {
+      const json = JSON.stringify({
+        name: 'no-integrity',
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': {
+            name: 'no-integrity',
+            version: '1.0.0',
+            dist: {
+              tarball: `${defaultRegistry}no-integrity/-/no-integrity-1.0.0.tgz`,
+            },
+          },
+        },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.setHeader('content-length', json.length)
+      return res.end(json)
+    }
     default: {
       res.statusCode = 404
       t.comment('not found', req.url)
@@ -126,10 +749,42 @@ const server = createServer((req, res) => {
 })
 
 const notFoundURLs: string[] = []
+let corruptedOnceServed = 0
+let flakyCorrupt = false
+let movingRequests = 0
+let movingLatest = '1.0.0'
+let coalescedPackumentRequests = 0
+let coalescedPackumentAccept: string | undefined
+let abbrevTgzRequests = 0
+let redirectTgzRequests = 0
+let brotliRequests = 0
+let plainTarRequests = 0
+let noTypeRequests = 0
+let noTypeTarRequests = 0
+let capabilitiesRequests = 0
+// what the resolve endpoint serves, and the requests it saw
+const resolveRequests: Record<string, unknown>[] = []
+let resolveRecords: Record<string, unknown>[] = []
+// ms the resolve endpoint withholds its body for; 0 answers immediately
+let resolveHoldMs = 0
+// ms between records when the endpoint trickles them; 0 sends them at once
+let resolveTrickleMs = 0
+let stableRequests: string[] = []
+let stableDelay = 0
+// No `stable-filter`: most registries serve none, and the packument
+// fixtures here answer the full shape. The suite covering that filter
+// turns it on for its own subtests.
+let capabilitiesDocument: Record<string, unknown> = {
+  manifests: '0.1',
+  resolve: '0.1',
+  mimeTypes: [
+    'application/vnd.nrz.packument-v1+json',
+    'application/vnd.npm.install-v1+json',
+  ],
+}
 
 const defaultRegistry = `http://localhost:${PORT}/`
 const options = {
-  defaultRegistry,
   registry: defaultRegistry,
   cache,
 }
@@ -159,7 +814,7 @@ t.test('create git repo', { bail: true }, async () => {
   const write = (f: string, c: string) => writeFile(`${repo}/${f}`, c)
   await git('init', '-b', 'main')
   await git('config', 'user.name', 'nrzdev')
-  await git('config', 'user.email', 'nrzdev@khulnasoft.com')
+  await git('config', 'user.email', 'nrzdevkhulnasoft.com')
   await git('config', 'tag.gpgSign', 'false')
   await git('config', 'commit.gpgSign', 'false')
   await git('config', 'tag.forceSignAnnotated', 'false')
@@ -202,6 +857,16 @@ t.test('create git repo', { bail: true }, async () => {
   await git('add', 'gleep')
   await git('commit', '-m', 'gleep glorp')
   await git('tag', '-am', 'head version', '69.42.0')
+})
+
+t.test('lazy registry and tar accessors reuse instances', async t => {
+  const pi = new PackageInfoClient({ cache: t.testdirName })
+  const rc1 = await pi.getRegistryClient()
+  const rc2 = await pi.getRegistryClient()
+  t.equal(rc1, rc2)
+  const tar1 = await pi.getTarPool()
+  const tar2 = await pi.getTarPool()
+  t.equal(tar1, tar2)
 })
 
 t.test('packument', async t => {
@@ -407,13 +1072,52 @@ t.test('manifest', async t => {
   )
 })
 
+t.test(
+  'manifest with leading semver characters resolves correctly',
+  async t => {
+    // Test that leading characters (=, ^, ~, v) resolve correctly
+    // through the packument → pickManifest path
+    for (const prefix of ['=', '^', '~', 'v']) {
+      t.strictSame(
+        await manifest(`abbrev@${prefix}2.0.0`, options),
+        pakuAbbrev.versions['2.0.0'],
+        `${prefix}2.0.0 should resolve correctly`,
+      )
+    }
+  },
+)
+
 t.test('resolve', async t => {
+  // do this with a consistent client so that we cover the memoizing paths
+  const pi = new PackageInfoClient({
+    ...options,
+    'git-hosts': { fakey: `git+${pathToFileURL(repo)}#committish` },
+    'git-host-archives': {
+      fakey: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+    },
+  })
+  const resolve = (
+    spec: string | Spec,
+    options: PackageInfoClientOptions &
+      PackageInfoClientRequestOptions = {},
+  ) => pi.resolve(spec, options)
+
   t.matchOnly(await resolve('abbrev@2', options), {
     resolved: pakuAbbrev.versions['2.0.0'].dist.tarball,
     integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
     signatures: pakuAbbrev.versions['2.0.0'].dist.signatures,
     spec: Spec,
   })
+  t.matchOnly(
+    await resolve('abbrev@2', options),
+    {
+      resolved: pakuAbbrev.versions['2.0.0'].dist.tarball,
+      integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+      signatures: pakuAbbrev.versions['2.0.0'].dist.signatures,
+      spec: Spec,
+    },
+    'again, for memoizing',
+  )
 
   t.matchOnly(
     await resolve(
@@ -452,22 +1156,51 @@ t.test('resolve', async t => {
       spec: Spec,
     },
   )
-  t.matchOnly(
-    await resolve('x@fakey:abbrev-2.0.0.tgz', {
-      'git-hosts': { fakey: `git+${pathToFileURL(repo)}#committish` },
-      'git-host-archives': {
-        fakey: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
-      },
-    }),
-    {
-      resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
-      spec: Spec,
-    },
-  )
+  t.matchOnly(await resolve('x@fakey:abbrev-2.0.0.tgz'), {
+    resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+    spec: Spec,
+  })
 })
+
+const tarball = (
+  spec: string | Spec,
+  options?: PackageInfoClientOptions &
+    PackageInfoClientExtractOptions,
+) => {
+  return new PackageInfoClient(options).tarball(spec, options)
+}
 
 t.test('tarball', async t => {
   t.strictSame(await tarball('abbrev@2', options), tgzAbbrev)
+
+  t.strictSame(
+    await tarball('abbrev@2', {
+      ...options,
+      // different registry host so it's not trusted
+      registry: defaultRegistry.replace(/localhost/, '127.0.0.1'),
+      integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+    }),
+    tgzAbbrev,
+  )
+
+  t.strictSame(
+    await tarball('abbrev@2', {
+      ...options,
+      registry: defaultRegistry.replace(/localhost/, '127.0.0.1'),
+    }),
+    tgzAbbrev,
+  )
+
+  t.strictSame(
+    await tarball(
+      'abbrev@' + String(pakuAbbrev.versions['2.0.0'].dist.tarball),
+      {
+        ...options,
+        integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+      },
+    ),
+    tgzAbbrev,
+  )
 
   t.strictSame(
     await tarball(
@@ -497,7 +1230,9 @@ t.test('tarball', async t => {
 
 const opts = { saveFixture: process.platform === 'win32' }
 t.test('extract', opts, async t => {
-  const dir = t.testdir()
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
   t.match(await extract('abbrev@2', dir + '/registry', options), {
     resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
   })
@@ -512,6 +1247,16 @@ t.test('extract', opts, async t => {
       resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
     },
     'should use resolved & integrity value when provided',
+  )
+
+  await t.rejects(
+    extract('abbrev@2', dir + '/registry-bad-int', {
+      ...options,
+      resolved: `${defaultRegistry.replace(/localhost/, '127.0.0.1')}abbrev/-/abbrev-2.0.0.tgz`,
+      integrity:
+        'sha512-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000==',
+    }),
+    { cause: { code: 'EINTEGRITY' } },
   )
 
   t.match(await extract(`abbrev@${pkgDir}`, dir + '/dir', options), {
@@ -560,20 +1305,1954 @@ t.test('extract', opts, async t => {
   }
 })
 
-t.test('extraction failures', async t => {
-  const dir = t.testdir()
-  const { extract, manifest } = await t.mockImport(
-    '../src/index.ts',
-    {
+t.test('remote integrity computation', async t => {
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
+
+  // Expected integrity for abbrev-2.0.0.tgz tarball
+  const expectedIntegrity =
+    'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=='
+
+  await t.test(
+    'remote extract computes and returns integrity',
+    async t => {
+      const result = await extract(
+        `abbrev@${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+        dir + '/remote-int',
+        options,
+      )
+      t.equal(
+        result.integrity,
+        expectedIntegrity,
+        'should compute and return integrity for remote dep',
+      )
+    },
+  )
+
+  await t.test(
+    'remote extract with matching integrity succeeds',
+    async t => {
+      const result = await extract(
+        `abbrev@${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+        dir + '/remote-match',
+        {
+          ...options,
+          resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+          integrity: expectedIntegrity,
+        },
+      )
+      t.equal(
+        result.integrity,
+        expectedIntegrity,
+        'should succeed when provided integrity matches',
+      )
+    },
+  )
+
+  await t.test(
+    'remote extract with mismatched integrity throws EINTEGRITY',
+    async t => {
+      await t.rejects(
+        extract(
+          `abbrev@${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+          dir + '/remote-mismatch',
+          {
+            ...options,
+            resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+            integrity:
+              'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
+          },
+        ),
+        { cause: { code: 'EINTEGRITY' } },
+        'should throw EINTEGRITY when integrity mismatch',
+      )
+    },
+  )
+})
+
+t.test('remote .tar.br tarballs', async t => {
+  const track = drainer(t)
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
+  const url = `${defaultRegistry}brotli-nodigest/-/brotli-nodigest-1.0.0.tar.br`
+  const spec = `abbrev@${url}`
+  const pi = track(
+    new PackageInfoClient({ ...options, cache: dir + '/cache' }),
+  )
+  t.match(
+    await pi.manifest(spec),
+    { name: 'abbrev', version: '2.0.0' },
+    'manifest reads a brotli remote tarball',
+  )
+  await pi.extract(spec, dir + '/br-extract')
+  t.match(
+    JSON.parse(
+      readFileSync(dir + '/br-extract/package.json', 'utf8'),
+    ),
+    { name: 'abbrev', version: '2.0.0' },
+    'extract unpacks a brotli remote tarball',
+  )
+})
+
+t.test('remote tarballs', async t => {
+  const url = `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`
+  const spec = `abbrev@${url}`
+  const key = cacheKey('GET', new URL(url))
+  // the hash of the bytes as served, gzipped: what a lockfile carries
+  const integrity: Integrity = `sha512-${tgzAbbrevSha512}`
+  const bogus: Integrity = `sha512-${'0'.repeat(86)}==`
+
+  // a cache of its own, primed with one fetch of the tarball, from
+  // `from` if that is a url that redirects to it
+  const primed = async (t: Test, from = url) => {
+    const spec = `abbrev@${from}`
+    const track = drainer(t)
+    const dir = t.testdir()
+    const cache = `${dir}/cache`
+    const fresh = () =>
+      track(new PackageInfoClient({ ...options, cache }))
+    const flush = (p: PackageInfoClient) => p.drain()
+    const p = fresh()
+    const before = abbrevTgzRequests
+    t.equal(
+      (await p.extract(spec, `${dir}/prime`)).integrity,
+      integrity,
+    )
+    t.equal(abbrevTgzRequests - before, 1, 'one fetch to prime')
+    await flush(p)
+    const rc = await p.getRegistryClient()
+    const path = rc.cache.path(key)
+    const stored = (k = key) =>
+      CacheEntry.decode(readFileSync(rc.cache.path(k)))
+
+    // an extract by a fresh client on that cache, flushed
+    const extract = async (
+      target: string,
+      opts?: PackageInfoClientExtractOptions,
+    ) => {
+      const p = fresh()
+      const res = await p.extract(spec, `${dir}/${target}`, opts)
+      await flush(p)
+      t.match(
+        JSON.parse(
+          readFileSync(`${dir}/${target}/package.json`, 'utf8'),
+        ),
+        { name: 'abbrev', version: '2.0.0' },
+        `${target} unpacked`,
+      )
+      return res
+    }
+
+    // put a doctored copy of the entry in its place, linked under
+    // `link` if any. the links under the hash it was stored with go
+    // first, or a lookup by that hash would still find the original.
+    const tamper = async (
+      edit: (entry: CacheEntry) => void,
+      link?: Integrity,
+      k = key,
+    ) => {
+      const entry = stored(k)
+      edit(entry)
+      rc.cache.delete(k, true, integrity)
+      await rc.cache.promise()
+      rc.cache.set(k, entry.encode(), { integrity: link })
+      await rc.cache.promise()
+    }
+
+    // rewrite the entry un-gzipped in place, the way the cache-unzip
+    // child does once an install is over
+    const unzip = async (k = key) => {
+      const { integrity } = stored(k)
+      const input = new EventEmitter()
+      const done = unzipMain(rc.cache.path(), input)
+      input.emit('data', Buffer.from(`${k}\0`))
+      input.emit('end')
+      t.equal(await done, true, 'rewritten')
+      const entry = stored(k)
+      t.equal(entry.isGzip, false, 'un-gzipped on disk')
+      t.equal(entry.integrity, integrity, 'the stored hash survived')
+    }
+
+    return { dir, fresh, flush, path, stored, extract, tamper, unzip }
+  }
+
+  t.test(
+    'a body rewritten un-gzipped keeps its stored hash',
+    async t => {
+      const { extract, fresh, flush, unzip } = await primed(t)
+      await unzip()
+
+      // the entry is not hashed again: the lockfile hash is the hash of
+      // the gzipped bytes, which are gone
+      let before = abbrevTgzRequests
+      const locked = await extract('locked', {
+        resolved: url,
+        integrity,
+      })
+      t.equal(locked.integrity, integrity)
+      t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+
+      // and with no lockfile, the hash handed back is still that one,
+      // not the hash of the un-gzipped body
+      before = abbrevTgzRequests
+      const unlocked = await extract('unlocked')
+      t.equal(unlocked.integrity, integrity)
+      t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+
+      // the graph hands manifest()'s dist.integrity back to extract()
+      // as the lockfile hash: it is the stored hash too, not a hash of
+      // the rewritten body, so that install is a cache hit as well
+      before = abbrevTgzRequests
+      const p = fresh()
+      const { dist } = await p.manifest(spec)
+      await flush(p)
+      t.equal(dist?.integrity, integrity, 'manifest() reports it')
+      const fromManifest = await extract('from-manifest', {
+        resolved: url,
+        integrity: dist?.integrity,
+      })
+      t.equal(fromManifest.integrity, integrity)
+      t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+    },
+  )
+
+  t.test(
+    'a lockfile hash the cache entry does not match',
+    async t => {
+      // the stored hash is right and the server agrees with it: the
+      // lockfile is what is wrong. the entry is evicted and fetched
+      // again, and the fresh bytes fail the check.
+      const { dir, fresh, flush, path } = await primed(t)
+      const before = abbrevTgzRequests
+      const p = fresh()
+      await t.rejects(
+        p.extract(spec, `${dir}/bad`, {
+          resolved: url,
+          integrity: bogus,
+        }),
+        {
+          cause: {
+            code: 'EINTEGRITY',
+            wanted: bogus,
+            found: integrity,
+          },
+        },
+      )
+      await flush(p)
+      t.equal(abbrevTgzRequests - before, 1, 'fetched again')
+      t.equal(
+        existsSync(path),
+        false,
+        'nothing cached: the refetch was rejected before it was written',
+      )
+    },
+  )
+
+  t.test(
+    'a cache entry that does not match the lockfile',
+    async t => {
+      // the stored hash is wrong and the server serves what the lockfile
+      // wants: the entry is evicted, fetched again and stored under the
+      // right hash, so the next install is a cache hit
+      const { extract, stored, tamper } = await primed(t)
+      await tamper(
+        entry => entry.setHeader('integrity', bogus),
+        bogus,
+      )
+      t.equal(stored().integrity, bogus, 'doctored')
+
+      let before = abbrevTgzRequests
+      const refetched = await extract('refetched', {
+        resolved: url,
+        integrity,
+      })
+      t.equal(refetched.integrity, integrity)
+      t.equal(abbrevTgzRequests - before, 1, 'fetched again')
+      t.equal(
+        stored().integrity,
+        integrity,
+        'stored under the right hash',
+      )
+
+      before = abbrevTgzRequests
+      const again = await extract('again', {
+        resolved: url,
+        integrity,
+      })
+      t.equal(again.integrity, integrity)
+      t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+    },
+  )
+
+  t.test('a legacy entry, rewritten un-gzipped', async t => {
+    // stored before the hash was recorded and un-gzipped since: there
+    // is nothing left to verify it by, so it is evicted and fetched
+    // again, and the next install is a cache hit
+    for (const lock of [undefined, integrity]) {
+      await t.test(
+        lock ? 'from a lockfile' : 'no lockfile',
+        async t => {
+          const { extract, fresh, flush, stored, tamper, unzip } =
+            await primed(t)
+          await unzip()
+          await tamper(entry => entry.deleteHeader('integrity'))
+          t.equal(stored().integrity, undefined, 'no stored hash')
+          t.equal(stored().isGzip, false, 'not gzipped')
+
+          // nothing for manifest() to hand the graph either: a hash of
+          // the rewritten body would only fail the install
+          let before = abbrevTgzRequests
+          const p = fresh()
+          t.equal(
+            (await p.manifest(spec)).dist?.integrity,
+            undefined,
+            'manifest() reports no hash',
+          )
+          await flush(p)
+          t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+
+          before = abbrevTgzRequests
+          const refetched = await extract('refetched', {
+            resolved: url,
+            integrity: lock,
+          })
+          t.equal(refetched.integrity, integrity)
+          t.equal(abbrevTgzRequests - before, 1, 'fetched again')
+          t.equal(
+            stored().integrity,
+            integrity,
+            'stored under its hash',
+          )
+
+          before = abbrevTgzRequests
+          const again = await extract('again', {
+            resolved: url,
+            integrity: lock,
+          })
+          t.equal(again.integrity, integrity)
+          t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+        },
+      )
+    }
+  })
+
+  t.test('a legacy entry behind a redirect', async t => {
+    // a remote url that redirects has an entry under the final url
+    // too, just as legacy. the refetch reads neither back: served
+    // from the cache, the final url's entry would be recorded under
+    // the original with a hash of its rewritten body, and never
+    // replaced by the bytes the server sends
+    const from = `${defaultRegistry}redirect/abbrev-2.0.0.tgz`
+    const fromKey = cacheKey('GET', new URL(from))
+    const requests = () => [redirectTgzRequests, abbrevTgzRequests]
+    const since = (before: number[]) =>
+      requests().map((n, i) => n - (before[i] ?? 0))
+    for (const lock of [undefined, integrity]) {
+      await t.test(
+        lock ? 'from a lockfile' : 'no lockfile',
+        async t => {
+          const { extract, stored, tamper, unzip } = await primed(
+            t,
+            from,
+          )
+          // stored with no hash, and un-gzipped since, under both urls
+          for (const k of [fromKey, key]) {
+            await tamper(
+              entry => entry.deleteHeader('integrity'),
+              undefined,
+              k,
+            )
+            await unzip(k)
+            t.equal(stored(k).integrity, undefined, 'no stored hash')
+          }
+
+          let before = requests()
+          const refetched = await extract('refetched', {
+            resolved: from,
+            integrity: lock,
+          })
+          t.equal(
+            refetched.integrity,
+            integrity,
+            'the hash of the gzipped bytes',
+          )
+          t.strictSame(
+            since(before),
+            [1, 1],
+            'both urls fetched again',
+          )
+          for (const k of [fromKey, key]) {
+            t.equal(stored(k).integrity, integrity, 'stored under it')
+            t.equal(stored(k).isGzip, true, 'the bytes as served')
+          }
+
+          before = requests()
+          const again = await extract('again', {
+            resolved: from,
+            integrity: lock,
+          })
+          t.equal(again.integrity, integrity)
+          t.strictSame(since(before), [0, 0], 'served from cache')
+        },
+      )
+    }
+
+    await t.test('only under the final url', async t => {
+      // a first fetch that finds no entry of its own reaches the final
+      // url's through the redirect. manifest() makes one: no hash is
+      // recorded for what it read, or extract() would read that back
+      // as the stored hash and pin it
+      const { extract, fresh, flush, stored, tamper, unzip } =
+        await primed(t, from)
+      await tamper(entry => entry.deleteHeader('integrity'))
+      await unzip()
+      const rc = await fresh().getRegistryClient()
+      rc.cache.delete(fromKey, true)
+      await rc.cache.promise()
+
+      let before = requests()
+      const p = fresh()
+      t.equal(
+        (await p.manifest(`abbrev@${from}`)).dist?.integrity,
+        undefined,
+        'manifest() reports no hash',
+      )
+      await flush(p)
+      t.equal(stored(fromKey).integrity, undefined, 'nor records one')
+      t.strictSame(since(before), [1, 0], 'the final url cached')
+
+      before = requests()
+      const refetched = await extract('refetched', { resolved: from })
+      t.equal(
+        refetched.integrity,
+        integrity,
+        'the hash of the gzipped bytes',
+      )
+      t.strictSame(since(before), [1, 1], 'both urls fetched again')
+
+      before = requests()
+      const again = await extract('again', { resolved: from })
+      t.equal(again.integrity, integrity)
+      t.strictSame(since(before), [0, 0], 'served from cache')
+    })
+  })
+
+  t.test('a legacy entry, still gzipped', async t => {
+    // stored before the hash was recorded, body still as fetched: it
+    // can be hashed, so it is verified and served from the cache
+    const { dir, fresh, flush, stored, tamper } = await primed(t)
+    await tamper(entry => entry.deleteHeader('integrity'))
+    t.equal(stored().integrity, undefined, 'no stored hash')
+    t.equal(stored().isGzip, true, 'still gzipped')
+
+    let before = abbrevTgzRequests
+    const p = fresh()
+    const locked = await p.extract(spec, `${dir}/locked`, {
+      resolved: url,
+      integrity,
+    })
+    t.equal(locked.integrity, integrity)
+    const unlocked = await fresh().extract(spec, `${dir}/unlocked`)
+    t.equal(unlocked.integrity, integrity)
+    t.equal(abbrevTgzRequests - before, 0, 'served from cache')
+    t.equal(
+      stored().integrity,
+      undefined,
+      'a cache hit is not rewritten',
+    )
+
+    // a lockfile hash it does not match: evicted and fetched again,
+    // and the server's bytes do not match it either
+    before = abbrevTgzRequests
+    await t.rejects(
+      p.extract(spec, `${dir}/bad`, {
+        resolved: url,
+        integrity: bogus,
+      }),
+      {
+        cause: {
+          code: 'EINTEGRITY',
+          wanted: bogus,
+          found: integrity,
+        },
+      },
+    )
+    await flush(p)
+    t.equal(abbrevTgzRequests - before, 1, 'fetched again')
+  })
+
+  t.test('a body that is not gzipped is checked too', async t => {
+    // the registry client checks every network body against the
+    // expected hash, gzipped or not, before anything is written
+    const url = `${defaultRegistry}plain/-/plain-1.0.0.tar`
+    const spec = `plain@${url}`
+    const key = cacheKey('GET', new URL(url))
+    const integrity: Integrity = `sha512-${tarAbbrevSha512}`
+    const track = drainer(t)
+    const dir = t.testdir()
+    const client = (cache: string) =>
+      track(
+        new PackageInfoClient({
+          ...options,
+          cache: `${dir}/${cache}`,
+        }),
+      )
+    const flush = (p: PackageInfoClient) => p.drain()
+
+    let before = plainTarRequests
+    let p = client('bad')
+    const er = await p
+      .extract(spec, `${dir}/bad`, {
+        resolved: url,
+        integrity: bogus,
+      })
+      .then(
+        () => undefined,
+        (er: unknown) => er,
+      )
+    t.match(
+      er,
+      {
+        cause: {
+          code: 'EINTEGRITY',
+          url,
+          wanted: bogus,
+          found: integrity,
+          response: CacheEntry,
+        },
+      },
+      'rejected by the registry client',
+    )
+    await flush(p)
+    t.equal(plainTarRequests - before, 1)
+
+    // nothing was written: not under the key, and not under the hash
+    // the body was expected to have, where a lookup by that hash
+    // would have found it
+    const rc = await p.getRegistryClient()
+    t.equal(existsSync(rc.cache.path(key)), false, 'not cached')
+    const bogusPath = rc.cache.integrityPath(bogus)
+    if (!bogusPath) return t.fail('expected an integrity path')
+    t.equal(
+      existsSync(bogusPath),
+      false,
+      'not linked under the expected hash',
+    )
+
+    // so a second attempt fetches again
+    before = plainTarRequests
+    p = client('bad')
+    await t.rejects(
+      p.extract(spec, `${dir}/bad-again`, {
+        resolved: url,
+        integrity: bogus,
+      }),
+      {
+        cause: {
+          code: 'EINTEGRITY',
+          wanted: bogus,
+          found: integrity,
+        },
+      },
+    )
+    await flush(p)
+    t.equal(plainTarRequests - before, 1, 'fetched again')
+
+    // the right hash is recorded and the entry stored under it
+    before = plainTarRequests
+    p = client('good')
+    const cold = await p.extract(spec, `${dir}/cold`)
+    await flush(p)
+    t.equal(cold.integrity, integrity)
+    t.equal(plainTarRequests - before, 1)
+    before = plainTarRequests
+    const warm = await client('good').extract(spec, `${dir}/warm`, {
+      resolved: url,
+      integrity,
+    })
+    t.equal(warm.integrity, integrity)
+    t.equal(plainTarRequests - before, 0, 'served from cache')
+    t.match(
+      JSON.parse(readFileSync(`${dir}/warm/package.json`, 'utf8')),
+      { name: 'abbrev', version: '2.0.0' },
+    )
+  })
+
+  t.test('a body served without a content-type', async t => {
+    // the registry client sniffs such a body for json, un-gzipping it
+    // in memory before it is stored, but records the hash of the bytes
+    // as they came off the wire: the one a cold cache can check
+    const url = `${defaultRegistry}no-type/-/no-type-1.0.0.tgz`
+    const spec = `no-type@${url}`
+    const track = drainer(t)
+    const dir = t.testdir()
+    const fresh = (cache: string) =>
+      track(
+        new PackageInfoClient({
+          ...options,
+          cache: `${dir}/${cache}`,
+        }),
+      )
+    const flush = (p: PackageInfoClient) => p.drain()
+
+    let before = noTypeRequests
+    const p = fresh('cache')
+    const cold = await p.extract(spec, `${dir}/cold`)
+    const rc = await p.getRegistryClient()
+    await rc.cache.promise()
+    t.equal(noTypeRequests - before, 1)
+    t.equal(
+      cold.integrity,
+      integrity,
+      'the hash of the gzipped bytes',
+    )
+    const entry = CacheEntry.decode(
+      readFileSync(rc.cache.path(cacheKey('GET', new URL(url)))),
+    )
+    t.equal(entry.isGzip, false, 'stored un-gzipped')
+    t.equal(entry.integrity, integrity, 'under the hash handed back')
+
+    // an install from that lockfile is a cache hit here
+    before = noTypeRequests
+    const warm = await fresh('cache').extract(spec, `${dir}/warm`, {
+      resolved: url,
+      integrity: cold.integrity,
+    })
+    t.equal(warm.integrity, integrity)
+    t.equal(noTypeRequests - before, 0, 'served from cache')
+    t.match(
+      JSON.parse(readFileSync(`${dir}/warm/package.json`, 'utf8')),
+      { name: 'abbrev', version: '2.0.0' },
+    )
+
+    // and a fetch elsewhere, checked against it
+    before = noTypeRequests
+    const elsewhere = fresh('cold-cache')
+    const portable = await elsewhere.extract(
+      spec,
+      `${dir}/portable`,
+      {
+        resolved: url,
+        integrity: cold.integrity,
+      },
+    )
+    await flush(elsewhere)
+    t.equal(portable.integrity, integrity)
+    t.equal(noTypeRequests - before, 1, 'fetched, and checked')
+    t.match(
+      JSON.parse(
+        readFileSync(`${dir}/portable/package.json`, 'utf8'),
+      ),
+      { name: 'abbrev', version: '2.0.0' },
+    )
+  })
+
+  // an empty cache of its own for `url`, and what the server was asked
+  // for it so far
+  const empty = async (
+    t: Test,
+    url: string,
+    requests: () => number,
+  ) => {
+    const spec = `abbrev@${url}`
+    const key = cacheKey('GET', new URL(url))
+    const track = drainer(t)
+    const dir = t.testdir()
+    const cache = `${dir}/cache`
+    const fresh = () =>
+      track(new PackageInfoClient({ ...options, cache }))
+    const flush = (p: PackageInfoClient) => p.drain()
+    const rc = await fresh().getRegistryClient()
+    const stored = () =>
+      CacheEntry.decode(readFileSync(rc.cache.path(key)))
+
+    // an extract by a fresh client, flushed: the hash it reported and
+    // the number of requests it made
+    const extract = async (target: string, integrity?: Integrity) => {
+      const before = requests()
+      const p = fresh()
+      const res = await p.extract(spec, `${dir}/${target}`, {
+        resolved: url,
+        integrity,
+      })
+      await flush(p)
+      t.match(
+        JSON.parse(
+          readFileSync(`${dir}/${target}/package.json`, 'utf8'),
+        ),
+        { name: 'abbrev', version: '2.0.0' },
+        `${target} unpacked`,
+      )
+      return {
+        integrity: res.integrity,
+        requests: requests() - before,
+      }
+    }
+
+    // the same for one that fails the check: the requests it made
+    const rejects = async (
+      integrity: Integrity,
+      found: Integrity,
+    ) => {
+      const before = requests()
+      const p = fresh()
+      await t.rejects(
+        p.extract(spec, `${dir}/rejected`, {
+          resolved: url,
+          integrity,
+        }),
+        { cause: { code: 'EINTEGRITY', wanted: integrity, found } },
+      )
+      await flush(p)
+      return requests() - before
+    }
+
+    // put a doctored copy of the entry in its place, linked under `link`
+    // if any, and nothing under the hash it was stored with
+    const tamper = async (
+      edit: (entry: CacheEntry) => void,
+      link?: Integrity,
+    ) => {
+      const entry = stored()
+      rc.cache.delete(key, true, entry.integrity)
+      await rc.cache.promise()
+      edit(entry)
+      rc.cache.set(key, entry.encode(), { integrity: link })
+      await rc.cache.promise()
+    }
+
+    // rewrite the entry un-gzipped in place, like the cache-unzip child
+    const unzip = async () => {
+      const input = new EventEmitter()
+      const done = unzipMain(rc.cache.path(), input)
+      input.emit('data', Buffer.from(`${key}\0`))
+      input.emit('end')
+      t.equal(await done, true, 'rewritten')
+      t.equal(stored().isGzip, false, 'un-gzipped on disk')
+    }
+
+    // what the background revalidation stores on a 200: the requests
+    // it made
+    const revalidate = async () => {
+      const before = requests()
+      await revalidateEntry(rc, 'GET', url)
+      await rc.cache.promise()
+      return requests() - before
+    }
+
+    return {
+      fresh,
+      flush,
+      stored,
+      extract,
+      rejects,
+      tamper,
+      unzip,
+      revalidate,
+    }
+  }
+
+  // the hash of the tar the tarball un-gzips to
+  const unzipped: Integrity = `sha512-${tarAbbrevSha512}`
+  const noType = `${defaultRegistry}no-type/-/no-type-1.0.0.tgz`
+
+  t.test('a lockfile that pins the tarball un-gzipped', async t => {
+    // v1.2.0 to v1.3.3 hashed a remote tarball after the registry client
+    // had un-gzipped it: always, for a body served with no content-type,
+    // and on a cache hit once cache-unzip had rewritten the entry. that
+    // hash pins the same tar, so a body that un-gzips to it is accepted,
+    // and reported and stored under the hash of the bytes as served.
+    // the lockfile keeps its hash, so every install from it is checked
+    // this way, and every one after the first is a cache hit.
+    const shapes = [
+      ['with a content-type', url, () => abbrevTgzRequests],
+      ['with no content-type', noType, () => noTypeRequests],
+    ] as const
+    for (const [name, url, requests] of shapes) {
+      await t.test(name, async t => {
+        const { extract, rejects, stored, unzip } = await empty(
+          t,
+          url,
+          requests,
+        )
+        // a hash that is neither is rejected, and nothing is stored
+        t.equal(await rejects(bogus, integrity), 1)
+
+        t.strictSame(
+          await extract('cold', unzipped),
+          { integrity, requests: 1 },
+          'the hash of the gzipped bytes',
+        )
+        t.equal(stored().integrity, integrity, 'stored under it')
+        t.strictSame(
+          await extract('warm', unzipped),
+          { integrity, requests: 0 },
+          'served from cache',
+        )
+        if (stored().isGzip) {
+          await unzip()
+          t.strictSame(
+            await extract('rewritten', unzipped),
+            { integrity, requests: 0 },
+            'served from cache, rewritten',
+          )
+        }
+        t.strictSame(
+          await extract('locked', integrity),
+          { integrity, requests: 0 },
+          'and from a lockfile with the hash of the gzipped bytes',
+        )
+
+        // and a hash that is neither still fails: the entry is evicted,
+        // fetched again, and the bytes fail the check
+        t.equal(await rejects(bogus, integrity), 1)
+      })
+    }
+
+    await t.test('a url that redirects', async t => {
+      // the registry client rejects the final url's body, and the one
+      // accepted is stored under the url the lockfile names, where the
+      // next install finds it. a fetch is a request to each url
+      const from = `${defaultRegistry}redirect/abbrev-2.0.0.tgz`
+      const { extract, rejects, stored } = await empty(
+        t,
+        from,
+        () => redirectTgzRequests + abbrevTgzRequests,
+      )
+      t.equal(await rejects(bogus, integrity), 2)
+      t.strictSame(
+        await extract('cold', unzipped),
+        { integrity, requests: 2 },
+        'the hash of the gzipped bytes',
+      )
+      t.equal(stored().integrity, integrity, 'stored under it')
+      for (const [target, lock] of [
+        ['warm', unzipped],
+        ['locked', integrity],
+        ['unlocked', undefined],
+      ] as const) {
+        t.strictSame(
+          await extract(target, lock),
+          { integrity, requests: 0 },
+          'served from cache',
+        )
+      }
+      t.equal(await rejects(bogus, integrity), 2)
+    })
+
+    await t.test('a body that does not un-gzip', async t => {
+      // rejected like any other that does not match, not with the
+      // error un-gzipping it threw
+      const url = `${defaultRegistry}corrupted/-/corrupted-1.0.0.tgz`
+      const corrupted = Buffer.from(tgzAbbrev)
+      corrupted[100] = (corrupted[100]! ^ 0xff) & 0xff
+      corrupted[101] = (corrupted[101]! ^ 0xff) & 0xff
+      t.throws(() => gunzipSync(corrupted))
+      const { rejects } = await empty(t, url, () => 0)
+      await rejects(
+        unzipped,
+        `sha512-${createHash('sha512').update(corrupted).digest('base64')}`,
+      )
+    })
+  })
+
+  t.test('a legacy entry with no content-type', async t => {
+    // v1.2.0 to v1.3.3 stored a tarball served with no content-type
+    // un-gzipped, under the hash of the un-gzipped bytes, which no
+    // cold cache reproduces. the registry client labels such a body
+    // when it stores it now, so an entry with no content-type is from
+    // before, and its stored hash is not trusted: it is fetched once
+    // more and stored under the hash of the bytes as served.
+    for (const lock of [undefined, unzipped]) {
+      await t.test(
+        lock ? 'from a lockfile' : 'no lockfile',
+        async t => {
+          const { extract, fresh, flush, stored, tamper } =
+            await empty(t, noType, () => noTypeRequests)
+          t.strictSame(await extract('cold'), {
+            integrity,
+            requests: 1,
+          })
+          t.equal(
+            stored().contentType,
+            'application/octet-stream',
+            'labelled',
+          )
+          await tamper(entry => {
+            entry.deleteHeader('content-type')
+            entry.setHeader('integrity', unzipped)
+          }, unzipped)
+          t.equal(stored().contentType, '', 'as v1.3.1 stored it')
+          t.equal(stored().integrity, unzipped)
+
+          // nothing for manifest() to hand the graph either
+          const before = noTypeRequests
+          const p = fresh()
+          t.equal(
+            (await p.manifest(`abbrev@${noType}`)).dist?.integrity,
+            undefined,
+            'manifest() reports no hash',
+          )
+          await flush(p)
+          t.equal(noTypeRequests - before, 0, 'served from cache')
+
+          t.strictSame(
+            await extract('refetched', lock),
+            { integrity, requests: 1 },
+            'fetched again',
+          )
+          t.equal(stored().integrity, integrity, 'stored under it')
+          t.equal(stored().contentType, 'application/octet-stream')
+          for (const target of ['again', 'and-again']) {
+            t.strictSame(
+              await extract(target, lock),
+              { integrity, requests: 0 },
+              'served from cache',
+            )
+          }
+        },
+      )
+    }
+  })
+
+  t.test(
+    'a tarball served un-gzipped with no content-type',
+    async t => {
+      // the hash of its bytes as served is the hash of its bytes stored,
+      // just like the hash v1.2.0 to v1.3.3 recorded for a gzipped one:
+      // the label is what tells a legacy entry apart, not the hash.
+      const url = `${defaultRegistry}no-type/-/no-type-1.0.0.tar`
+      const { extract, stored, tamper } = await empty(
+        t,
+        url,
+        () => noTypeTarRequests,
+      )
+      const integrity = unzipped
+      t.strictSame(await extract('cold'), { integrity, requests: 1 })
+      t.equal(stored().contentType, 'application/octet-stream')
+      for (const [i, lock] of [
+        undefined,
+        integrity,
+        undefined,
+        integrity,
+      ].entries()) {
+        t.strictSame(
+          await extract(`warm-${i}`, lock),
+          { integrity, requests: 0 },
+          'served from cache',
+        )
+      }
+
+      // stored by v1.3.1: fetched once more, then served from cache
+      await tamper(
+        entry => entry.deleteHeader('content-type'),
+        integrity,
+      )
+      t.strictSame(
+        await extract('refetched', integrity),
+        { integrity, requests: 1 },
+        'fetched again',
+      )
+      t.equal(stored().contentType, 'application/octet-stream')
+      for (const lock of [undefined, integrity]) {
+        t.strictSame(
+          await extract(
+            `again-${lock ? 'locked' : 'unlocked'}`,
+            lock,
+          ),
+          { integrity, requests: 0 },
+          'served from cache',
+        )
+      }
+    },
+  )
+
+  t.test('an entry the background revalidation rewrote', async t => {
+    // only request() labels an entry, as it stores it under the hash it
+    // checked or recorded. one any other write leaves with no
+    // content-type, like a 200 the background revalidation stores, is
+    // fetched once more by the next install, and a labelled cache hit
+    // on every one after that
+    const { extract, revalidate, stored } = await empty(
+      t,
+      noType,
+      () => noTypeRequests,
+    )
+    t.strictSame(await extract('cold'), { integrity, requests: 1 })
+    t.equal(stored().contentType, 'application/octet-stream')
+
+    t.equal(await revalidate(), 1, 'a 200')
+    t.equal(stored().contentType, '', 'stored unlabelled')
+
+    t.strictSame(
+      await extract('refetched'),
+      { integrity, requests: 1 },
+      'fetched again',
+    )
+    t.equal(stored().contentType, 'application/octet-stream')
+    t.equal(stored().integrity, integrity, 'stored under its hash')
+    for (const [target, lock] of [
+      ['again', undefined],
+      ['locked', integrity],
+      ['and-again', undefined],
+    ] as const) {
+      t.strictSame(
+        await extract(target, lock),
+        { integrity, requests: 0 },
+        'served from cache',
+      )
+    }
+  })
+})
+
+t.test('registry tarball integrity verification', async t => {
+  await t.test(
+    'extract succeeds when tarball matches dist.integrity',
+    async t => {
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const result = await extract('abbrev@2', dir + '/good', options)
+      t.match(result, {
+        resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+      })
+      const json = readFileSync(`${dir}/good/package.json`, 'utf8')
+      const pkg = JSON.parse(json)
+      t.match(pkg, { name: 'abbrev', version: '2.0.0' })
+    },
+  )
+
+  await t.test(
+    'extract throws EINTEGRITY when tarball is corrupted',
+    async t => {
+      t.teardown(() => pi.drain())
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const pi = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      await t.rejects(
+        pi.extract('corrupted@1.0.0', dir + '/corrupted'),
+        { cause: { code: 'EINTEGRITY' } },
+        'should throw EINTEGRITY for corrupted tarball',
+      )
+      // flush pending cache writes so file handles are released
+      // before t.testdir() cleanup (avoids ENOTEMPTY on macOS)
+      await pi.drain()
+    },
+  )
+
+  await t.test(
+    'tarball() throws EINTEGRITY when tarball is corrupted',
+    async t => {
+      t.teardown(() => tb.drain())
+      const dir = t.testdir()
+      const tb = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      // rejected by the registry client's checkIntegrity()
+      await t.rejects(tb.tarball('corrupted@1.0.0'), {
+        cause: { code: 'EINTEGRITY' },
+      })
+      // flush pending cache writes so file handles are released
+      // before t.testdir() cleanup (avoids ENOTEMPTY on macOS)
+      await tb.drain()
+    },
+  )
+
+  await t.test(
+    'extract throws EINTEGRITY without integrity header',
+    async t => {
+      t.teardown(() => pi.drain())
+      // no integrity header: checked against dist.integrity anyway
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const pi = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      await t.rejects(
+        pi.extract(
+          'corrupted-no-header@1.0.0',
+          dir + '/corrupted-no-header',
+        ),
+        { cause: { code: 'EINTEGRITY' } },
+        'should throw EINTEGRITY',
+      )
+      await pi.drain()
+    },
+  )
+
+  await t.test(
+    'tarball() throws EINTEGRITY without integrity header',
+    async t => {
+      t.teardown(() => tb.drain())
+      const dir = t.testdir()
+      const tb = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      await t.rejects(tb.tarball('corrupted-no-header@1.0.0'), {
+        cause: { code: 'EINTEGRITY' },
+      })
+      await tb.drain()
+    },
+  )
+
+  await t.test(
+    'extract succeeds when dist.integrity is missing',
+    async t => {
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const result = await extract(
+        'no-integrity@1.0.0',
+        dir + '/no-int',
+        options,
+      )
+      t.match(result, {
+        resolved: `${defaultRegistry}no-integrity/-/no-integrity-1.0.0.tgz`,
+      })
+      const json = readFileSync(`${dir}/no-int/package.json`, 'utf8')
+      const pkg = JSON.parse(json)
+      t.match(pkg, { name: 'abbrev', version: '2.0.0' })
+    },
+  )
+
+  await t.test(
+    'tarball() succeeds when dist.integrity is missing',
+    async t => {
+      t.teardown(() => tb.drain())
+      const dir = t.testdir()
+      const tb = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      const buf = await tb.tarball('no-integrity@1.0.0')
+      t.ok(buf.length > 0, 'should return tarball data')
+      t.equal(
+        buf[0],
+        0x1f,
+        'should be a gzip file (first magic byte)',
+      )
+      t.equal(
+        buf[1],
+        0x8b,
+        'should be a gzip file (second magic byte)',
+      )
+      await tb.drain()
+    },
+  )
+
+  await t.test(
+    'extract with fromLockfile skips only a trusted refetch hash',
+    async t => {
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const result = await extract(
+        'abbrev@2',
+        dir + '/from-lockfile',
+        {
+          ...options,
+          resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+          integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+          fromLockfile: true,
+        },
+      )
+      t.match(result, {
+        resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+      })
+      const json = readFileSync(
+        `${dir}/from-lockfile/package.json`,
+        'utf8',
+      )
+      const pkg = JSON.parse(json)
+      t.match(pkg, { name: 'abbrev', version: '2.0.0' })
+    },
+  )
+
+  await t.test(
+    'extract DOES verify integrity even when integrity+resolved provided without fromLockfile',
+    async t => {
+      t.teardown(() => pi.drain())
+      // Previously, the heuristic `!!(integrity && resolved)` would
+      // skip the check whenever both were provided. Now, the check
+      // only skips with an explicit `fromLockfile: true`.
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const pi = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      await t.rejects(
+        pi.extract('corrupted@1.0.0', dir + '/should-fail', {
+          resolved: `${defaultRegistry}corrupted/-/corrupted-1.0.0.tgz`,
+          integrity: pakuAbbrev.versions['2.0.0'].dist.integrity,
+          // fromLockfile NOT set (defaults to false)
+        }),
+        { cause: { code: 'EINTEGRITY' } },
+        'should verify tarball integrity even with integrity+resolved provided',
+      )
+      await pi.drain()
+    },
+  )
+
+  await t.test(
+    'extract from unzipped cache does not re-fetch tarball',
+    async t => {
+      const track = drainer(t)
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      const cacheDir = dir + '/cache'
+      const tarballUrl = `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`
+      const pi = track(
+        new PackageInfoClient({
+          ...options,
+          cache: cacheDir,
+        }),
+      )
+      await pi.extract('abbrev@2', dir + '/first')
+      await pi.drain()
+
+      const cache = (await pi.getRegistryClient()).cache
+      const buf = await cache.fetch(tarballUrl)
+      t.ok(buf, 'tarball is in cache')
+      if (!buf) return
+      const e = CacheEntry.decode(buf)
+      e.unzip()
+      cache.set(tarballUrl, e.encode(), {
+        integrity: e.integrity,
+      })
+      await cache.promise()
+
+      const before = abbrevTgzRequests
+      const pi2 = track(
+        new PackageInfoClient({
+          ...options,
+          cache: cacheDir,
+        }),
+      )
+      await pi2.extract('abbrev@2', dir + '/second')
+      t.equal(
+        abbrevTgzRequests,
+        before,
+        'no tarball requests on warm cache',
+      )
+      const json = readFileSync(`${dir}/second/package.json`, 'utf8')
+      const pkg = JSON.parse(json) as Manifest
+      t.match(pkg, { name: 'abbrev', version: '2.0.0' })
+
+      const pi3 = track(
+        new PackageInfoClient({
+          ...options,
+          cache: cacheDir,
+        }),
+      )
+      const tb = await pi3.tarball('abbrev@2')
+      t.equal(
+        abbrevTgzRequests,
+        before,
+        'tarball() also issues no tarball requests on warm cache',
+      )
+      t.ok(tb.length > 0, 'returned cached tarball bytes')
+      await pi2.drain()
+      await pi3.drain()
+    },
+  )
+
+  await t.test(
+    'extract retries with cache bust on EINTEGRITY then succeeds',
+    async t => {
+      t.teardown(() => pi.drain())
+      // The corrupted-once endpoint serves corrupted data the first
+      // time, then correct data on the second request. This
+      // simulates a CDN serving a stale/corrupted cached tarball that
+      // resolves after a fresh download.
+      const dir = t.testdir({ 'nrz.json': '{}' })
+      t.chdir(dir)
+      unload()
+      corruptedOnceServed = 0
+      const pi = new PackageInfoClient({
+        ...options,
+        cache: dir + '/cache',
+      })
+      const result = await pi.extract(
+        'corrupted-once@1.0.0',
+        dir + '/retry-ok',
+      )
+      t.match(result, {
+        resolved: `${defaultRegistry}corrupted-once/-/corrupted-once-1.0.0.tgz`,
+      })
+      t.equal(
+        corruptedOnceServed,
+        2,
+        'should have fetched twice (first corrupted, then fresh)',
+      )
+      await pi.drain()
+    },
+  )
+})
+
+t.test('network tarball hashed once', async t => {
+  const track = drainer(t)
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
+  // byteLength of each sha512 input
+  const hashed: number[] = []
+  const crypto = await import('node:crypto')
+  const countingHash = (alg: string) => {
+    const h = crypto.createHash(alg)
+    return {
+      update(d: string | NodeJS.ArrayBufferView) {
+        if (alg === 'sha512' && typeof d !== 'string')
+          hashed.push(d.byteLength)
+        h.update(d)
+        return this
+      },
+      digest: (enc: 'base64' | 'hex') => h.digest(enc),
+    }
+  }
+  const { PackageInfoClient } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    'node:crypto': { ...crypto, createHash: countingHash },
+  })
+  // hashes of a `len` bytes body since the last call
+  const count = (len: number) => {
+    const n = hashed.filter(l => l === len).length
+    hashed.length = 0
+    return n
+  }
+  const clients: InstanceType<typeof PackageInfoClient>[] = []
+  const client = () => {
+    const c = track(
+      new PackageInfoClient({
+        ...options,
+        cache: `${dir}/cache${clients.length}`,
+      }),
+    )
+    clients.push(c)
+    return c
+  }
+
+  await client().extract('abbrev@2', dir + '/extract')
+  t.equal(count(tgzAbbrev.byteLength), 1, 'extract')
+
+  await client().tarball('abbrev@2')
+  t.equal(count(tgzAbbrev.byteLength), 1, 'tarball')
+
+  const re = client()
+  await re.tarball('abbrev@2', { useCache: false })
+  t.equal(count(tgzAbbrev.byteLength), 1, 'first fetch')
+  t.strictSame(
+    await re.tarball('abbrev@2', { useCache: false }),
+    tgzAbbrev,
+  )
+  t.equal(count(tgzAbbrev.byteLength), 1, 'trusted refetch')
+
+  await client().extract('plain@1.0.0', dir + '/plain')
+  t.equal(count(tarAbbrev.byteLength), 1, 'uncompressed body')
+  t.match(
+    JSON.parse(readFileSync(dir + '/plain/package.json', 'utf8')),
+    { name: 'abbrev', version: '2.0.0' },
+  )
+
+  for (const c of clients) await c.drain()
+})
+
+t.test('trusted refetch is verified', async t => {
+  t.afterEach(() => {
+    flakyCorrupt = false
+  })
+  const failed = {
+    message: 'Tarball integrity check failed',
+    cause: { code: 'EINTEGRITY' },
+  }
+  // verified and trusted, but not cached: the next fetch is trusted
+  const trusted = async (t: Test) => {
+    t.teardown(() => pi.drain())
+    const dir = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(dir)
+    unload()
+    const pi = new PackageInfoClient({
+      ...options,
+      cache: dir + '/cache',
+    })
+    t.strictSame(
+      await pi.tarball('flaky@1.0.0', { useCache: false }),
+      tgzAbbrev,
+    )
+    return { dir, pi }
+  }
+
+  t.test('extract', async t => {
+    const { dir, pi } = await trusted(t)
+    await pi.extract('flaky@1.0.0', dir + '/ok')
+    t.match(
+      JSON.parse(readFileSync(dir + '/ok/package.json', 'utf8')),
+      { name: 'abbrev', version: '2.0.0' },
+    )
+    await pi.drain()
+  })
+
+  t.test('extract corrupt', async t => {
+    const { dir, pi } = await trusted(t)
+    flakyCorrupt = true
+    await t.rejects(pi.extract('flaky@1.0.0', dir + '/bad'), failed)
+    await pi.drain()
+  })
+
+  t.test('tarball', async t => {
+    const { pi } = await trusted(t)
+    t.strictSame(
+      await pi.tarball('flaky@1.0.0', { useCache: false }),
+      tgzAbbrev,
+    )
+    await pi.drain()
+  })
+
+  t.test('tarball corrupt', async t => {
+    const { pi } = await trusted(t)
+    flakyCorrupt = true
+    await t.rejects(pi.tarball('flaky@1.0.0'), failed)
+    await pi.drain()
+  })
+})
+
+const tarballURL = `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`
+
+// only the tarball's request events; the packument logs its own
+const tarballLog = (states: string[]) => ({
+  '@nrz/output': {
+    logRequest: (u: URL | string, state: string) => {
+      if (String(u) === tarballURL) states.push(state)
+    },
+  },
+})
+
+t.test('registry tarballs unpack from the cache file', async t => {
+  const track = drainer(t)
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
+  const calls: string[] = []
+  const states: string[] = []
+  const { PackageInfoClient } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '@nrz/tar': {
+      Pool: class TrackedPool extends Pool {
+        async unpack(tarData: Buffer, target: string) {
+          calls.push('unpack')
+          return super.unpack(tarData, target)
+        }
+      },
+    },
+    ...tarballLog(states),
+  })
+  const opts = { ...options, cache: dir + '/cache' }
+
+  const cold = track(new PackageInfoClient(opts))
+  await cold.extract('abbrev@2', dir + '/cold')
+  await cold.drain()
+  t.strictSame(calls, ['unpack'], 'cold install fetches the bytes')
+  t.equal(states[0], 'start', 'cold install went to the network')
+
+  // a fresh client has an empty memory cache, so the probe hits disk
+  calls.length = 0
+  states.length = 0
+  const warm = track(new PackageInfoClient(opts))
+  await warm.extract('abbrev@2', dir + '/warm')
+  t.strictSame(calls, ['unpack'], 'warm install unpacked once')
+  t.strictSame(states, ['cache'], 'logged the hit exactly once')
+  t.equal(
+    (await warm.getRegistryClient()).cache.peek(tarballURL),
+    undefined,
+    'the body never entered the memory cache',
+  )
+  t.match(
+    JSON.parse(readFileSync(dir + '/warm/package.json', 'utf8')),
+    { name: 'abbrev', version: '2.0.0' },
+  )
+})
+
+t.test('falls back when the cache file will not unpack', async t => {
+  const track = drainer(t)
+  const dir = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(dir)
+  unload()
+  const opts = { ...options, cache: dir + '/cache' }
+  const prime = track(new PackageInfoClient(opts))
+  await prime.extract('abbrev@2', dir + '/prime')
+  await prime.drain()
+
+  const calls: string[] = []
+  const states: string[] = []
+  const { PackageInfoClient: PIC } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '@nrz/tar': {
+      Pool: class BadFilePool extends Pool {
+        async unpack(tarData: Buffer, target: string) {
+          calls.push('unpack')
+          // the first unpack is the cache-file fast path
+          if (calls.length === 1) throw new Error('bad cache file')
+          return super.unpack(tarData, target)
+        }
+      },
+    },
+    ...tarballLog(states),
+  })
+  await track(new PIC(opts)).extract('abbrev@2', dir + '/fallback')
+  t.strictSame(calls, ['unpack', 'unpack'], 'refetched')
+  t.strictSame(states, ['cache'], 'the hit is not double-counted')
+  t.match(
+    JSON.parse(readFileSync(dir + '/fallback/package.json', 'utf8')),
+    { name: 'abbrev', version: '2.0.0' },
+  )
+})
+
+t.test('global store', async t => {
+  const integrity: Integrity =
+    pakuAbbrev.versions['2.0.0'].dist.integrity
+  const hex = String(integrityHex(integrity))
+  const lockOpts = { resolved: tarballURL, integrity }
+
+  // what the background child writes
+  const populate = (
+    store: string,
+    scripts = false,
+    edit: (index: StoreIndex, tmp: string) => void = () => {},
+  ) => {
+    const tmp = pathResolve(store, '.tmp', hex)
+    const { index } = unpackToStoreSync(tgzAbbrev, tmp)
+    edit(index, tmp)
+    writeFileSync(
+      pathResolve(store, hex + '.json'),
+      JSON.stringify({ ...index, scripts }),
+    )
+    renameSync(tmp, pathResolve(store, hex))
+  }
+
+  const setup = async (t: Test, debugged?: unknown[][]) => {
+    const track = drainer(t)
+    const dir = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(dir)
+    unload()
+    const registered: unknown[][] = []
+    const states: string[] = []
+    const links: string[] = []
+    const { PackageInfoClient } = await t.mockImport<
+      typeof import('../src/index.ts')
+    >('../src/index.ts', {
+      ...(debugged && {
+        'node:util': {
+          ...util,
+          debuglog: () =>
+            Object.assign((...a: unknown[]) => debugged.push(a), {
+              enabled: true,
+            }),
+        },
+      }),
+      '@nrz/cache-unzip': {
+        register: (...args: unknown[]) => registered.push(args),
+      },
       '@nrz/tar': {
-        Pool: class Pool {
-          async unpack() {
-            throw new Error('no tar for you')
+        Pool: class TrackedPool extends Pool {
+          async linkFromStore(
+            ...args: Parameters<Pool['linkFromStore']>
+          ) {
+            links.push(args[0])
+            return super.linkFromStore(...args)
           }
         },
       },
+      ...tarballLog(states),
+    })
+    const cache = dir + '/cache'
+    const store = pathResolve(cache, 'store/v1')
+    const client = async (
+      opts: PackageInfoClientOptions = {},
+      noTarball = false,
+    ) => {
+      const pi = track(
+        new PackageInfoClient({ ...options, cache, ...opts }),
+      )
+      if (noTarball) {
+        const rc = await pi.getRegistryClient()
+        rc.cachedBody = () => {
+          throw new Error('read the cached tarball')
+        }
+        rc.request = () => {
+          throw new Error('requested the tarball')
+        }
+      }
+      return pi
+    }
+    // cold install into the cache, with the store off
+    const prime = async () => {
+      const pi = await client()
+      await pi.extract('abbrev@2', dir + '/prime', lockOpts)
+      await pi.drain()
+      registered.length = 0
+      states.length = 0
+    }
+    return {
+      dir,
+      cache,
+      store,
+      registered,
+      states,
+      links,
+      client,
+      prime,
+    }
+  }
+
+  const nlink = (dir: string) => statSync(dir + '/package.json').nlink
+
+  t.test('populated store: linked, tarball never read', async t => {
+    const { dir, store, registered, states, client } = await setup(t)
+    populate(store)
+    let n = 1
+    for (const linker of ['auto', 'hardlink'] as const) {
+      const pi = await client({ 'store-linker': linker }, true)
+      await pi.extract('abbrev@2', `${dir}/${linker}`, lockOpts)
+      t.equal(nlink(`${dir}/${linker}`), ++n, linker)
+    }
+    t.strictSame(states, ['store', 'store'])
+    t.strictSame(registered, [])
+    t.match(
+      JSON.parse(readFileSync(`${dir}/auto/package.json`, 'utf8')),
+      { name: 'abbrev', version: '2.0.0' },
+    )
+  })
+
+  t.test('store link carries the index manifest', async t => {
+    const { dir, store, client } = await setup(t)
+    populate(store)
+    const pi = await client({ 'store-linker': 'hardlink' }, true)
+    const res = await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.strictSame(
+      JSON.parse(String(res.manifest)),
+      JSON.parse(readFileSync(dir + '/t/package.json', 'utf8')),
+    )
+    t.equal(res.bindingGyp, false)
+    t.equal(res.resolved, tarballURL)
+    t.equal(res.integrity, integrity)
+  })
+
+  t.test('store link: binding.gyp, older index', async t => {
+    const { dir, store, states, client } = await setup(t)
+    // a root binding.gyp implies scripts
+    populate(store, true, (index, tmp) => {
+      writeFileSync(pathResolve(tmp, 'binding.gyp'), '{}')
+      index.files.unshift(['binding.gyp', 2, 0])
+      delete index.manifest
+    })
+    const pi = await client({ 'store-linker': 'hardlink' }, true)
+    const res = await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.strictSame(states, ['store'], 'linked')
+    t.equal(res.manifest, undefined)
+    t.equal(res.bindingGyp, true)
+  })
+
+  t.test('store link: install scripts, no binding.gyp', async t => {
+    const { dir, store, client } = await setup(t)
+    populate(store, true)
+    const pi = await client({ 'store-linker': 'hardlink' }, true)
+    const res = await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.equal(res.bindingGyp, false)
+    t.type(res.manifest, 'string')
+  })
+
+  t.test('unpacked: no index data', async t => {
+    const { dir, client, prime } = await setup(t)
+    await prime()
+    const pi = await client({ 'store-linker': 'hardlink' })
+    const res = await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.equal(res.manifest, undefined)
+    t.equal(res.bindingGyp, undefined)
+  })
+
+  t.test('explicit store root', async t => {
+    const { dir, links, client } = await setup(t)
+    populate(dir + '/elsewhere')
+    const pi = await client(
+      { 'store-linker': 'hardlink', storeRoot: dir + '/elsewhere' },
+      true,
+    )
+    await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.equal(nlink(dir + '/t'), 2)
+    t.strictSame(links, [pathResolve(dir, 'elsewhere', hex)])
+  })
+
+  t.test(
+    'store miss, cache hit: unpacked and registered',
+    async t => {
+      const { dir, cache, store, registered, states, client, prime } =
+        await setup(t)
+      await prime()
+      const pi = await client({ 'store-linker': 'auto' })
+      await pi.extract('abbrev@2', dir + '/t', lockOpts)
+      t.equal(nlink(dir + '/t'), 1)
+      t.strictSame(states, ['cache'])
+      t.strictSame(registered, [
+        [
+          pathResolve(cache, 'registry-client'),
+          tarballURL,
+          store,
+          integrity,
+        ],
+      ])
     },
   )
+
+  t.test(
+    'damaged entry: discarded, unpacked, registered',
+    async t => {
+      const { dir, store, registered, client, prime } = await setup(t)
+      await prime()
+      populate(store)
+      rmSync(`${store}/${hex}/README.md`)
+      const pi = await client({ 'store-linker': 'hardlink' })
+      await pi.extract('abbrev@2', dir + '/t', lockOpts)
+      t.equal(nlink(dir + '/t'), 1)
+      t.equal(existsSync(`${store}/${hex}`), false, 'entry removed')
+      t.equal(registered.length, 1, 'queued to explode again')
+    },
+  )
+
+  t.test('store miss, cache miss: disk write registers', async t => {
+    const { dir, registered, states, client } = await setup(t)
+    const pi = await client({ 'store-linker': 'hardlink' })
+    await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    await pi.drain()
+    t.equal(nlink(dir + '/t'), 1)
+    t.equal(states[0], 'start', 'fetched')
+    // one registration, from the cache write, none from extract()
+    t.equal(registered.length, 1)
+  })
+
+  t.test('install scripts: linked', async t => {
+    const { dir, store, client } = await setup(t)
+    populate(store, true)
+    const pi = await client({ 'store-linker': 'hardlink' }, true)
+    await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.equal(nlink(dir + '/t'), 2)
+  })
+
+  t.test('store-linker=copy', async t => {
+    const { dir, store, states, client } = await setup(t)
+    populate(store)
+    const pi = await client({ 'store-linker': 'copy' }, true)
+    await pi.extract('abbrev@2', dir + '/t', lockOpts)
+    t.equal(nlink(dir + '/t'), 1)
+    t.equal(nlink(`${store}/${hex}`), 1, 'store file not linked')
+    t.strictSame(states, ['cache'], 'not counted as linked')
+  })
+
+  // what the child does to a gzipped entry it did not explode
+  const unzipCached = async (t: Test, pi: PackageInfoClient) => {
+    const file = String(
+      (await pi.getRegistryClient()).cache.integrityPath(integrity),
+    )
+    const entry = CacheEntry.decode(readFileSync(file))
+    t.equal(entry.unzip(), true, 'was gzipped')
+    writeFileSync(file, entry.encode())
+  }
+
+  t.test('store-linker=unpack, or invalid: store unused', async t => {
+    const { dir, cache, store, registered, links, client, prime } =
+      await setup(t)
+    await prime()
+    populate(store)
+    const linkers = [undefined, 'unpack', 'bogus'] as const
+    const extract = async (linker: (typeof linkers)[number]) => {
+      const pi = await client({
+        'store-linker': linker as StoreLinker | undefined,
+      })
+      await pi.extract('abbrev@2', `${dir}/${linker}`, lockOpts)
+      t.equal(nlink(`${dir}/${linker}`), 1, String(linker))
+      return pi
+    }
+    let pi: PackageInfoClient | undefined
+    for (const linker of linkers) pi = await extract(linker)
+    t.strictSame(links, [])
+    // gzipped, e.g. exploded while the store was on: queued to unzip
+    const queued = [
+      pathResolve(cache, 'registry-client'),
+      tarballURL,
+      store,
+      integrity,
+    ]
+    t.strictSame(registered, [queued, queued, queued])
+    registered.length = 0
+    await unzipCached(t, pi!)
+    for (const linker of linkers) {
+      rmSync(`${dir}/${linker}`, { recursive: true })
+      await extract(linker)
+    }
+    t.strictSame(registered, [], 'unzipped: nothing queued')
+  })
+
+  t.test('hosted git tarballs: store unused', async t => {
+    const { dir, store, links, registered, client, prime } =
+      await setup(t)
+    await prime()
+    populate(store)
+    const pi = await client({
+      'store-linker': 'hardlink',
+      'git-hosts': { fakey: `git+${pathToFileURL(repo)}#committish` },
+      'git-host-archives': { fakey: tarballURL },
+    })
+    await pi.extract('x@fakey:abbrev-2.0.0.tgz', dir + '/t', lockOpts)
+    t.equal(nlink(dir + '/t'), 1)
+    t.strictSame(links, [])
+    t.equal(registered.length, 1, 'gzipped: queued to unzip')
+    registered.length = 0
+    await unzipCached(t, pi)
+    await pi.extract(
+      'x@fakey:abbrev-2.0.0.tgz',
+      dir + '/t2',
+      lockOpts,
+    )
+    t.strictSame(registered, [])
+  })
+
+  t.test('hit rate on NODE_DEBUG at exit', async t => {
+    // emitting beforeExit would also fire other modules' hooks
+    const once = t.capture(process, 'once', () => process)
+    const debugged: unknown[][] = []
+    const { dir, store, client, prime } = await setup(t, debugged)
+    await prime()
+    const pi = await client({ 'store-linker': 'auto' })
+    await pi.extract('abbrev@2', dir + '/miss', lockOpts)
+    populate(store)
+    await pi.extract('abbrev@2', dir + '/hit', lockOpts)
+    await pi.extract('abbrev@2', dir + '/hit2', lockOpts)
+    await pi.extract('abbrev@2', dir + '/hit3', lockOpts)
+    const rate = () =>
+      debugged.filter(([f]) => String(f).includes('hit rate'))
+    t.strictSame(rate(), [], 'nothing until exit')
+    const hooks = once().filter(c => c.args[0] === 'beforeExit')
+    t.equal(hooks.length, 1, 'hooked once')
+    ;(hooks[0]?.args[1] as () => void)()
+    t.strictSame(rate(), [
+      [
+        'global store: linked=%d cloned=%d copied=%d missed=%d hit rate=%s%%',
+        3,
+        0,
+        0,
+        1,
+        '75.0',
+      ],
+    ])
+  })
+
+  t.test(
+    'store-linker=clone: asks for a clone, a store hit',
+    async t => {
+      const track = drainer(t)
+      const { dir, store, states, links } = await setup(t)
+      populate(store)
+      // clonefile(2) is darwin-only, and a failed clone is a miss:
+      // link the entry, and report a clone
+      const opts: LinkFromStoreOptions[] = []
+      const { PackageInfoClient } = await t.mockImport<
+        typeof import('../src/index.ts')
+      >('../src/index.ts', {
+        '@nrz/tar': {
+          Pool: class ClonePool extends Pool {
+            async linkFromStore(
+              ...[entry, target, o]: Parameters<Pool['linkFromStore']>
+            ) {
+              opts.push(o ?? {})
+              const res = await super.linkFromStore(entry, target, {
+                ...o,
+                clone: false,
+              })
+              return res && { ...res, how: 'clone' as const }
+            }
+          },
+        },
+        ...tarballLog(states),
+      })
+      const pi = track(
+        new PackageInfoClient({
+          ...options,
+          cache: dir + '/cache',
+          'store-linker': 'clone',
+        }),
+      )
+      const res = await pi.extract('abbrev@2', dir + '/t', lockOpts)
+      t.strictSame(opts, [{ copy: false, clone: true }])
+      t.strictSame(states, ['store'], 'counted as a store hit')
+      t.strictSame(links, [], 'not the tracked pool')
+      t.type(res.manifest, 'string')
+      const pj = readFileSync(dir + '/t/package.json', 'utf8')
+      t.match(JSON.parse(pj), { name: 'abbrev', version: '2.0.0' })
+    },
+  )
+
+  // clones a git repo into the fixture, which Windows cannot always
+  // remove right away (EPERM on the .git dir in teardown), so keep the
+  // fixture there like the `extract` test above does
+  t.test('git specs untouched', opts, async t => {
+    const { dir, links, registered, client } = await setup(t)
+    const pi = await client({ 'store-linker': 'hardlink' })
+    await pi.extract(
+      'x@git+' + pathToFileURL(repo).toString(),
+      dir + '/git',
+    )
+    t.equal(existsSync(dir + '/git/package.json'), true)
+    t.strictSame(links, [])
+    t.strictSame(registered, [])
+  })
+})
+
+t.test('extraction failures', async t => {
+  const dir = t.testdir()
+  const { PackageInfoClient } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '@nrz/tar': {
+      Pool: class Pool {
+        async unpack() {
+          throw new Error('no tar for you')
+        }
+        async unpackFile() {
+          throw new Error('no tar for you')
+        }
+      },
+    },
+  })
+  const extract = (
+    spec: string,
+    dir: string,
+    options: PackageInfoClientOptions &
+      PackageInfoClientExtractOptions,
+  ) => {
+    return new PackageInfoClient(options).extract(spec, dir, options)
+  }
+  const manifest = (
+    spec: string,
+    options?: PackageInfoClientOptions &
+      PackageInfoClientRequestOptions,
+  ) => {
+    return new PackageInfoClient(options).manifest(spec, options)
+  }
+
   await t.rejects(extract('abbrev@2', dir + '/registry', options))
 
   await t.rejects(
@@ -596,6 +3275,26 @@ t.test('extraction failures', async t => {
   )
 })
 
+t.test(
+  'an expired token is explained, not just reported',
+  async t => {
+    await t.rejects(
+      packument('expired@latest', {
+        ...options,
+        registry: `${defaultRegistry}acme/npm/`,
+      }),
+      {
+        message:
+          'failed to fetch packument: 401 Unauthorized — Token expired. ' +
+          'Authenticate again to get a new token.\n' +
+          '⚠️ Your token for the "acme" account has expired. Run ' +
+          '`nrz setup acme` to log in again.',
+        cause: { code: 'ERESOLVE' },
+      },
+    )
+  },
+)
+
 t.test('manifest must provide actual dist results', async t => {
   await t.rejects(resolve('deleted@latest', options))
   await t.rejects(resolve('no-tgz@latest', options))
@@ -603,6 +3302,14 @@ t.test('manifest must provide actual dist results', async t => {
   await t.rejects(tarball('deleted@latest', options))
   await t.rejects(tarball('no-tgz@latest', options))
   await t.rejects(tarball('no-dist@latest', options))
+  // Pinned specs go through packument → pickManifest too
+  await t.rejects(resolve('deleted@1.0.0', options))
+  await t.rejects(manifest('deleted@1.0.0', options))
+  await t.rejects(tarball('deleted@1.0.0', options))
+  await t.rejects(resolve('no-tgz@1.2.3', options))
+  await t.rejects(tarball('no-tgz@1.2.3', options))
+  await t.rejects(resolve('no-dist@1.2.3', options))
+  await t.rejects(tarball('no-dist@1.2.3', options))
 })
 
 t.test('git spec must have gitRemote', async t => {
@@ -721,13 +3428,17 @@ t.test('file spec must have file', async t => {
 })
 
 t.test('fails on non-200 response', async t => {
+  // Reset the global 404 tracker so we only capture URLs from this test,
+  // making the snapshot deterministic regardless of test execution order.
+  notFoundURLs.length = 0
+
   const d = t.testdir()
   await t.rejects(packument('lodash', options))
   await t.rejects(manifest('lodash', options))
   await t.rejects(tarball('lodash', options))
   await t.rejects(resolve('lodash', options))
-  await t.rejects(tarball('missing', options))
-  await t.rejects(extract('missing', d, options))
+  await t.rejects(tarball('missing@1.2.3', options))
+  await t.rejects(extract('missing@1.2.3', d, options))
 
   await t.rejects(
     packument(`lodash@${defaultRegistry}lodash.tgz`, options),
@@ -741,17 +3452,25 @@ t.test('fails on non-200 response', async t => {
   await t.rejects(
     extract(`lodash@${defaultRegistry}lodash.tgz`, d, options),
   )
+
+  // Verify the expected 404 URLs were hit during this test
+  t.matchSnapshot(
+    new Set(notFoundURLs.sort((a, b) => a.localeCompare(b))),
+    'expected not-found URLs',
+  )
 })
 
 t.test('workspace specs', async t => {
   const dir = t.testdir({
-    'nrz-workspaces.json': JSON.stringify('p/*'),
+    'nrz.json': JSON.stringify({ workspaces: 'p/*' }),
     p: {
       a: { 'package.json': '{"name":"a"}' },
       b: { 'package.json': '{"name":"b"}' },
     },
     tarx: {},
   })
+  t.chdir(dir)
+  unload()
   const opts = {
     ...options,
     projectRoot: dir,
@@ -788,12 +3507,14 @@ t.test('workspace specs', async t => {
 
 t.test('workspace group option', async t => {
   const dir = t.testdir({
-    'nrz-workspaces.json': JSON.stringify({
-      a: 'p/a*',
-      b: ['p/b', 'p/bb'],
-      ab: 'p/?',
-      aabb: ['p/??'],
-      all: 'p/*',
+    'nrz.json': JSON.stringify({
+      workspaces: {
+        a: 'p/a*',
+        b: ['p/b', 'p/bb'],
+        ab: 'p/?',
+        aabb: ['p/??'],
+        all: 'p/*',
+      },
     }),
     p: {
       a: { 'package.json': '{"name":"a"}' },
@@ -802,6 +3523,8 @@ t.test('workspace group option', async t => {
       bb: { 'package.json': '{"name":"bb"}' },
     },
   })
+  t.chdir(dir)
+  unload()
   const opts = {
     ...options,
     projectRoot: dir,
@@ -819,13 +3542,6 @@ t.test('workspace group option', async t => {
   t.end()
 })
 
-t.test('verify we got the expected missing urls', t => {
-  t.matchSnapshot(
-    new Set(notFoundURLs.sort((a, b) => a.localeCompare(b))),
-  )
-  t.end()
-})
-
 t.test(
   'fake packument with manifest lacking name/version',
   async t => {
@@ -834,6 +3550,523 @@ t.test(
     t.matchSnapshot(await packument(spec))
   },
 )
+
+t.test('cache manifests', async t => {
+  const xdgDir = t.testdirName
+  const opts = {
+    ...options,
+    cache: xdgDir,
+  }
+  // clean up current cache directory
+  await rm(pathResolve(xdgDir, 'package-info'), {
+    recursive: true,
+    force: true,
+  }).catch(() => {})
+
+  await t.test(
+    'cache hit - manifest returned from cache',
+    async t => {
+      const filesBefore = await readdir(
+        pathResolve(xdgDir, 'package-info'),
+      ).catch(() => [])
+      const pi = new PackageInfoClient(opts)
+      // First call - cache miss, fetches from registry packument
+      const mani1 = await pi.manifest('abbrev@2.0.0')
+      t.strictSame(mani1, pakuAbbrev.versions['2.0.0'])
+
+      // Second call - should hit cache
+      const mani2 = await pi.manifest('abbrev@2.0.0')
+      t.strictSame(
+        mani2,
+        pakuAbbrev.versions['2.0.0'],
+        'cached manifest matches',
+      )
+      t.strictSame(mani1, mani2, 'both calls return same manifest')
+      // cache writes are not awaited in the implementation so here
+      // we need to wait a bit to make sure the file was written
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const filesAfter = await readdir(
+        pathResolve(xdgDir, 'package-info'),
+      ).catch(() => [])
+      t.equal(
+        filesAfter.length,
+        filesBefore.length + 1,
+        'cache directory has one additional file',
+      )
+    },
+  )
+
+  await t.test('caching skipped with before option', async t => {
+    const filesBefore = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+
+    const pi = new PackageInfoClient(opts)
+    const beforeDate = new Date().toISOString()
+
+    // Fetch with before option - should not cache
+    const mani = await pi.manifest('abbrev@2.0.0', {
+      before: beforeDate,
+    })
+    t.strictSame(mani, pakuAbbrev.versions['2.0.0'])
+
+    // Verify cache directory doesn't have too many files
+    // (we can't easily verify it's not cached without inspecting internals)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const files = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(
+      files.length,
+      filesBefore.length,
+      'cache directory has no additional files',
+    )
+  })
+
+  await t.test('caching skipped with dist tags', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    })
+
+    const pi = new PackageInfoClient(opts)
+    const filesBefore = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+
+    // Use @latest tag - should not cache (dist tags are dynamic)
+    const mani1 = await pi.manifest('abbrev@latest')
+    t.match(mani1, { name: 'abbrev' })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const files = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(
+      files.length,
+      filesBefore.length,
+      'cache directory has no additional files',
+    )
+
+    // Use specific version - should cache after
+    const mani2 = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(mani2, pakuAbbrev.versions['2.0.0'])
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    )
+    t.equal(
+      filesAfter.length,
+      filesBefore.length + 1,
+      'cache directory has one additional file',
+    )
+  })
+
+  await t.test('caching skipped with any range', async t => {
+    const filesBefore = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    const pi = new PackageInfoClient(opts)
+
+    // Use * range - should not cache
+    const mani = await pi.manifest('abbrev@*')
+    t.match(mani, { name: 'abbrev' })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(
+      filesAfter.length,
+      filesBefore.length,
+      'cache directory has no more files',
+    )
+  })
+
+  await t.test(
+    'different cache keys for different options',
+    async t => {
+      // clean up current cache directory
+      await rm(pathResolve(xdgDir, 'package-info'), {
+        recursive: true,
+        force: true,
+      })
+
+      const filesBefore = await readdir(
+        pathResolve(xdgDir, 'package-info'),
+      ).catch(() => [])
+
+      const pi = new PackageInfoClient(opts)
+
+      // Fetch with different node-version options
+      const mani1 = await pi.manifest('abbrev@2.0.0', {
+        'node-version': '18.0.0',
+      })
+      const mani2 = await pi.manifest('abbrev@2.0.0', {
+        'node-version': '20.0.0',
+      })
+
+      t.strictSame(
+        mani1,
+        pakuAbbrev.versions['2.0.0'],
+        'first manifest matches',
+      )
+      t.strictSame(
+        mani2,
+        pakuAbbrev.versions['2.0.0'],
+        'second manifest matches',
+      )
+
+      // Both should be cached separately
+      const mani1Again = await pi.manifest('abbrev@2.0.0', {
+        'node-version': '18.0.0',
+      })
+      const mani2Again = await pi.manifest('abbrev@2.0.0', {
+        'node-version': '20.0.0',
+      })
+
+      t.strictSame(mani1, mani1Again, 'first cache hit matches')
+      t.strictSame(mani2, mani2Again, 'second cache hit matches')
+
+      // cache writes are not awaited in the implementation so here
+      // we need to wait a bit to make sure the files were written
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const filesAfter = await readdir(
+        pathResolve(xdgDir, 'package-info'),
+      ).catch(() => [])
+      t.equal(
+        filesAfter.length,
+        filesBefore.length + 2,
+        'cache directory has two additional files',
+      )
+    },
+  )
+
+  await t.test('different cache keys for os and arch', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    })
+
+    const filesBefore = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+
+    const pi = new PackageInfoClient(opts)
+
+    // Fetch with different os/arch combinations
+    const mani1 = await pi.manifest('abbrev@2.0.0', {
+      os: 'linux',
+      arch: 'x64',
+    })
+    const mani2 = await pi.manifest('abbrev@2.0.0', {
+      os: 'darwin',
+      arch: 'arm64',
+    })
+
+    t.strictSame(
+      mani1,
+      pakuAbbrev.versions['2.0.0'],
+      'linux/x64 manifest matches',
+    )
+    t.strictSame(
+      mani2,
+      pakuAbbrev.versions['2.0.0'],
+      'darwin/arm64 manifest matches',
+    )
+
+    // Verify they're cached separately by fetching again
+    const mani1Again = await pi.manifest('abbrev@2.0.0', {
+      os: 'linux',
+      arch: 'x64',
+    })
+    const mani2Again = await pi.manifest('abbrev@2.0.0', {
+      os: 'darwin',
+      arch: 'arm64',
+    })
+
+    t.strictSame(mani1, mani1Again, 'linux/x64 cache hit')
+    t.strictSame(mani2, mani2Again, 'darwin/arm64 cache hit')
+
+    // cache writes are not awaited in the implementation so here
+    // we need to wait a bit to make sure the files were written
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(
+      filesAfter.length,
+      filesBefore.length + 2,
+      'cache directory has two additional files',
+    )
+  })
+
+  await t.test('cache only applies to registry specs', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    })
+
+    const pi = new PackageInfoClient(opts)
+
+    // Git specs should not be cached
+    const maniGit = await pi.manifest(
+      'x@git+' + pathToFileURL(repo).toString(),
+    )
+    t.match(maniGit, { name: 'abbrev', version: '2.0.0' })
+
+    // File specs should not be cached
+    const maniFile = await pi.manifest(`abbrev@${tgzFile}`)
+    t.match(maniFile, { name: 'abbrev', version: '2.0.0' })
+
+    // Only registry specs should be cached
+    const maniRegistry = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(maniRegistry, pakuAbbrev.versions['2.0.0'])
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(
+      filesAfter.length,
+      1,
+      'cache directory should have only one file',
+    )
+  })
+
+  await t.test(
+    'cache survives invalid JSON write errors',
+    async t => {
+      const { PackageInfoClient: MockPIC } = await t.mockImport<
+        typeof import('../src/index.ts')
+      >('../src/index.ts', {
+        'node:fs/promises': {
+          ...(await import('node:fs/promises')),
+          writeFile: async () => {
+            throw new Error('write failed')
+          },
+        },
+      })
+      // clean up current cache directory
+      await rm(pathResolve(xdgDir, 'package-info'), {
+        recursive: true,
+        force: true,
+      })
+
+      const pi = new MockPIC(opts)
+      // Should still work even if cache write fails
+      const mani = await pi.manifest('abbrev@2.0.0')
+      t.strictSame(
+        mani,
+        pakuAbbrev.versions['2.0.0'],
+        'manifest fetched despite cache write failure',
+      )
+      // these promises are not awaited in the implementation so here
+      // we need to wait a bit to make sure the folder was created
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const filesAfter = await readdir(
+        pathResolve(xdgDir, 'package-info'),
+      ).catch(() => [])
+      t.equal(filesAfter.length, 0, 'cache directory is empty')
+    },
+  )
+
+  await t.test('create cache directory if missing', async t => {
+    const pi = new PackageInfoClient(opts)
+
+    // clean up the full cache directory
+    await rm(pathResolve(xdgDir), { recursive: true, force: true })
+
+    const mani = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(mani, pakuAbbrev.versions['2.0.0'])
+
+    // these promises are not awaited in the implementation so here
+    // we need to wait a bit to make sure the folder was created
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(filesAfter.length, 1, 'cache directory was created')
+  })
+
+  await t.test(
+    'constructor does not create the cache dir',
+    async t => {
+      const track = drainer(t)
+      const cache = pathResolve(t.testdir(), 'cache')
+      t.type(
+        track(new PackageInfoClient({ ...opts, cache })),
+        PackageInfoClient,
+      )
+      // ctor work is not awaitable: give any stray fs op time to land
+      await new Promise(resolve => setTimeout(resolve, 100))
+      t.equal(existsSync(cache), false, 'no cache dir created')
+    },
+  )
+
+  await t.test('expired cache entry', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+
+    const pi = new PackageInfoClient(opts)
+    const spec = Spec.parseArgs('abbrev@2.0.0', opts)
+    const mani = await pi.manifest(spec)
+    t.strictSame(mani, pakuAbbrev.versions['2.0.0'])
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const filesAfter = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(filesAfter.length, 1, 'cache directory was created')
+
+    // modify the cache entry to make it expired
+    const cachePath = pathResolve(
+      xdgDir,
+      'package-info',
+      pi._manifestCachePath(
+        spec,
+        opts as PackageInfoClientRequestOptions,
+      )!,
+    )
+    // age the file mtime past the max cache age
+    const old = new Date(Date.now() - 1000 * 60 * 60 * 24)
+    await utimes(cachePath, old, old)
+
+    // the real check here is code coverage that we only get
+    // if we run the branch that removes the expired cache file
+    const maniAgain = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(maniAgain, pakuAbbrev.versions['2.0.0'])
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // still has a single entry at the end
+    const filesAfterAgain = await readdir(
+      pathResolve(xdgDir, 'package-info'),
+    ).catch(() => [])
+    t.equal(filesAfterAgain.length, 1, 'cache directory was created')
+  })
+
+  await t.test('legacy cache entry format', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+
+    const pi = new PackageInfoClient(opts)
+    const spec = Spec.parseArgs('abbrev@2.0.0', opts)
+    await pi.manifest(spec)
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const cachePath = pathResolve(
+      xdgDir,
+      'package-info',
+      pi._manifestCachePath(
+        spec,
+        opts as PackageInfoClientRequestOptions,
+      )!,
+    )
+
+    // rewrite in the legacy format: timestamp embedded in the
+    // manifest, fresh mtime. should still be treated as expired.
+    const legacy = JSON.parse(
+      readFileSync(cachePath, 'utf8'),
+    ) as Record<string, unknown>
+    legacy.__NRZ_MANIFEST_CACHE_TIMESTAMP = Date.now()
+    writeFileSync(cachePath, JSON.stringify(legacy), 'utf8')
+
+    const mani = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(
+      mani,
+      pakuAbbrev.versions['2.0.0'],
+      'legacy entry is not returned as-is',
+    )
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    t.equal(
+      readFileSync(cachePath, 'utf8'),
+      JSON.stringify(pakuAbbrev.versions['2.0.0']),
+      'legacy entry rewritten in the pure manifest format',
+    )
+  })
+
+  await t.test('cache file contains only the manifest', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+
+    const pi = new PackageInfoClient(opts)
+    const spec = Spec.parseArgs('abbrev@2.0.0', opts)
+    await pi.manifest(spec)
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const cacheDir = pathResolve(xdgDir, 'package-info')
+    const cachePath = pathResolve(
+      cacheDir,
+      pi._manifestCachePath(
+        spec,
+        opts as PackageInfoClientRequestOptions,
+      )!,
+    )
+    t.equal(
+      readFileSync(cachePath, 'utf8'),
+      JSON.stringify(pakuAbbrev.versions['2.0.0']),
+      'file content is exactly the manifest',
+    )
+    t.strictSame(
+      await readdir(cacheDir),
+      [basename(cachePath)],
+      'no temp files left behind',
+    )
+  })
+
+  await t.test('concurrent misses dedup cache writes', async t => {
+    // clean up current cache directory
+    await rm(pathResolve(xdgDir, 'package-info'), {
+      recursive: true,
+      force: true,
+    }).catch(() => {})
+
+    const pi = new PackageInfoClient(opts)
+    const spec = Spec.parseArgs('abbrev@2.0.0', opts)
+    // both calls miss the cache and reach the write, but only the
+    // first one writes — the second is skipped by the per-run dedup
+    const [mani1, mani2] = await Promise.all([
+      pi.manifest(spec),
+      pi.manifest('abbrev@2.0.0'),
+    ])
+    t.strictSame(mani1, mani2, 'both calls return same manifest')
+    // cache writes are not awaited in the implementation so here
+    // we need to wait a bit to make sure the file was written
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const cacheDir = pathResolve(xdgDir, 'package-info')
+    const cachePath = pathResolve(
+      cacheDir,
+      pi._manifestCachePath(
+        spec,
+        opts as PackageInfoClientRequestOptions,
+      )!,
+    )
+    t.equal(
+      readFileSync(cachePath, 'utf8'),
+      JSON.stringify(pakuAbbrev.versions['2.0.0']),
+      'cache file was written once with the manifest',
+    )
+    t.strictSame(
+      await readdir(cacheDir),
+      [basename(cachePath)],
+      'single cache file, no temp files left behind',
+    )
+  })
+})
 
 t.test('path git selector', async t => {
   const pkg = {
@@ -863,7 +4096,7 @@ t.test('path git selector', async t => {
       writeFile(`${repo}/${f}`, c)
     await git('init', '-b', 'main')
     await git('config', 'user.name', 'nrzdev')
-    await git('config', 'user.email', 'nrzdev@khulnasoft.com')
+    await git('config', 'user.email', 'nrzdevkhulnasoft.com')
     await git('config', 'tag.gpgSign', 'false')
     await git('config', 'commit.gpgSign', 'false')
     await git('config', 'tag.forceSignAnnotated', 'false')
@@ -918,4 +4151,1636 @@ t.test('path git selector', async t => {
     found[Symbol.for('indent')] = pkg[Symbol.for('indent')]
     t.strictSame(found, pkg)
   })
+})
+
+t.test(
+  'full packument requests coalesce and retain manifest metadata',
+  async t => {
+    t.teardown(() => pi.drain())
+    const pi = new PackageInfoClient({
+      ...options,
+      cache: t.testdir(),
+    })
+    coalescedPackumentRequests = 0
+    coalescedPackumentAccept = undefined
+
+    const [paku, pakuAgain, exact, range] = await Promise.all([
+      pi.packument('coalesced'),
+      pi.packument('coalesced'),
+      pi.manifest('coalesced@2.0.0'),
+      pi.manifest('coalesced@2'),
+    ])
+
+    t.equal(
+      coalescedPackumentRequests,
+      1,
+      'made one registry request',
+    )
+    // Regression guard: #1692 briefly requested npm's corgi and dropped
+    // license from stored manifests. See PackageInfoClient.#fetchPackument.
+    t.equal(
+      coalescedPackumentAccept,
+      PACKUMENT_ACCEPT,
+      'requested the nrz packument with a full-packument fallback',
+    )
+    t.notMatch(
+      coalescedPackumentAccept,
+      /vnd\.npm\.install/,
+      'never requests npm corgi',
+    )
+    // A media range with no `q` is q=1.0, so an unqualified `*/*` would
+    // tie with the nrz type and outrank the full packument on a registry
+    // that negotiates strictly by quality.
+    t.match(
+      coalescedPackumentAccept,
+      /\*\/\*;\s*q=0\.1\b/,
+      'wildcard range ranks below the full packument',
+    )
+    t.equal(
+      paku,
+      pakuAgain,
+      'packument requests returned the same object',
+    )
+    t.equal(
+      exact,
+      paku.versions['2.0.0'],
+      'exact manifest came from the coalesced packument',
+    )
+    t.equal(
+      range,
+      paku.versions['2.0.0'],
+      'range manifest came from the coalesced packument',
+    )
+    t.equal(exact.license, 'ISC', 'manifest retains license metadata')
+    await pi.drain()
+  },
+)
+
+t.test('registry capabilities', async t => {
+  t.teardown(() => pi.drain())
+  const pi = new PackageInfoClient({ ...options, cache: t.testdir() })
+  // manifest() asks for the document too, so start from a cold memo
+  resetCapabilities()
+  capabilitiesRequests = 0
+
+  t.strictSame(
+    await pi.capabilities(defaultRegistry),
+    capabilitiesDocument,
+    'read the document the registry serves',
+  )
+  t.strictSame(
+    await pi.capabilities(defaultRegistry),
+    capabilitiesDocument,
+    'the same document on a second ask',
+  )
+  t.equal(capabilitiesRequests, 1, 'asked the registry once')
+  await pi.drain()
+})
+
+t.test('the ?stable packument filter', async t => {
+  const client = (t: Test) => {
+    // flush the background cache writes before tap removes the fixture
+    // dir, or the cleanup races them (ENOTEMPTY on macOS). tap runs EOF
+    // hooks in registration order, so this has to be hooked before
+    // t.testdir() hooks the cleanup
+    t.teardown(() => pi.drain())
+    const pi = new PackageInfoClient({
+      ...options,
+      cache: t.testdir(),
+    })
+    return pi
+  }
+
+  const withoutFilter = capabilitiesDocument
+  t.teardown(() => {
+    capabilitiesDocument = withoutFilter
+  })
+  t.beforeEach(() => {
+    resetCapabilities()
+    capabilitiesDocument = {
+      ...withoutFilter,
+      'stable-filter': '1.0',
+    }
+    stableRequests = []
+    stableDelay = 0
+  })
+
+  await t.test(
+    'a range no prerelease can answer asks for it',
+    async t => {
+      const pi = client(t)
+      t.equal(
+        (await pi.manifest('stable-range@^1.0.0')).version,
+        '1.1.0',
+      )
+      t.strictSame(stableRequests, ['/stable-range?stable'])
+    },
+  )
+
+  await t.test('an exact version asks for it too', async t => {
+    const pi = client(t)
+    t.equal(
+      (await pi.manifest('stable-exact@1.0.0')).version,
+      '1.0.0',
+    )
+    t.strictSame(stableRequests, ['/stable-exact?stable'])
+  })
+
+  await t.test(
+    'a registry without the filter is asked for the full packument',
+    async t => {
+      capabilitiesDocument = withoutFilter
+      const pi = client(t)
+      // settle the document first: until it lands the client asks
+      // optimistically, which the next subtest covers
+      await pi.capabilities(defaultRegistry)
+      t.equal(
+        (await pi.manifest('stable-nofilter@^1.0.0')).version,
+        '1.1.0',
+      )
+      t.strictSame(stableRequests, ['/stable-nofilter'])
+    },
+  )
+
+  await t.test(
+    'selectors a prerelease can answer stay on the full packument',
+    async t => {
+      const cases: [string, string, string][] = [
+        ['a dist tag', 'stable-tagged@next', '2.0.0-rc.1'],
+        ['a bare name', 'stable-bare', '1.1.0'],
+        ['the any range', 'stable-any@*', '1.1.0'],
+        [
+          'a range naming a prerelease',
+          'stable-pre@>=2.0.0-rc.1',
+          '2.0.0-rc.1',
+        ],
+        ['a hyphen range', 'stable-hyphen@1.0.0 - 1.1.0', '1.1.0'],
+      ]
+      for (const [name, spec, version] of cases) {
+        await t.test(name, async t => {
+          resetCapabilities()
+          stableRequests = []
+          const pi = client(t)
+          t.equal((await pi.manifest(spec)).version, version)
+          t.notMatch(
+            stableRequests[0],
+            /stable$/,
+            'asked for the full packument',
+          )
+        })
+      }
+    },
+  )
+
+  await t.test(
+    'asks optimistically before the document lands',
+    async t => {
+      // no round trip in front of the first packument of a cold install:
+      // a registry that does not know `?stable` ignores it and serves the
+      // full packument, which resolves just as well
+      capabilitiesDocument = withoutFilter
+      const pi = client(t)
+      t.equal(
+        (await pi.manifest('stable-optimistic@^1.0.0')).version,
+        '1.1.0',
+      )
+      t.strictSame(stableRequests, ['/stable-optimistic?stable'])
+    },
+  )
+
+  await t.test(
+    'stops asking once the registry says it has no filter',
+    async t => {
+      capabilitiesDocument = withoutFilter
+      const pi = client(t)
+      // first ask is optimistic, and settles the document behind it
+      await pi.manifest('stable-first@^1.0.0')
+      await pi.capabilities(defaultRegistry)
+      await pi.manifest('stable-second@^1.0.0')
+      t.strictSame(stableRequests, [
+        '/stable-first?stable',
+        '/stable-second',
+      ])
+    },
+  )
+
+  await t.test('packument() answers with every version', async t => {
+    // `nrz view` and `nrz deprecate` read this, and both need the
+    // prereleases the stable packument drops
+    const pi = client(t)
+    const paku = await pi.packument('stable-viewed@^1.0.0')
+    t.strictSame(Object.keys(paku.versions), [
+      '1.0.0',
+      '1.1.0',
+      '2.0.0-rc.1',
+    ])
+    t.strictSame(stableRequests, ['/stable-viewed'])
+  })
+
+  await t.test(
+    'an in-flight full packument answers a stable ask',
+    async t => {
+      const pi = client(t)
+      // the capability document is what a stable ask waits on, so settle
+      // it before the two asks race
+      await pi.capabilities(defaultRegistry)
+      stableDelay = 50
+
+      const [full, stable] = await Promise.all([
+        pi.packument('stable-shared@^1.0.0'),
+        pi.manifest('stable-shared@^1.0.0'),
+      ])
+      t.strictSame(
+        stableRequests,
+        ['/stable-shared'],
+        'fetched once, as the full packument',
+      )
+      t.equal(
+        stable,
+        full.versions['1.1.0'],
+        'both came from that fetch',
+      )
+    },
+  )
+
+  await t.test('the two shapes cache separately', async t => {
+    const pi = client(t)
+    await pi.manifest('stable-split@^1.0.0')
+    await pi.packument('stable-split@^1.0.0')
+    t.strictSame(
+      stableRequests,
+      ['/stable-split?stable', '/stable-split'],
+      'one request per representation',
+    )
+    await pi.drain()
+  })
+})
+
+t.test('moving selectors force a revalidation', async t => {
+  const track = drainer(t)
+  const cache = t.testdir()
+  // one client per simulated process; the point is the disk cache
+  const client = () =>
+    track(new PackageInfoClient({ ...options, cache }))
+  const flush = (pi: PackageInfoClient) => pi.drain()
+  movingRequests = 0
+  movingLatest = '1.0.0'
+
+  const a = client()
+  t.equal(
+    (await a.packument('moving@1.0.0'))['dist-tags'].latest,
+    '1.0.0',
+  )
+  t.equal(movingRequests, 1, 'cold miss')
+  await flush(a)
+
+  // latest moves; the cached packument is still strictly valid
+  movingLatest = '2.0.0'
+
+  const b = client()
+  t.equal(
+    (await b.packument('moving@1.0.0'))['dist-tags'].latest,
+    '1.0.0',
+    'pinned spec is still served from cache',
+  )
+  t.equal(movingRequests, 1, 'pinned spec made no request')
+  await flush(b)
+
+  const c = client()
+  t.equal(
+    (await c.packument('moving@latest'))['dist-tags'].latest,
+    '2.0.0',
+    'dist tag picked up the new latest',
+  )
+  t.equal(movingRequests, 2, 'dist tag revalidated')
+  await flush(c)
+
+  const d = client()
+  t.equal(
+    (await d.packument('moving'))['dist-tags'].latest,
+    '2.0.0',
+    'a bare name is a moving selector too',
+  )
+  t.equal(movingRequests, 3, 'bare name revalidated (304)')
+  await flush(d)
+})
+
+t.test('moving selector does not ride a pinned request', async t => {
+  const track = drainer(t)
+  const cache = t.testdir()
+  movingRequests = 0
+  movingLatest = '1.0.0'
+
+  const warm = track(new PackageInfoClient({ ...options, cache }))
+  await warm.packument('moving@1.0.0')
+  await warm.drain()
+  movingLatest = '2.0.0'
+
+  // the pinned request lands in #packumentPromises first and will settle
+  // to a cache hit; the dist tag must not coalesce onto it
+  const pi = track(new PackageInfoClient({ ...options, cache }))
+  const [pinned, moving] = await Promise.all([
+    pi.packument('moving@1.0.0'),
+    pi.packument('moving@latest'),
+  ])
+  t.equal(pinned['dist-tags'].latest, '1.0.0', 'pinned got the cache')
+  t.equal(moving['dist-tags'].latest, '2.0.0', 'dist tag got fresh')
+
+  // the reverse direction still coalesces: a pinned spec is happy with a
+  // forced result
+  const pi2 = track(new PackageInfoClient({ ...options, cache }))
+  const before = movingRequests
+  const [m2, p2] = await Promise.all([
+    pi2.packument('moving@latest'),
+    pi2.packument('moving@1.0.0'),
+  ])
+  t.equal(m2, p2, 'shared one packument')
+  t.equal(movingRequests, before + 1, 'made one request')
+  await pi.drain()
+  await pi2.drain()
+})
+
+t.test('backgroundRevalidate', async t => {
+  // no real revalidation child at exit
+  const registered: string[][] = []
+  const { PackageInfoClient: PIC } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '../../registry-client/src/cache-revalidate.ts': {
+      register: (
+        _: string,
+        method: string,
+        url: URL | string,
+        accept?: string,
+      ) => registered.push([method, String(url), String(accept)]),
+    },
+  })
+  const bg = { backgroundRevalidate: true }
+  const track = drainer(t)
+  const cache = t.testdir()
+  const client = async () => {
+    const pi = track(new PIC({ ...options, cache }))
+    const rc = await pi.getRegistryClient()
+    const calls = { n: 0 }
+    const request = rc.request.bind(rc)
+    rc.request = (...args) => {
+      calls.n++
+      return request(...args)
+    }
+    return { pi, calls }
+  }
+  const latest = (
+    p: Promise<{ 'dist-tags': Record<string, string> }>,
+  ) => p.then(p => p['dist-tags'].latest)
+  const moving = `${defaultRegistry}moving`
+  movingRequests = 0
+  movingLatest = '1.0.0'
+  const warm = await client()
+  await latest(warm.pi.packument('moving@1.0.0'))
+  await warm.pi.drain()
+  // latest moves; the cached packument is still strictly valid
+  movingLatest = '2.0.0'
+
+  t.test('serves a fresh moving selector', async t => {
+    for (const spec of ['moving@latest', 'moving']) {
+      registered.length = 0
+      const { pi } = await client()
+      t.equal(await latest(pi.packument(spec, bg)), '1.0.0', spec)
+      t.equal(movingRequests, 1, 'no request before use')
+      t.strictSame(
+        registered,
+        [['GET', moving, PACKUMENT_ACCEPT]],
+        'revalidates after exit, same representation',
+      )
+    }
+  })
+
+  t.test('forced does not ride background', async t => {
+    registered.length = 0
+    const { pi, calls } = await client()
+    const [b, f] = await Promise.all([
+      latest(pi.packument('moving@*', bg)),
+      latest(pi.packument('moving@latest')),
+    ])
+    t.equal(b, '1.0.0')
+    t.equal(f, '2.0.0', 'forced got fresh')
+    t.equal(calls.n, 2)
+    t.equal(movingRequests, 2)
+    t.equal(registered.length, 1)
+  })
+
+  t.test('background rides forced', async t => {
+    registered.length = 0
+    const { pi, calls } = await client()
+    const [f, b] = await Promise.all([
+      latest(pi.packument('moving@latest')),
+      latest(pi.packument('moving@*', bg)),
+    ])
+    t.equal(f, '2.0.0')
+    t.equal(b, '2.0.0')
+    t.equal(calls.n, 1, 'one request')
+    t.equal(registered.length, 0)
+  })
+
+  t.test('background does not ride pinned', async t => {
+    registered.length = 0
+    const { pi, calls } = await client()
+    await Promise.all([
+      pi.packument('moving@1.0.0'),
+      pi.packument('moving@*', bg),
+    ])
+    t.equal(calls.n, 2)
+    t.equal(registered.length, 1)
+  })
+
+  t.test('pinned rides background', async t => {
+    registered.length = 0
+    const { pi, calls } = await client()
+    const [b, p] = await Promise.all([
+      pi.packument('moving@*', bg),
+      pi.packument('moving@1.0.0'),
+    ])
+    t.equal(b, p, 'shared one packument')
+    t.equal(calls.n, 1)
+    t.equal(registered.length, 1)
+  })
+})
+
+t.test('late parse failure refetches packument', async t => {
+  t.teardown(() => pi.drain())
+  const pi = new PackageInfoClient({
+    ...options,
+    cache: t.testdir(),
+  })
+  const paku = {
+    name: 'badjson',
+    'dist-tags': { latest: '1.0.0' },
+    versions: {
+      '1.0.0': { name: 'badjson', version: '1.0.0' },
+    },
+  }
+  const jsonHeaders = [
+    Buffer.from('content-type'),
+    Buffer.from('application/json'),
+  ]
+  let calls = 0
+  const rc = await pi.getRegistryClient()
+  rc.request = async (_url, reqOptions) => {
+    calls++
+    if (reqOptions?.useCache === false) {
+      const good = new CacheEntry(200, jsonHeaders)
+      good.addBody(Buffer.from(JSON.stringify(paku)))
+      return good
+    }
+    const bad = new CacheEntry(200, jsonHeaders)
+    bad.addBody(Buffer.from('{not json}'))
+    return bad
+  }
+
+  const result = await pi.packument('badjson')
+  t.equal(calls, 2)
+  t.equal(result.name, 'badjson')
+  await pi.drain()
+})
+
+t.test('packument parse failure retries once', async t => {
+  t.teardown(() => pi.drain())
+  const pi = new PackageInfoClient({
+    ...options,
+    cache: t.testdir(),
+  })
+  const jsonHeaders = [
+    Buffer.from('content-type'),
+    Buffer.from('application/json'),
+  ]
+  let calls = 0
+  const rc = await pi.getRegistryClient()
+  rc.request = async () => {
+    calls++
+    const bad = new CacheEntry(200, jsonHeaders)
+    bad.addBody(Buffer.from('{not json}'))
+    return bad
+  }
+
+  await t.rejects(pi.packument('badjson-forever'))
+  t.equal(calls, 2, 'does not retry twice')
+  await pi.drain()
+})
+
+t.test('no registry configured', async t => {
+  // there is no default registry -- both places that build a registry
+  // URL throw ECONFIG rather than a bare `Invalid URL` TypeError
+  const noRegistry = { cache }
+  await t.rejects(packument('abbrev@latest', noRegistry), {
+    cause: { code: 'ECONFIG' },
+  })
+  await t.rejects(manifest('abbrev@2.0.0', noRegistry), {
+    cause: { code: 'ECONFIG' },
+  })
+})
+
+t.test('tarballs labelled with a digest', async t => {
+  const clients: PackageInfoClient[] = []
+  const track = (c: PackageInfoClient) => {
+    clients.push(c)
+    return c
+  }
+  // drained before the suite's and each subtest's fixture cleanup
+  const drainAll = async () => {
+    for (const c of clients) await c.drain()
+  }
+  t.teardown(drainAll)
+  t.beforeEach(t => t.teardown(drainAll))
+  // one fixture: t.testdir() per client would rimrafSync it under live ones
+  const root = t.testdir()
+  const pi = () =>
+    track(
+      new PackageInfoClient({
+        ...options,
+        cache: mkdtempSync(`${root}/c-`),
+      }),
+    )
+  const integrity = `sha512-${tgzAbbrevSha512}`
+
+  t.test(
+    'relative tarball paths resolve against the registry',
+    async t => {
+      const res = await pi().resolve('digest@1.0.0')
+      t.match(res, {
+        resolved: `${defaultRegistry}digest/-/digest-1.0.0.tgz`,
+        integrity: undefined,
+        digestRequired: true,
+      })
+    },
+  )
+
+  t.test(
+    'resolve against a registry without a trailing slash',
+    async t => {
+      const p = track(
+        new PackageInfoClient({
+          ...options,
+          registry: defaultRegistry.replace(/\/$/, ''),
+          cache: t.testdir(),
+        }),
+      )
+      const res = await p.resolve('digest@1.0.0')
+      t.equal(
+        res.resolved,
+        `${defaultRegistry}digest/-/digest-1.0.0.tgz`,
+      )
+    },
+  )
+
+  t.test(
+    'extract verifies the digest and hands the hash back',
+    async t => {
+      const dir = t.testdir()
+      const cache = `${dir}/cache`
+      const p = track(new PackageInfoClient({ ...options, cache }))
+      const res = await p.extract('digest@1.0.0', `${dir}/a`)
+      t.equal(res.integrity, integrity)
+      await p.drain()
+
+      // a fresh resolution of the same tarball is served from the
+      // in-memory cache, hash included
+      const warm = await p.extract('digest@^1', `${dir}/b`)
+      t.equal(warm.integrity, integrity)
+
+      // and a fresh client unpacks it straight off the cache file
+      const cold = track(new PackageInfoClient({ ...options, cache }))
+      const url = `${defaultRegistry}digest/-/digest-1.0.0.tgz`
+      t.ok(
+        (await cold.getRegistryClient()).cachedBody(url),
+        'on disk',
+      )
+      const again = await cold.extract('digest@1.0.0', `${dir}/c`)
+      t.equal(again.integrity, integrity)
+    },
+  )
+
+  t.test('extract rejects a body that does not match', async t => {
+    const dir = t.testdir()
+    await t.rejects(pi().extract('digest-bad@1.0.0', dir), {
+      cause: { code: 'EINTEGRITY', found: integrity },
+    })
+  })
+
+  t.test('a rejected body does not survive in the cache', async t => {
+    const dir = t.testdir()
+    for (const name of ['digest-bad', 'digest-missing']) {
+      const cache = `${dir}/${name}`
+      const p = track(new PackageInfoClient({ ...options, cache }))
+      const spec = `${name}@1.0.0`
+      await t.rejects(p.extract(spec, `${dir}/${name}-a`), {
+        cause: { code: 'EINTEGRITY' },
+      })
+      const client = await p.getRegistryClient()
+      await client.cache.promise()
+      const url = `${defaultRegistry}${name}/-/${name}-1.0.0.tgz`
+      t.equal(client.cachedBody(url), undefined, `${name} not cached`)
+
+      // a fresh client on the same cache has to reject it too, rather
+      // than unpack the leftover off the cache file and pin its hash
+      const cold = track(new PackageInfoClient({ ...options, cache }))
+      t.equal(
+        (await cold.getRegistryClient()).cachedBody(url),
+        undefined,
+        `${name} not on disk`,
+      )
+      await t.rejects(cold.extract(spec, `${dir}/${name}-b`), {
+        cause: { code: 'EINTEGRITY' },
+      })
+      await t.rejects(cold.tarball(spec), {
+        cause: { code: 'EINTEGRITY' },
+      })
+    }
+  })
+
+  t.test(
+    'extract requires the digest for a nrz packument',
+    async t => {
+      const dir = t.testdir()
+      await t.rejects(pi().extract('digest-missing@1.0.0', dir), {
+        cause: { code: 'EINTEGRITY', wanted: undefined },
+      })
+    },
+  )
+
+  t.test(
+    'a cached manifest keeps requiring the digest in a fresh client',
+    async t => {
+      const cache = t.testdir()
+      const spec = Spec.parse('digest-missing@1.0.0', options)
+      const p = track(new PackageInfoClient({ ...options, cache }))
+      t.equal((await p.resolve(spec)).digestRequired, true)
+      await p.drain()
+      const cachePath = p._manifestCachePath(spec, {})
+      if (!cachePath) throw new Error('spec is not cacheable')
+      const cached = JSON.parse(
+        readFileSync(cachePath, 'utf8'),
+      ) as Record<string, unknown>
+      t.equal(
+        cached.__NRZ_PACKUMENT,
+        true,
+        'cache file carries the marker',
+      )
+
+      const cold = track(new PackageInfoClient({ ...options, cache }))
+      const mani = await cold.manifest(spec)
+      t.notOk(
+        '__NRZ_PACKUMENT' in mani,
+        'marker stays out of the manifest',
+      )
+      t.equal((await cold.resolve(spec)).digestRequired, true)
+      await t.rejects(cold.extract(spec, t.testdir()), {
+        cause: { code: 'EINTEGRITY', wanted: undefined },
+      })
+    },
+  )
+
+  t.test(
+    'a plain packument without integrity still records the hash',
+    async t => {
+      const dir = t.testdir()
+      const res = await pi().extract('no-integrity@1.0.0', dir)
+      t.equal(res.integrity, integrity)
+    },
+  )
+
+  t.test('tarball() verifies the digest', async t => {
+    const buf = await pi().tarball('digest@1.0.0')
+    t.strictSame(buf, tgzAbbrev)
+    await t.rejects(pi().tarball('digest-bad@1.0.0'), {
+      cause: { code: 'EINTEGRITY' },
+    })
+    await t.rejects(pi().tarball('digest-missing@1.0.0'), {
+      cause: { code: 'EINTEGRITY' },
+    })
+  })
+
+  t.test('full packuments are requested as plain json', async t => {
+    coalescedPackumentRequests = 0
+    coalescedPackumentAccept = undefined
+    const paku = await pi().packument('coalesced', { full: true })
+    t.ok(paku.versions['2.0.0'])
+    t.equal(coalescedPackumentAccept, 'application/json')
+    t.equal(coalescedPackumentRequests, 1)
+  })
+})
+
+t.test('v2 packuments carry tarball basenames', async t => {
+  const clients: PackageInfoClient[] = []
+  // drained before the suite's and each subtest's fixture cleanup
+  const drainAll = async () => {
+    for (const c of clients) await c.drain()
+  }
+  t.teardown(drainAll)
+  t.beforeEach(t => t.teardown(drainAll))
+  // one fixture: t.testdir() per client would rimrafSync it under live ones
+  const root = t.testdir()
+  const pi = (o?: PackageInfoClientOptions) => {
+    const c = new PackageInfoClient({
+      ...options,
+      ...o,
+      cache: o?.cache ?? mkdtempSync(`${root}/c-`),
+    })
+    clients.push(c)
+    return c
+  }
+  const tgzURL = `${defaultRegistry}v2/-/v2-1.0.0.tgz`
+
+  t.test(
+    "a basename resolves in the package's /-/ directory",
+    async t => {
+      t.match(await pi().resolve('v2@1.0.0'), {
+        resolved: tgzURL,
+        integrity: undefined,
+        digestRequired: true,
+      })
+    },
+  )
+
+  t.test(
+    'resolve against a registry without a trailing slash',
+    async t => {
+      const res = await pi({
+        registry: defaultRegistry.replace(/\/$/, ''),
+      }).resolve('v2@1.0.0')
+      t.equal(res.resolved, tgzURL)
+    },
+  )
+
+  t.test('a scoped basename keeps the scope in the path', async t => {
+    const mani = await pi({ 'brotli-tarballs': false }).manifest(
+      '@scope/v2@1.0.0',
+    )
+    t.equal(
+      mani.dist?.tarball,
+      `${defaultRegistry}@scope/v2/-/v2-1.0.0.tgz`,
+    )
+  })
+
+  t.test('an alternate resolves beside the tarball', async t => {
+    t.match(await pi().resolve('@scope/v2@1.0.0'), {
+      resolved: `${defaultRegistry}@scope/v2/-/v2-1.0.0.tar.br`,
+    })
+  })
+
+  t.test('extract verifies the digest', async t => {
+    const dir = t.testdir()
+    const res = await pi({ cache: `${dir}/cache` }).extract(
+      'v2@1.0.0',
+      `${dir}/out`,
+    )
+    t.equal(res.integrity, `sha512-${tgzAbbrevSha512}`)
+  })
+})
+
+t.test('brotli tarballs', async t => {
+  const clients: PackageInfoClient[] = []
+  // drained before the suite's and each subtest's fixture cleanup
+  const drainAll = async () => {
+    for (const c of clients) await c.drain()
+  }
+  t.teardown(drainAll)
+  t.beforeEach(t => t.teardown(drainAll))
+  // one fixture: t.testdir() per client would rimrafSync it under live ones
+  const root = t.testdir()
+  const pi = (o?: PackageInfoClientOptions) => {
+    const c = new PackageInfoClient({
+      ...options,
+      ...o,
+      cache: o?.cache ?? mkdtempSync(`${root}/c-`),
+    })
+    clients.push(c)
+    return c
+  }
+  const brURL = `${defaultRegistry}brotli/-/brotli-1.0.0.tar.br`
+  const tgzURL = `${defaultRegistry}brotli/-/brotli-1.0.0.tgz`
+
+  t.test('resolve picks the advertised alternate', async t => {
+    // the `.tar.br` is the artifact, not a re-encoding of the `.tgz`:
+    // `resolved` names it and its own Repr-Digest is what pins it
+    t.match(await pi().resolve('brotli@1.0.0'), {
+      resolved: brURL,
+      integrity: undefined,
+      digestRequired: true,
+    })
+  })
+
+  t.test('an advertised integrity is pinned', async t => {
+    const dir = t.testdir()
+    const res = await pi({ cache: `${dir}/cache` }).resolve(
+      'brotli-pinned@1.0.0',
+    )
+    t.match(res, {
+      resolved: `${defaultRegistry}brotli-pinned/-/brotli-pinned-1.0.0.tar.br`,
+      integrity: brAbbrevIntegrity,
+      digestRequired: undefined,
+    })
+  })
+
+  t.test('a pinned alternate addresses the store cold', async t => {
+    // This is what advertising the hash buys: there is no cache entry
+    // and nothing is downloaded, but the packument alone is enough to
+    // find the package in the store.
+    const dir = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(dir)
+    unload()
+    const cache = `${dir}/cache`
+    const store = pathResolve(cache, 'store/v1')
+    const hex = String(integrityHex(brAbbrevIntegrity))
+    const tmp = pathResolve(store, '.tmp', hex)
+    const { index } = unpackToStoreSync(brAbbrev, tmp, 'brotli')
+    writeFileSync(
+      pathResolve(store, hex + '.json'),
+      JSON.stringify(index),
+    )
+    renameSync(tmp, pathResolve(store, hex))
+
+    const p = pi({ cache, 'store-linker': 'hardlink' })
+    const res = await p.extract('brotli-pinned@1.0.0', `${dir}/a`)
+    t.equal(res.integrity, brAbbrevIntegrity)
+    t.equal(statSync(`${dir}/a/package.json`).nlink, 2, 'linked')
+    t.match(
+      JSON.parse(String(res.manifest)),
+      { name: 'abbrev', version: '2.0.0' },
+      'came from the store index',
+    )
+  })
+
+  t.test(
+    'an alternate that is not the .tgz sibling is ignored',
+    async t => {
+      // brotli bytes carry no signature, and a lockfile node rebuilds
+      // its url from the .tgz by convention -- so an alternate neither
+      // of those can re-derive is left alone rather than mis-unpacked
+      const dir = t.testdir()
+      const res = await pi({ cache: `${dir}/cache` }).extract(
+        'brotli-odd@1.0.0',
+        `${dir}/a`,
+      )
+      t.equal(
+        res.resolved,
+        `${defaultRegistry}brotli-odd/-/brotli-odd-1.0.0.tgz`,
+        'resolved to the gzip tarball',
+      )
+      t.equal(
+        JSON.parse(readFileSync(`${dir}/a/package.json`, 'utf8'))
+          .name,
+        'abbrev',
+        'and it unpacked',
+      )
+    },
+  )
+
+  t.test('--no-brotli-tarballs keeps the .tgz', async t => {
+    const res = await pi({ 'brotli-tarballs': false }).resolve(
+      'brotli@1.0.0',
+    )
+    t.match(res, { resolved: tgzURL, digestRequired: true })
+  })
+
+  t.test('extract unpacks it and pins its hash', async t => {
+    const dir = t.testdir()
+    const cache = `${dir}/cache`
+    const p = pi({ cache })
+    brotliRequests = 0
+    const res = await p.extract('brotli@1.0.0', `${dir}/a`)
+    t.equal(res.resolved, brURL)
+    t.equal(res.integrity, brAbbrevIntegrity)
+    t.equal(brotliRequests, 1)
+    t.equal(
+      JSON.parse(readFileSync(`${dir}/a/package.json`, 'utf8')).name,
+      'abbrev',
+      'the brotli bytes really did unpack',
+    )
+    await p.drain()
+
+    // and a fresh client unpacks it straight off the cache file,
+    // which nothing ever rewrote: still brotli, still declared by url
+    const cold = pi({ cache })
+    t.ok(
+      (await cold.getRegistryClient()).cachedBody(brURL),
+      'on disk',
+    )
+    const again = await cold.extract('brotli@1.0.0', `${dir}/b`)
+    t.equal(again.integrity, brAbbrevIntegrity)
+    t.equal(
+      JSON.parse(readFileSync(`${dir}/b/package.json`, 'utf8')).name,
+      'abbrev',
+    )
+    t.equal(brotliRequests, 1, 'served from the cache file')
+  })
+
+  t.test('a graph hands over the url alone', async t => {
+    // what reify passes on a first install: the node resolved to the
+    // `.tar.br` off the manifest's alternate, but its hash is not
+    // knowable until the bytes arrive, so only the url comes along.
+    const dir = t.testdir()
+    const res = await pi().extract('brotli@1.0.0', dir, {
+      resolved: brURL,
+    })
+    t.equal(res.resolved, brURL)
+    t.equal(res.digestRequired, true, 'so Repr-Digest is required')
+    t.equal(res.integrity, brAbbrevIntegrity, 'and pins that hash')
+    t.equal(
+      JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')).name,
+      'abbrev',
+    )
+  })
+
+  t.test('an unlabelled alternate is refused', async t => {
+    // an alternate carries no packument integrity, so an unlabelled
+    // body has nothing to check against and is never trusted
+    await t.rejects(
+      pi().extract('brotli-nodigest@1.0.0', t.testdir()),
+      { cause: { code: 'EINTEGRITY', wanted: undefined } },
+    )
+  })
+
+  t.test('a lockfile install still hashes the body', async t => {
+    // the `.tgz` shortcut -- the registry client hashes every gzip body
+    // it fetches -- does not reach a `.tar.br`, so extract() has to.
+    const dir = t.testdir()
+    const cache = `${dir}/cache`
+    const wanted: Integrity = `sha512-${'0'.repeat(86)}==`
+    const p = pi({ cache })
+    await t.rejects(
+      p.extract('brotli@1.0.0', dir, {
+        resolved: brURL,
+        integrity: wanted,
+        fromLockfile: true,
+      }),
+      { cause: { code: 'EINTEGRITY', found: brAbbrevIntegrity } },
+    )
+
+    // and the rejected bytes must not survive in the cache: they would
+    // be found under the pinned hash and unpacked unverified next time
+    const client = await p.getRegistryClient()
+    await client.cache.promise()
+    t.equal(
+      client.cachedBody(brURL, { integrity: wanted }),
+      undefined,
+      'not cached under the hash it failed to match',
+    )
+    const cold = pi({ cache })
+    t.equal(
+      (await cold.getRegistryClient()).cachedBody(brURL, {
+        integrity: wanted,
+      }),
+      undefined,
+      'nor on disk for the next run',
+    )
+  })
+
+  t.test(
+    '...where a .tgz leaves the hashing to the client',
+    async t => {
+      // the contrast: same options, gzip body, and extract() does not
+      // hash it a second time -- the registry client already did.
+      const dir = t.testdir()
+      const res = await pi().extract('brotli@1.0.0', dir, {
+        resolved: tgzURL,
+        integrity: `sha512-${tgzAbbrevSha512}`,
+        fromLockfile: true,
+      })
+      t.equal(res.resolved, tgzURL)
+      t.equal(
+        JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')).name,
+        'abbrev',
+      )
+    },
+  )
+
+  t.test('a cached body at the url is not the pin', async t => {
+    // The cache is keyed by URL, but the pin names a specific artifact.
+    // Whatever is stored under that URL is no proof of which artifact it
+    // is, and this code path does not hash it.
+    const dir = t.testdir()
+    const cache = `${dir}/cache`
+    const prime = pi({ cache })
+    await prime.extract('brotli@1.0.0', `${dir}/prime`)
+    const rc = await prime.getRegistryClient()
+    await rc.cache.promise()
+
+    const cold = await pi({ cache }).getRegistryClient()
+    t.ok(
+      cold.cachedBody(brURL, { integrity: brAbbrevIntegrity }),
+      'its own pin still takes the fast path',
+    )
+    t.equal(
+      cold.cachedBody(brURL, {
+        integrity: `sha512-${'0'.repeat(86)}==`,
+      }),
+      undefined,
+      'a different pin is not served the url-keyed body',
+    )
+
+    // With the link gone there is nothing left to trust, so the pinned
+    // read misses and request() fetches it again.
+    const linked = rc.cache.integrityPath(brAbbrevIntegrity)
+    if (linked) rmSync(linked, { force: true })
+    const colder = await pi({ cache }).getRegistryClient()
+    t.equal(
+      colder.cachedBody(brURL, { integrity: brAbbrevIntegrity }),
+      undefined,
+      'no link, no fast path',
+    )
+    t.ok(
+      colder.cachedBody(brURL),
+      'an unpinned read still uses the url entry',
+    )
+  })
+
+  t.test('a mislabelled alternate is rejected', async t => {
+    await t.rejects(pi().extract('brotli-bad@1.0.0', t.testdir()), {
+      cause: { code: 'EINTEGRITY' },
+    })
+  })
+
+  t.test('an advertised alternate that 404s throws', async t => {
+    // nothing falls back: `resolved` is the artifact, and a registry
+    // that advertises one it cannot serve is broken, not a slow path
+    await t.rejects(pi().extract('brotli-404@1.0.0', t.testdir()), {
+      cause: { url: /brotli-404-1\.0\.0\.tar\.br$/ },
+    })
+  })
+
+  t.test('links from the global store', async t => {
+    // The store is addressed by each artifact's own hash, so a `.tar.br`
+    // gets its own entry. It is unpacked from brotli bytes but holds the
+    // same files, and the same lookup finds it.
+    const dir = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(dir)
+    unload()
+    const cache = `${dir}/cache`
+    const store = pathResolve(cache, 'store/v1')
+    const hex = String(integrityHex(brAbbrevIntegrity))
+    const tmp = pathResolve(store, '.tmp', hex)
+    const { index } = unpackToStoreSync(brAbbrev, tmp, 'brotli')
+    writeFileSync(
+      pathResolve(store, hex + '.json'),
+      JSON.stringify(index),
+    )
+    renameSync(tmp, pathResolve(store, hex))
+
+    const p = pi({ cache, 'store-linker': 'hardlink' })
+    const rc = await p.getRegistryClient()
+    rc.request = () => {
+      throw new Error('requested the tarball')
+    }
+    const res = await p.extract('brotli@1.0.0', `${dir}/a`, {
+      resolved: brURL,
+      integrity: brAbbrevIntegrity,
+    })
+    t.equal(statSync(`${dir}/a/package.json`).nlink, 2, 'linked')
+    t.match(
+      JSON.parse(String(res.manifest)),
+      { name: 'abbrev', version: '2.0.0' },
+      'and the index manifest came along',
+    )
+  })
+
+  t.test('links from the store with no hash to go on', async t => {
+    // An install with no lockfile resolves a `.tar.br` without any
+    // integrity, so the store key has to come from the cache entry,
+    // which recorded the hash when those bytes were verified. Without
+    // that, the store is never checked and every warm run inflates the
+    // tarball again.
+    const dir = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(dir)
+    unload()
+    const cache = `${dir}/cache`
+    const store = pathResolve(cache, 'store/v1')
+
+    // Install once so the tarball ends up in the cache.
+    const cold = pi({ cache })
+    await cold.extract('brotli@1.0.0', `${dir}/cold`)
+    await cold.drain()
+
+    // Write the store entry the background child would have written.
+    const hex = String(integrityHex(brAbbrevIntegrity))
+    const tmp = pathResolve(store, '.tmp', hex)
+    const { index } = unpackToStoreSync(brAbbrev, tmp, 'brotli')
+    writeFileSync(
+      pathResolve(store, hex + '.json'),
+      JSON.stringify(index),
+    )
+    renameSync(tmp, pathResolve(store, hex))
+
+    // Resolve from scratch: no resolved URL, no integrity, nothing
+    // pinned.
+    const p = pi({ cache, 'store-linker': 'hardlink' })
+    const res = await p.extract('brotli@1.0.0', `${dir}/a`)
+    t.equal(res.resolved, brURL)
+    t.equal(statSync(`${dir}/a/package.json`).nlink, 2, 'linked')
+    t.match(
+      JSON.parse(String(res.manifest)),
+      { name: 'abbrev', version: '2.0.0' },
+      'the index manifest came along, so it really was the store',
+    )
+  })
+})
+
+t.test('prefetchResolve', async t => {
+  const roots = [{ name: 'abbrev', spec: '^2.0.0' }]
+  const freshClient = (t: Test) => {
+    // before t.testdir(): tap runs EOF hooks in registration order
+    t.teardown(() => pi.drain())
+    const pi = new PackageInfoClient({
+      registry: defaultRegistry,
+      cache: t.testdir(),
+    })
+    return pi
+  }
+  t.beforeEach(() => {
+    resetCapabilities()
+    capabilitiesDocument = { resolve: '0.1' }
+    resolveRequests.length = 0
+    resolveHoldMs = 0
+    resolveTrickleMs = 0
+    resolveRecords = [
+      {
+        status: 200,
+        name: 'abbrev',
+        requested: ['^2.0.0'],
+        manifest: { name: 'abbrev', version: '2.0.0' },
+      },
+      { end: true, status: 200, returned: 1, unresolved: 0 },
+    ]
+  })
+
+  t.test('is a no-op for an empty root list', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots: [] })
+    t.equal(pi.resolvedManifestCount, 0)
+  })
+
+  t.test(
+    'a basename tarball resolves against the package',
+    async t => {
+      resolveRecords = [
+        {
+          status: 200,
+          name: 'abbrev',
+          requested: ['^2.0.0'],
+          manifest: {
+            name: 'abbrev',
+            version: '2.0.0',
+            dist: {
+              tarball: 'abbrev-2.0.0.tgz',
+              alternates: [
+                { kind: 'tar.br', tarball: 'abbrev-2.0.0.tar.br' },
+              ],
+            },
+          },
+        },
+        { end: true, status: 200, returned: 1, unresolved: 0 },
+      ]
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry, { roots })
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.equal(
+        mani.dist?.tarball,
+        `${defaultRegistry}abbrev/-/abbrev-2.0.0.tgz`,
+        'resolved against the package directory, as a v2 packument is',
+      )
+      // the brotli alternate resolves against the absolute tarball, and a
+      // tarball the record carries no hash for must bring a Repr-Digest
+      const res = await pi.resolve('abbrev@^2.0.0')
+      t.match(res, {
+        resolved: `${defaultRegistry}abbrev/-/abbrev-2.0.0.tar.br`,
+        digestRequired: true,
+      })
+    },
+  )
+
+  t.test('an absolute tarball is left alone', async t => {
+    resolveRecords = [
+      {
+        status: 200,
+        name: 'abbrev',
+        requested: ['^2.0.0'],
+        manifest: {
+          name: 'abbrev',
+          version: '2.0.0',
+          dist: {
+            tarball: 'https://elsewhere.invalid/abbrev-2.0.0.tgz',
+          },
+        },
+      },
+      { end: true, status: 200, returned: 1, unresolved: 0 },
+    ]
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+    t.equal(
+      mani.dist?.tarball,
+      'https://elsewhere.invalid/abbrev-2.0.0.tgz',
+    )
+  })
+
+  t.test(
+    'a registry without a trailing slash keys the same',
+    async t => {
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry.replace(/\/$/, ''), {
+        roots,
+      })
+      const mani = await pi.manifest('abbrev@^2.0.0')
+      t.strictSame(mani, { name: 'abbrev', version: '2.0.0' })
+      t.equal(
+        resolveRequests.length,
+        1,
+        'served by the resolve, not fetched',
+      )
+    },
+  )
+
+  t.test('sends the same request only once', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    pi.prefetchResolve(defaultRegistry, { roots })
+    await pi.manifest('abbrev@^2.0.0')
+    t.equal(
+      resolveRequests.length,
+      1,
+      'the second ask was the same question',
+    )
+  })
+
+  t.test('a range lookup reads the resolved manifest', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    // not arrived yet: manifest() waits on the in-flight resolve
+    const mani = await pi.manifest('abbrev@^2.0.0')
+    t.strictSame(mani, { name: 'abbrev', version: '2.0.0' })
+    t.equal(resolveRequests.length, 1)
+    t.strictSame(resolveRequests[0], { roots })
+    // by-version key arrived too
+    const exact = await pi.manifest('abbrev@2.0.0')
+    t.strictSame(exact, { name: 'abbrev', version: '2.0.0' })
+    t.equal(resolveRequests.length, 1, 'answered from memory')
+  })
+
+  t.test('selection options bypass the resolve map', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    await pi.manifest('abbrev@^2.0.0')
+    // an os-constrained request takes the packument path and gets the
+    // full manifest, never the resolve entry
+    const mani = (await pi.manifest('abbrev@2.0.0', {
+      os: 'linux',
+    })) as Manifest
+    t.strictSame(mani, pakuAbbrev.versions['2.0.0'])
+  })
+
+  t.test('releasing the request ends a held stream', async t => {
+    // the server holds the whole response; without the release, this
+    // lookup would wait the full hold for its key
+    resolveHoldMs = 1500
+    t.intercept(process, 'env', {
+      value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '5000' },
+    })
+    const pi = freshClient(t)
+    const release = pi.prefetchResolve(defaultRegistry, { roots })
+    release()
+    const start = Date.now()
+    const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+    t.equal(mani.version, '2.0.0', 'answered by the packument path')
+    t.ok(Date.now() - start < 1000, 'without waiting out the hold')
+    t.equal(
+      pi.resolvedManifestCount,
+      0,
+      'the stream delivered nothing',
+    )
+  })
+
+  t.test('drain ends a held stream', async t => {
+    resolveHoldMs = 3000
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    // in flight: the server has it and holds the response
+    while (!resolveRequests.length)
+      await new Promise(r => setTimeout(r, 5))
+    const start = Date.now()
+    await pi.drain()
+    t.ok(Date.now() - start < 1000, 'without waiting out the hold')
+    t.equal(pi.resolvedManifestCount, 0)
+  })
+
+  t.test('a released request can be asked again', async t => {
+    resolveHoldMs = 1500
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })()
+    // the same question, no longer in flight, goes out again
+    resolveHoldMs = 0
+    pi.prefetchResolve(defaultRegistry, { roots })
+    const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+    t.equal(mani.version, '2.0.0')
+    t.equal(
+      pi.resolvedManifestCount,
+      2,
+      'delivered by the second request',
+    )
+  })
+
+  t.test(
+    'a request two builds read ends with the last release',
+    async t => {
+      resolveHoldMs = 200
+      const pi = freshClient(t)
+      const first = pi.prefetchResolve(defaultRegistry, { roots })
+      const second = pi.prefetchResolve(defaultRegistry, { roots })
+      first()
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.equal(mani.version, '2.0.0')
+      t.equal(
+        pi.resolvedManifestCount,
+        2,
+        'still streaming for the second reader',
+      )
+      t.equal(resolveRequests.length, 1, 'asked once')
+      second()
+      t.doesNotThrow(second, 'releasing twice is nothing')
+    },
+  )
+
+  t.test('a request that settled is not asked again', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    await pi.manifest('abbrev@^2.0.0')
+    // a key the stream does not carry is answered only once every request
+    // has settled, which is when the request's owner is cleared
+    await pi.manifest('nope@^1.0.0').catch(() => {})
+    pi.prefetchResolve(defaultRegistry, { roots })
+    await pi.manifest('abbrev@^2.0.0')
+    t.equal(resolveRequests.length, 1, 'its records are still here')
+  })
+
+  t.test('a manifest in the local cache never waits', async t => {
+    // the stream is held, and the key is on disk from an earlier run
+    resolveHoldMs = 1500
+    t.intercept(process, 'env', {
+      value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '5000' },
+    })
+    const pi = freshClient(t)
+    const spec = Spec.parse('abbrev@^2.0.0', {
+      registry: defaultRegistry,
+    })
+    const cachePath = pi._manifestCachePath(spec, {})!
+    mkdirSync(dirname(cachePath), { recursive: true })
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        name: 'abbrev',
+        version: '2.0.0',
+        cached: true,
+      }),
+    )
+    const release = pi.prefetchResolve(defaultRegistry, { roots })
+    const start = Date.now()
+    const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest & {
+      cached?: boolean
+    }
+    t.equal(mani.cached, true, 'read from the cache file')
+    t.ok(Date.now() - start < 1000, 'without waiting on the resolve')
+    release()
+    // the capabilities fetch the prefetch started is still landing
+    await pi.capabilities(defaultRegistry)
+    await pi.drain()
+  })
+
+  t.test(
+    'a spec the resolve did not deliver falls through',
+    async t => {
+      const pi = freshClient(t)
+      resolveRecords = [
+        { end: true, status: 200, returned: 0, unresolved: 1 },
+      ]
+      pi.prefetchResolve(defaultRegistry, { roots })
+      // waits on the resolve, misses, then the packument path answers
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.equal(mani.version, '2.0.0')
+    },
+  )
+
+  t.test(
+    'a registry without the endpoint leaves everything alone',
+    async t => {
+      capabilitiesDocument = {}
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry, { roots })
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.equal(mani.version, '2.0.0', 'served by the per-name path')
+      t.equal(pi.resolvedManifestCount, 0)
+      t.strictSame(resolveRequests, [], 'no resolve request was made')
+    },
+  )
+
+  t.test(
+    'a slow resolve does not hold up the graph build',
+    async t => {
+      // the resolve would deliver this key, but not before the wait is
+      // up; the per-name path answers instead of the install stalling
+      resolveHoldMs = 500
+      t.intercept(process, 'env', {
+        value: {
+          ...process.env,
+          NRZ_BATCH_RESOLVE_WAIT_MS: '0',
+        },
+      })
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry, { roots })
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.strictSame(
+        mani,
+        pakuAbbrev.versions['2.0.0'],
+        'the full manifest, so it came from the packument',
+      )
+    },
+  )
+
+  t.test('after the grace the packument is fetched too', async t => {
+    // the stream never carries this key, and only settles well after
+    // the grace; the hedge answers long before that
+    resolveRecords = [
+      { end: true, status: 200, returned: 0, unresolved: 1 },
+    ]
+    resolveHoldMs = 600
+    t.intercept(process, 'env', {
+      value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '50' },
+    })
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    const start = Date.now()
+    const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+    t.strictSame(
+      mani,
+      pakuAbbrev.versions['2.0.0'],
+      'the full manifest, so it came from the packument',
+    )
+    t.ok(Date.now() - start < 500, 'before the stream settled')
+  })
+
+  t.test('a failed hedge waits one grace for the stream', async t => {
+    // the per-name path 404s this name, which the stream delivers 600ms
+    // in: after the 400ms grace the hedge fires and fails at once, and
+    // the stream has one more grace to contradict it
+    const nope = [{ name: 'nope', spec: '^1.0.0' }]
+    resolveRecords = [
+      {
+        status: 200,
+        name: 'nope',
+        requested: ['^1.0.0'],
+        manifest: { name: 'nope', version: '1.0.0' },
+      },
+      { end: true, status: 200, returned: 1, unresolved: 0 },
+    ]
+    resolveHoldMs = 600
+    t.intercept(process, 'env', {
+      value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '400' },
+    })
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots: nope })
+    const mani = (await pi.manifest('nope@^1.0.0')) as Manifest
+    t.strictSame(mani, { name: 'nope', version: '1.0.0' })
+  })
+
+  t.test(
+    'a failed hedge is the answer after one more grace',
+    async t => {
+      // the stream stays open far longer than the grace, and never carries
+      // this key; the 404 is not held back for it
+      const nope = [{ name: 'nope', spec: '^1.0.0' }]
+      resolveRecords = [
+        { end: true, status: 200, returned: 0, unresolved: 1 },
+      ]
+      resolveHoldMs = 2000
+      t.intercept(process, 'env', {
+        value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '50' },
+      })
+      const pi = freshClient(t)
+      const release = pi.prefetchResolve(defaultRegistry, {
+        roots: nope,
+      })
+      const start = Date.now()
+      await t.rejects(pi.manifest('nope@^1.0.0'), {
+        cause: { response: { statusCode: 404 } },
+      })
+      t.ok(
+        Date.now() - start < 1000,
+        'well before the stream settled',
+      )
+      release()
+    },
+  )
+
+  t.test(
+    'a failed hedge is the answer once the stream settles',
+    async t => {
+      const nope = [{ name: 'nope', spec: '^1.0.0' }]
+      resolveRecords = [
+        { end: true, status: 200, returned: 0, unresolved: 1 },
+      ]
+      resolveHoldMs = 100
+      t.intercept(process, 'env', {
+        value: { ...process.env, NRZ_BATCH_RESOLVE_WAIT_MS: '0' },
+      })
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry, { roots: nope })
+      await t.rejects(pi.manifest('nope@^1.0.0'), {
+        cause: { response: { statusCode: 404 } },
+      })
+    },
+  )
+
+  t.test(
+    'a record inside the grace wins without a fetch',
+    async t => {
+      // the grace outlasts the hold, so the record is the answer
+      resolveHoldMs = 50
+      t.intercept(process, 'env', {
+        value: {
+          ...process.env,
+          NRZ_BATCH_RESOLVE_WAIT_MS: '5000',
+        },
+      })
+      const pi = freshClient(t)
+      pi.prefetchResolve(defaultRegistry, { roots })
+      const mani = (await pi.manifest('abbrev@^2.0.0')) as Manifest
+      t.strictSame(
+        mani,
+        { name: 'abbrev', version: '2.0.0' },
+        'the resolve record, so the grace outlasted the hold',
+      )
+    },
+  )
+
+  t.test('two lookups can wait for the same key', async t => {
+    resolveHoldMs = 20
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    const [a, b] = await Promise.all([
+      pi.manifest('abbrev@^2.0.0'),
+      pi.manifest('abbrev@^2.0.0'),
+    ])
+    t.strictSame(a, { name: 'abbrev', version: '2.0.0' })
+    t.strictSame(b, a, 'both got the resolved manifest')
+  })
+
+  t.test('a settled resolve can be asked again', async t => {
+    const pi = freshClient(t)
+    pi.prefetchResolve(defaultRegistry, { roots })
+    await pi.manifest('abbrev@^2.0.0')
+    t.equal(resolveRequests.length, 1)
+    resolveRecords = [
+      {
+        status: 200,
+        name: 'abbrev',
+        requested: ['^3.0.0'],
+        manifest: { name: 'abbrev', version: '3.0.0' },
+      },
+    ]
+    pi.prefetchResolve(defaultRegistry, {
+      roots: [{ name: 'abbrev', spec: '^3.0.0' }],
+    })
+    // only the second resolve carries ^3.0.0, so this waits for it
+    const mani = (await pi.manifest('abbrev@^3.0.0')) as Manifest
+    t.equal(mani.version, '3.0.0')
+    t.equal(
+      resolveRequests.length,
+      2,
+      'settled entry cleared, asked again',
+    )
+  })
+
+  t.test(
+    'a resolve that blows up leaves every spec to manifest()',
+    async t => {
+      // distinct errors per call, so a leaked resolve rejection cannot
+      // pass for the fallback path's own failure
+      let calls = 0
+      class Broken extends PackageInfoClient {
+        async getRegistryClient(): Promise<never> {
+          throw new Error(
+            ++calls === 1 ? 'resolve boom' : 'fallback boom',
+          )
+        }
+      }
+      // before t.testdir(), see freshClient
+      t.teardown(() => pi.drain())
+      const pi = new Broken({
+        registry: defaultRegistry,
+        cache: t.testdir(),
+      })
+      pi.prefetchResolve(defaultRegistry, { roots })
+      await t.rejects(pi.manifest('abbrev@^2.0.0'), {
+        message: 'fallback boom',
+      })
+      t.equal(pi.resolvedManifestCount, 0)
+    },
+  )
 })

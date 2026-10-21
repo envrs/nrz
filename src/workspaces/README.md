@@ -4,9 +4,7 @@
 
 Utilities for working with nrz workspaces.
 
-**[Usage](#usage)**
-·
-**[Run Order](#run-order)**
+**[Usage](#usage)** · **[Run Order](#run-order)**
 
 ## Usage
 
@@ -71,28 +69,51 @@ for (const path of m.paths()) {
 }
 ```
 
-Configuration is stored in the project root at
-`nrz-workspaces.json`. The type of the object in the file must
-be:
+Configuration is stored in the project root at `nrz.json`. The type of
+the object in the file must be:
 
 ```ts
-type WorkspaceConfiguration =
-  | string
-  | string[]
-  | { [group: string]: string | string[] }
+type NrzProject = {
+  workspaces:
+    string | string[] | { [group: string]: string | string[] }
+}
 ```
 
-If it's an object, each key is a group name, and each value is a
-path, glob, or array of paths and globs, which specify the
-location of the workspace projects. Glob matches are only
-considered if they are a directory containing a `package.json`
-file.
+If `nrz.json` has no `workspaces` field, the npm/yarn-style
+`workspaces` field of the project root's `package.json` is used
+instead. Only the shapes npm and yarn understand are accepted there --
+a glob string, an array of them, or `{packages: [...]}` (plus
+yarn-classic's `nohoist`, which is parsed and ignored). Named groups
+are rejected in `package.json`, because a `package.json` using them
+would be meaningless to every other package manager.
+
+Note the precedence is keyed on the _field_, not the file: a
+`nrz.json` that exists but says nothing about workspaces still falls
+through to `package.json`. The two are never merged.
+
+If neither declares workspaces, the `packages` list of a root
+`pnpm-workspace.yaml` is used (plain string lists only; other keys and
+unsupported YAML are ignored).
+
+`nrz install` copies these globs to `nrz.json` (see
+`migratableWSConfig`; opt out with `--no-migrate-workspaces`), and
+`nrz ci` reads `nrz.json` only (`setNrzJsonOnly`).
+
+In any of these files, a pattern beginning with `!` excludes the paths
+it matches, following npm's semantics: `!a/b` excludes only that
+directory, `!a/b/**` excludes the subtree, and a later positive
+pattern overrides an earlier exclusion.
+
+If it's an object, each key is a group name, and each value is a path,
+glob, or array of paths and globs, which specify the location of the
+workspace projects. Glob matches are only considered if they are a
+directory containing a `package.json` file.
 
 A `string` or `string[]` in the file is interpreted as
 `{"packages": <value>}`. Ie, the default group is `packages`.
 
-Workspaces are allowed to be in multiple groups, so something
-like this is fine:
+Workspaces are allowed to be in multiple groups, so something like
+this is fine:
 
 ```json
 {
@@ -102,14 +123,13 @@ like this is fine:
 }
 ```
 
-If the glob patterns result in a situation where one workspace
-folder is contained within another workspace folder, an error
-will be raised.
+If the glob patterns result in a situation where one workspace folder
+is contained within another workspace folder, an error will be raised.
 
 ## Run Order
 
-The `monorepo.run` method can run an async function for each
-workspace in the project, visiting each exactly once.
+The `monorepo.run` method can run an async function for each workspace
+in the project, visiting each exactly once.
 
 When workspaces depend on one another, it will walk dependencies
 before dependents, _unless_ there is a cycle, as that would be

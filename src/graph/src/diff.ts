@@ -1,8 +1,8 @@
 import { error } from '@nrz/error-cause'
-import { type InspectOptions } from 'node:util'
-import { type Edge } from './edge.ts'
-import { type Graph } from './graph.ts'
-import { type Node } from './node.ts'
+import type { InspectOptions } from 'node:util'
+import type { Edge } from './edge.ts'
+import type { Graph } from './graph.ts'
+import type { Node } from './node.ts'
 
 // XXX should file deps *always* be considered changed?
 // unless the thing containing it wasn't possibly changed because it's inside
@@ -54,6 +54,11 @@ export class Diff {
     delete: new Set<Edge>(),
   }
 
+  /**
+   * True if every added node/edge is confined to an optional subtree
+   */
+  optionalOnly = true
+
   get [Symbol.toStringTag]() {
     return '@nrz/graph.Diff'
   }
@@ -78,6 +83,9 @@ export class Diff {
     for (const [id, node] of this.to.nodes) {
       if (!this.from.nodes.get(id)?.equals(node)) {
         this.nodes.add.add(node)
+        if (!node.optional) {
+          this.optionalOnly = false
+        }
       }
     }
 
@@ -87,7 +95,14 @@ export class Diff {
       const fromEdge = fromNode?.edgesOut.get(edge.spec.name)
       if (fromEdge?.to?.id === edge.to?.id) continue
       if (fromEdge?.to) this.edges.delete.add(fromEdge)
-      if (edge.to) this.edges.add.add(edge)
+      if (edge.to) {
+        this.edges.add.add(edge)
+        // edge.optional is the edge type only; a non-optional edge whose
+        // source is optional is still confined to an optional subtree
+        if (!edge.optional && !edge.from.optional) {
+          this.optionalOnly = false
+        }
+      }
     }
     for (const edge of this.from.edges) {
       // the node with this dep, in the to graph
@@ -137,5 +152,27 @@ ${lines
   .map(s => '  ' + color(s))
   .join('\n')}
 }`
+  }
+
+  hasChanges(): boolean {
+    return (
+      this.nodes.add.size > 0 ||
+      this.nodes.delete.size > 0 ||
+      this.edges.add.size > 0 ||
+      this.edges.delete.size > 0
+    )
+  }
+
+  toJSON() {
+    return {
+      nodes: {
+        add: [...this.nodes.add].map(node => node.toJSON()),
+        delete: [...this.nodes.delete].map(node => node.toJSON()),
+      },
+      edges: {
+        add: [...this.edges.add].map(edge => edge.toJSON()),
+        delete: [...this.edges.delete].map(edge => edge.toJSON()),
+      },
+    }
   }
 }

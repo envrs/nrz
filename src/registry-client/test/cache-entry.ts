@@ -1,20 +1,14 @@
-import { createHash } from 'crypto'
+import { createHash } from 'node:crypto'
+import { inspect } from 'node:util'
+import { gzipSync } from 'node:zlib'
 import t from 'tap'
-import { inspect } from 'util'
-import { gzipSync } from 'zlib'
+import type { Integrity } from '@nrz/types'
 import { CacheEntry } from '../src/cache-entry.ts'
+import { toRawHeaders } from './fixtures/to-raw-headers.ts'
 
-const toRawHeaders = (h: Record<string, string>): Buffer[] => {
-  const r: Buffer[] = []
-  for (const [k, v] of Object.entries(h)) {
-    r.push(Buffer.from(k), Buffer.from(v))
-  }
-  return r
-}
-
-const toLenBuf = (b: Buffer): Buffer => {
+const toLenBuf = (b: Uint8Array): Uint8Array => {
   const bl = b.byteLength + 4
-  const blBuf = Buffer.allocUnsafe(4)
+  const blBuf = new Uint8Array(4)
   blBuf.set(
     [
       (bl >> 24) & 0xff,
@@ -24,32 +18,50 @@ const toLenBuf = (b: Buffer): Buffer => {
     ],
     0,
   )
-  return Buffer.concat([blBuf, b])
+  const res = new Uint8Array(blBuf.byteLength + b.byteLength)
+  res.set(blBuf, 0)
+  res.set(b, blBuf.byteLength)
+  return res
 }
+
+const concatUint8Arrays = (arr: Uint8Array[]): Uint8Array =>
+  arr.reduce((acc, i) => {
+    const next = new Uint8Array(acc.byteLength + i.byteLength)
+    next.set(acc, 0)
+    next.set(i, acc.byteLength)
+    return next
+  }, new Uint8Array(0))
 
 const toRawEntry = (
   status: number,
   headers: Record<string, string>,
-  body: Buffer,
-): Buffer => {
-  const headerChunks: Buffer[] = [Buffer.from(String(status))]
+  body: Uint8Array,
+): Uint8Array => {
+  const headerChunks: Uint8Array[] = [Buffer.from(String(status))]
   const rawh = toRawHeaders(headers)
   for (const h of rawh) {
     headerChunks.push(toLenBuf(h))
   }
-  const chunks: Buffer[] = [toLenBuf(Buffer.concat(headerChunks))]
-  chunks.push(toLenBuf(body))
-  return Buffer.concat(chunks)
+  const chunks: Uint8Array[] = [
+    toLenBuf(concatUint8Arrays(headerChunks)),
+  ]
+  chunks.push(body)
+  return concatUint8Arrays(chunks)
 }
 
 const z = gzipSync(Buffer.from('{"hello":"world"}'))
+// make this portable by removing the OS indicator that zlib inserts
+z[9] = 255
 const ce = new CacheEntry(
   200,
   toRawHeaders({
     key: 'value',
     x: 'y',
   }),
-  `sha512-${createHash('sha512').update(z).digest('base64')}`,
+  {
+    integrity: `sha512-${createHash('sha512').update(z).digest('base64')}`,
+    trustIntegrity: true,
+  },
 )
 
 t.matchSnapshot(
@@ -57,13 +69,46 @@ t.matchSnapshot(
   'inspect value (should include color codes for displayed object)',
 )
 
+const ceBinary = new CacheEntry(200, [])
+ceBinary.addBody(Buffer.from([0, 0, 0, 0, 0, 0]))
+t.matchSnapshot(
+  inspect(ceBinary, { colors: false, depth: Infinity }),
+  'inspect value should not dump noisy binary data',
+)
+
+const ceBigBody = new CacheEntry(200, [])
+ceBigBody.addBody(Buffer.allocUnsafe(1024).fill('a'))
+t.matchSnapshot(
+  inspect(ceBigBody, { colors: false, depth: Infinity }),
+  'inspect value should not dump excessively large body text',
+)
+
 t.equal(ce.statusCode, 200)
-t.equal(ce.getHeader('x')?.toString(), 'y')
-t.equal(ce.getHeader('key')?.toString(), 'value')
+t.equal(ce.getHeaderString('x'), 'y')
+t.equal(ce.getHeaderString('key'), 'value')
 t.equal(ce.isGzip, false, 'not gzip without content')
+t.equal(
+  CacheEntry.isGzipEntry(Buffer.alloc(1)),
+  false,
+  'too short to be gzip',
+)
+t.equal(
+  CacheEntry.isGzipEntry(ce.encode()),
+  false,
+  'not gzip without content',
+)
 ce.addBody(z.subarray(0, z.length / 2))
 ce.addBody(z.subarray(z.length / 2))
-t.equal(ce.checkIntegrity(), true)
+t.doesNotThrow(() => ce.checkIntegrity())
+const badIntegrity = new CacheEntry(
+  200,
+  toRawHeaders({ key: 'value' }),
+  { integrity: ce.integrityActual },
+)
+badIntegrity.addBody(ce.buffer())
+badIntegrity.addBody(Buffer.from('some noise'))
+t.throws(() => badIntegrity.checkIntegrity())
+
 t.equal(
   ce.integrity,
   `sha512-${createHash('sha512').update(z).digest('base64')}`,
@@ -80,6 +125,11 @@ t.equal(ce.isGzip, false, 'no longer gzipped after encode')
 t.equal(ce.text(), '{"hello":"world"}')
 t.equal(ce.isGzip, false, 'unzipped to read json')
 t.strictSame(ce.json(), { hello: 'world' })
+t.strictSame(
+  new CacheEntry(200, []).json(),
+  {},
+  'empty entry has empty json body, but does not throw',
+)
 t.strictSame(ce.body, { hello: 'world' })
 t.strictSame(
   ce.buffer(),
@@ -90,6 +140,8 @@ t.strictSame(ce.headers, [
   Buffer.from('value'),
   Buffer.from('x'),
   Buffer.from('y'),
+  Buffer.from('integrity'),
+  Buffer.from(ce.integrityActual),
   Buffer.from('content-encoding'),
   Buffer.from('identity'),
   Buffer.from('content-length'),
@@ -103,13 +155,13 @@ t.strictSame(CacheEntry.decode(enc).encode(), enc)
 t.strictSame(CacheEntry.decode(enc).json(), ce.json())
 
 t.equal(ce.isJSON, true)
-t.equal(
-  new CacheEntry(200, [
-    Buffer.from('content-tyPe'),
-    Buffer.from('application/json'),
-  ]).isJSON,
-  true,
-)
+const json = new CacheEntry(200, [
+  Buffer.from('content-tyPe'),
+  Buffer.from('application/json'),
+])
+t.equal(json.isJSON, true)
+t.equal(json.contentType, 'application/json', 'content-type header')
+t.equal(json.contentType, 'application/json', 'memoized')
 t.equal(
   new CacheEntry(200, [
     Buffer.from('CONTENT-TYPE'),
@@ -141,6 +193,10 @@ t.equal(
     'x'.length +
     4 +
     'y'.length +
+    4 +
+    'integrity'.length +
+    4 +
+    ce.integrityActual.length +
     4 +
     'content-encoding'.length +
     4 +
@@ -179,27 +235,26 @@ t.equal(unzipped.valid, false)
 t.equal(unzipped.isJSON, true)
 
 // test if it's a valid cache entry
-t.equal(
-  new CacheEntry(
-    200,
-    toRawHeaders({
-      date: new Date('2020-01-20').toUTCString(),
-      'cache-control': 'immutable',
-    }),
-  ).valid,
-  true,
+const imm = new CacheEntry(
+  200,
+  toRawHeaders({
+    date: new Date('2020-01-20').toUTCString(),
+    'cache-control': 'immutable',
+  }),
 )
+t.equal(imm.valid, true)
+t.equal(imm.valid, true, 'memoized')
 
-t.equal(
-  new CacheEntry(
-    200,
-    toRawHeaders({
-      date: new Date('2020-01-20').toUTCString(),
-      'cache-control': 'immutable',
-    }),
-  ).checkIntegrity(),
-  false,
-  'no integrity to check, so it must be false',
+t.doesNotThrow(
+  () =>
+    new CacheEntry(
+      200,
+      toRawHeaders({
+        date: new Date('2020-01-20').toUTCString(),
+        'cache-control': 'immutable',
+      }),
+    ).checkIntegrity(),
+  'no integrity to check, so pass',
 )
 
 t.equal(
@@ -252,6 +307,25 @@ t.equal(
   false,
 )
 
+t.test('fromCache', t => {
+  const entry = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/octet-stream' }),
+  )
+  entry.addBody(Buffer.from('hello'))
+  t.equal(
+    entry.fromCache,
+    false,
+    'constructed entries are not from cache',
+  )
+  t.equal(
+    CacheEntry.decode(entry.encode()).fromCache,
+    true,
+    'decoded entries are from cache',
+  )
+  t.end()
+})
+
 t.test('isGzip', t => {
   const c = new CacheEntry(
     200,
@@ -263,6 +337,36 @@ t.test('isGzip', t => {
   const zipped = gzipSync(Buffer.from('hello, world'))
   c.addBody(zipped)
   t.equal(c.isGzip, true)
+  t.equal(CacheEntry.isGzipEntry(c.encode()), true)
+  t.end()
+})
+
+t.test('isTarballEntry', t => {
+  const integrity = `sha512-${createHash('sha512').update('x').digest('base64')}`
+  const tgz = Buffer.from('not json')
+  const is = (
+    status: number,
+    headers: Record<string, string>,
+    body = tgz,
+  ) => CacheEntry.isTarballEntry(toRawEntry(status, headers, body))
+  t.equal(CacheEntry.isTarballEntry(Buffer.alloc(1)), false, 'short')
+  t.equal(is(200, { integrity }), true, 'no content-type')
+  t.equal(is(200, { integrity }, gzipSync(tgz)), true, 'gzipped')
+  t.equal(
+    is(200, {
+      'content-type': 'application/octet-stream',
+      integrity,
+    }),
+    true,
+    'octet-stream',
+  )
+  t.equal(is(200, {}), false, 'no integrity')
+  t.equal(is(404, { integrity }), false, 'not 200')
+  t.equal(
+    is(200, { 'content-type': 'application/json', integrity }),
+    false,
+    'json',
+  )
   t.end()
 })
 
@@ -296,4 +400,737 @@ t.test('treat bad json as cache miss', t => {
     body: Buffer.allocUnsafe(0),
   })
   t.end()
+})
+
+t.test('stale while revalidate', async t => {
+  t.equal(
+    new CacheEntry(
+      200,
+      toRawHeaders({
+        date: new Date('2020-01-20').toUTCString(),
+        'cache-control': 'immutable',
+      }),
+    ).staleWhileRevalidate,
+    true,
+    'stale entry is valid, because cache entry is still valid',
+  )
+
+  t.equal(
+    new CacheEntry(
+      200,
+      toRawHeaders({
+        'cache-control': 'max-age=300',
+      }),
+    ).staleWhileRevalidate,
+    true,
+    'valid to use stale and revalidate, because no date header',
+  )
+
+  t.equal(
+    new CacheEntry(
+      200,
+      toRawHeaders({
+        'cache-control': 'max-age=300',
+        date: new Date(
+          new Date().getTime() - 10 * 300 * 1000,
+        ).toUTCString(),
+      }),
+    ).staleWhileRevalidate,
+    true,
+    'valid to revalidate, because younger than max-age * 60',
+  )
+
+  const tooStale = new CacheEntry(
+    200,
+    toRawHeaders({
+      'cache-control': 'max-age=300',
+      date: new Date(
+        new Date().getTime() - 100 * 300 * 1000,
+      ).toUTCString(),
+    }),
+  )
+
+  t.equal(
+    tooStale.staleWhileRevalidate,
+    false,
+    'cannot use stale entry, because older than max-age * 60',
+  )
+  t.equal(
+    tooStale.staleWhileRevalidate,
+    false,
+    'memoized, still false',
+  )
+})
+
+t.test('maxAge', async t => {
+  const ma = new CacheEntry(
+    200,
+    toRawHeaders({
+      'cache-control': 'max-age=100',
+    }),
+  )
+  t.equal(ma.maxAge, 100)
+  t.equal(ma.maxAge, 100, 'memoized')
+
+  const sma = new CacheEntry(
+    200,
+    toRawHeaders({
+      'cache-control': 's-maxage=100',
+    }),
+  )
+  t.equal(sma.maxAge, 100)
+  t.equal(sma.maxAge, 100, 'memoized')
+
+  const nma = new CacheEntry(200, toRawHeaders({}))
+  t.equal(nma.maxAge, 300)
+  t.equal(nma.maxAge, 300, 'memoized')
+})
+
+t.test('decode adopts body without copying', t => {
+  const src = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/octet-stream' }),
+  )
+  src.addBody(Buffer.from('hello'))
+  const enc = src.encode()
+  const dec = CacheEntry.decode(enc)
+  const headSize = enc.readUInt32BE(0)
+  enc[headSize] = 0x41
+  t.equal(dec.buffer()[0], 0x41)
+  t.end()
+})
+
+t.test(
+  'decode preserves stale-while-revalidate factor when provided',
+  t => {
+    const src = new CacheEntry(
+      200,
+      toRawHeaders({
+        date: new Date(Date.now() - 10 * 60 * 1000).toUTCString(),
+        'cache-control': 'max-age=300',
+        'content-type': 'application/json',
+      }),
+    )
+    src.addBody(Buffer.from('{"ok":true}'))
+    const enc = src.encode()
+
+    t.equal(
+      CacheEntry.decode(enc).staleWhileRevalidate,
+      true,
+      'default decode still uses the class default factor',
+    )
+    t.equal(
+      CacheEntry.decode(enc, {
+        'stale-while-revalidate-factor': 1,
+      }).staleWhileRevalidate,
+      false,
+      'callers can preserve their configured factor when decoding',
+    )
+    t.end()
+  },
+)
+
+t.test('decode does not eagerly parse json', t => {
+  const orig = JSON.parse
+  let calls = 0
+  JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+    calls++
+    return orig(...args)
+  }) as typeof JSON.parse
+  t.teardown(() => {
+    JSON.parse = orig
+  })
+  const enc = toRawEntry(
+    200,
+    { 'content-type': 'application/json' },
+    Buffer.from('{"a":1}'),
+  )
+  const dec = CacheEntry.decode(enc)
+  t.equal(calls, 0)
+  t.strictSame(dec.json(), { a: 1 })
+  t.equal(calls, 1)
+  t.strictSame(dec.json(), { a: 1 })
+  t.equal(calls, 1, 'json() memoizes')
+  t.end()
+})
+
+t.test('isJSON without content-type uses first byte', t => {
+  const json = new CacheEntry(200, [])
+  json.addBody(Buffer.from('{"x":1}'))
+  t.equal(json.isJSON, true)
+
+  const notJson = new CacheEntry(200, [])
+  notJson.addBody(Buffer.from('hello'))
+  t.equal(notJson.isJSON, false)
+
+  const spaced = new CacheEntry(200, [])
+  spaced.addBody(Buffer.from(' {"x":1}'))
+  t.equal(spaced.isJSON, false, 'matches text().startsWith("{")')
+
+  const gzJson = new CacheEntry(200, [])
+  gzJson.addBody(gzipSync(Buffer.from('{"x":1}')))
+  t.equal(gzJson.isJSON, true)
+
+  const gzNot = new CacheEntry(200, [])
+  gzNot.addBody(gzipSync(Buffer.from('hello')))
+  t.equal(gzNot.isJSON, false)
+
+  const emptyGz = new CacheEntry(200, [])
+  emptyGz.addBody(gzipSync(Buffer.alloc(0)))
+  t.equal(emptyGz.isJSON, false)
+  t.end()
+})
+
+t.test('the sniff records the hash of a gzipped network body', t => {
+  const sha512 = (b: Uint8Array): Integrity =>
+    `sha512-${createHash('sha512').update(b).digest('base64')}`
+  const gz = gzipSync(Buffer.from('hello'))
+
+  // the body is un-gzipped in place by the sniff, and the hash
+  // recorded is the one of the bytes as they came off the wire
+  const gzNot = new CacheEntry(200, [])
+  gzNot.addBody(gz)
+  t.equal(gzNot.isJSON, false)
+  t.equal(gzNot.isGzip, false, 'un-gzipped in place')
+  t.equal(gzNot.getHeaderString('integrity'), sha512(gz))
+  t.equal(gzNot.integrityActual, sha512(gz), 'memoized')
+
+  // a json body is not a tarball: nothing to record
+  const gzJson = new CacheEntry(200, [])
+  gzJson.addBody(gzipSync(Buffer.from('{"x":1}')))
+  t.equal(gzJson.isJSON, true)
+  t.equal(gzJson.getHeaderString('content-type'), 'text/json')
+  t.equal(gzJson.getHeaderString('integrity'), undefined)
+
+  // an identity body is not touched by the sniff, and is hashed as
+  // it is by whoever asks for integrityActual
+  const plain = new CacheEntry(200, [])
+  plain.addBody(Buffer.from('hello'))
+  t.equal(plain.isJSON, false)
+  t.equal(plain.getHeaderString('integrity'), undefined)
+  t.equal(plain.integrityActual, sha512(Buffer.from('hello')))
+
+  // an expectation checked first is what gets recorded, once
+  const checked = new CacheEntry(200, [], { integrity: sha512(gz) })
+  checked.addBody(gz)
+  t.equal(checked.checkIntegrity(), true)
+  t.equal(checked.isJSON, false)
+  t.equal(checked.getHeaderString('integrity'), sha512(gz))
+
+  // a body un-gzipped in memory before the sniff is not the wire
+  // bytes any more: no hash of it is recorded
+  const unzipped = new CacheEntry(200, [])
+  unzipped.addBody(gz)
+  t.equal(unzipped.unzip(), true)
+  t.equal(unzipped.isJSON, false)
+  t.equal(unzipped.getHeaderString('integrity'), undefined)
+
+  // a decoded entry is never hashed by the sniff: its body may have
+  // been rewritten un-gzipped in place since it was stored
+  const decoded = CacheEntry.decode(toRawEntry(200, {}, gz))
+  t.equal(decoded.fromCache, true)
+  t.equal(decoded.isJSON, false)
+  t.equal(decoded.getHeaderString('integrity'), undefined)
+  t.equal(decoded.integrity, undefined)
+  t.end()
+})
+
+t.test('labelArtifact', t => {
+  const gz = gzipSync(Buffer.from('hello'))
+  const label = (entry: CacheEntry) => {
+    entry.labelArtifact()
+    return entry.getHeaderString('content-type')
+  }
+
+  // the sniff labels nothing: a body with no content-type stored by
+  // anything but RegistryClient.request() is stored without one
+  const sniffed = new CacheEntry(200, [])
+  sniffed.addBody(gz)
+  t.equal(sniffed.isJSON, false)
+  t.equal(sniffed.getHeaderString('content-type'), undefined)
+  t.equal(CacheEntry.decode(sniffed.encode()).contentType, '')
+
+  // a 200 network body with no content-type, gzipped or not
+  const gzNot = new CacheEntry(200, [])
+  gzNot.addBody(gz)
+  t.equal(label(gzNot), 'application/octet-stream')
+  t.equal(gzNot.isJSON, false)
+  const plain = new CacheEntry(200, [])
+  plain.addBody(Buffer.from('hello'))
+  t.equal(label(plain), 'application/octet-stream')
+
+  // stored, it is not sniffed again, and like any other body with a
+  // content-type that is not json it is an immutable tarball
+  const stored = CacheEntry.decode(gzNot.encode())
+  t.equal(stored.contentType, 'application/octet-stream')
+  t.equal(stored.isJSON, false)
+  t.equal(stored.valid, true)
+
+  // a decoded entry is not labelled, nor stored back labelled
+  const decoded = CacheEntry.decode(toRawEntry(200, {}, gz))
+  t.equal(label(decoded), undefined)
+  t.equal(CacheEntry.decode(decoded.encode()).contentType, '')
+
+  // nor json, nor a body that came with a content-type
+  const json = new CacheEntry(200, [])
+  json.addBody(Buffer.from('{"hello":"world"}'))
+  t.equal(label(json), 'text/json')
+  const typed = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/x-tar' }),
+  )
+  typed.addBody(gz)
+  t.equal(label(typed), 'application/x-tar')
+
+  // nor an error body: labelled, it would be immutable, where one with
+  // no content-type goes stale like any other
+  const notFound = new CacheEntry(
+    404,
+    toRawHeaders({ date: new Date('2020-01-01').toUTCString() }),
+  )
+  notFound.addBody(Buffer.from('Not Found'))
+  t.equal(label(notFound), undefined)
+  t.equal(CacheEntry.decode(notFound.encode()).valid, false)
+
+  // nor an empty body, or one that un-gzips to nothing: no artifact is
+  // empty, and one with no content-type goes stale like any other
+  const empty = new CacheEntry(
+    200,
+    toRawHeaders({ date: new Date('2020-01-01').toUTCString() }),
+  )
+  t.equal(label(empty), undefined)
+  t.equal(CacheEntry.decode(empty.encode()).valid, false)
+  const gzEmpty = new CacheEntry(200, [])
+  gzEmpty.addBody(gzipSync(Buffer.alloc(0)))
+  t.equal(label(gzEmpty), undefined)
+  t.end()
+})
+
+t.test('unzippedIntegrity', t => {
+  const sha512 = (b: Uint8Array): Integrity =>
+    `sha512-${createHash('sha512').update(b).digest('base64')}`
+  const tar = Buffer.from('this is a tarball lets pretend')
+  const gz = gzipSync(tar)
+
+  // the hash of what a gzipped body un-gzips to, the entry untouched
+  const zipped = new CacheEntry(200, [])
+  zipped.addBody(gz)
+  t.equal(zipped.unzippedIntegrity(), sha512(tar))
+  t.equal(zipped.isGzip, true, 'not un-gzipped')
+  t.strictSame(zipped.buffer(), gz)
+  t.equal(
+    zipped.getHeaderString('integrity'),
+    undefined,
+    'not recorded',
+  )
+
+  // of any other body, the hash of the body
+  const plain = new CacheEntry(200, [])
+  plain.addBody(tar)
+  t.equal(plain.unzippedIntegrity(), sha512(tar))
+
+  // bounded like unzip()
+  const bomb = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-encoding': 'gzip' }),
+  )
+  bomb.addBody(gzipSync(Buffer.alloc(2 * 1024 * 1024)))
+  t.throws(() => bomb.unzippedIntegrity(), {
+    message: 'cache entry exceeds maximum unpacked size',
+  })
+  t.end()
+})
+
+t.test('json shape-check vs parse', t => {
+  const isEmpty = (
+    body: Uint8Array,
+    headers = { 'content-type': 'application/json' },
+  ) => {
+    const dec = CacheEntry.decode(toRawEntry(200, headers, body))
+    return dec.statusCode === 0
+  }
+  const parseOk = (body: Uint8Array) => {
+    try {
+      // mirror json(): TextDecoder strips a BOM, empty parses as {}
+      const text = new TextDecoder().decode(body)
+      JSON.parse(text || '{}')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const corpus: [string, Uint8Array][] = [
+    ['object', Buffer.from('{"a":1}')],
+    ['array', Buffer.from('[1,2]')],
+    ['whitespace object', Buffer.from('  {"a":1}\n')],
+    ['truncated', Buffer.from('{"a":')],
+    ['bracket mismatch', Buffer.from('{"a":1]')],
+    ['trailing garbage', Buffer.from('{"a":1}nope')],
+    ['deep corrupt', Buffer.from('{not json}')],
+    ['empty', Buffer.from('')],
+    ['leading slash', Buffer.from('/{"a":1}')],
+    ['whitespace only', Buffer.from('   \n')],
+    ['whitespace array', Buffer.from('  [1]  ')],
+    ['bom object', Buffer.from('\uFEFF{"a":1}')],
+    ['bom only', Buffer.from('\uFEFF')],
+    ['bom truncated', Buffer.from('\uFEFF{"a":')],
+  ]
+
+  for (const [name, body] of corpus) {
+    const empty = isEmpty(body)
+    const ok = parseOk(body)
+    if (ok) t.equal(empty, false, `${name}: parse ok => decoded`)
+    else if (empty) t.ok(true, `${name}: rejected by shape check`)
+    else
+      t.throws(
+        () =>
+          CacheEntry.decode(
+            toRawEntry(
+              200,
+              { 'content-type': 'application/json' },
+              body,
+            ),
+          ).json(),
+        `${name}: deferred to json()`,
+      )
+  }
+
+  t.equal(
+    isEmpty(gzipSync(Buffer.from('{"a":1}'))),
+    false,
+    'gzipped json object',
+  )
+  t.equal(
+    isEmpty(Buffer.from([0x1f, 0x8b, 0x00, 0x00])),
+    true,
+    'invalid gzip json is a miss',
+  )
+  t.equal(
+    isEmpty(Buffer.from('true')),
+    true,
+    'top-level true is a miss',
+  )
+  t.end()
+})
+
+t.test('decode/encode round-trip parity', t => {
+  // decode() injects content-length; encode() of JSON also unzips.
+  // The hard gate is that decode∘encode is a projection: applying it
+  // twice is identity, matching what the previous eager-json decode
+  // produced. Identity JSON already goes through json() on encode(),
+  // so the first encode is already canonical.
+  const roundTrip = (
+    name: string,
+    entry: CacheEntry,
+    canonical = false,
+  ) => {
+    const enc = entry.encode()
+    const once = CacheEntry.decode(enc).encode()
+    if (canonical) {
+      t.strictSame(once, enc, `${name}: first encode is canonical`)
+    }
+    t.strictSame(
+      CacheEntry.decode(once).encode(),
+      once,
+      `${name}: decode(buf).encode() is idempotent`,
+    )
+    t.strictSame(
+      CacheEntry.decode(enc).buffer(),
+      entry.buffer(),
+      `${name}: body bytes preserved`,
+    )
+  }
+
+  const json = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/json' }),
+  )
+  json.addBody(Buffer.from('{"a":1}'))
+  roundTrip('identity json', json, true)
+
+  const arr = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/json' }),
+  )
+  arr.addBody(Buffer.from('  [1,2,3]\n'))
+  roundTrip('identity json array', arr, true)
+
+  const tar = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/octet-stream' }),
+  )
+  tar.addBody(Buffer.from('this is a tarball lets pretend'))
+  roundTrip('identity tarball', tar)
+
+  const gzTar = new CacheEntry(
+    200,
+    toRawHeaders({
+      'content-type': 'application/octet-stream',
+      'content-encoding': 'gzip',
+    }),
+  )
+  gzTar.addBody(
+    gzipSync(Buffer.from('this is a tarball lets pretend')),
+  )
+  roundTrip('gzip tarball', gzTar)
+
+  const gzJson = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/json' }),
+  )
+  gzJson.addBody(gzipSync(Buffer.from('{"hello":"world"}')))
+  roundTrip('gzip json (unzipped by encode)', gzJson, true)
+
+  roundTrip('existing gzip json fixture', ce, true)
+  t.end()
+})
+
+t.test('decode accepts BOM and empty json bodies', t => {
+  const bom = CacheEntry.decode(
+    toRawEntry(
+      200,
+      { 'content-type': 'application/json' },
+      Buffer.from('\uFEFF{"a":1}'),
+    ),
+  )
+  t.equal(bom.statusCode, 200, 'BOM json is not a miss')
+  t.strictSame(bom.json(), { a: 1 }, 'TextDecoder strips the BOM')
+
+  const empty = CacheEntry.decode(
+    toRawEntry(
+      200,
+      { 'content-type': 'application/json' },
+      Buffer.from(''),
+    ),
+  )
+  t.equal(empty.statusCode, 200, 'empty json body is not a miss')
+  t.strictSame(empty.json(), {}, 'json() parses empty as {}')
+  t.end()
+})
+
+t.test('validity deadlines are re-evaluated over time', async t => {
+  const fresh = new CacheEntry(
+    200,
+    toRawHeaders({
+      'content-type': 'application/json',
+      date: new Date().toUTCString(),
+      'cache-control': 'max-age=2',
+    }),
+  )
+  fresh.addBody(Buffer.from('{"a":1}'))
+  t.equal(fresh.valid, true)
+  t.equal(fresh.valid, true, 'deadline memoized, still valid')
+
+  const stale = new CacheEntry(
+    200,
+    toRawHeaders({
+      'content-type': 'application/json',
+      date: new Date(Date.now() - 10_000).toUTCString(),
+      'cache-control': 'max-age=1, stale-while-revalidate=12',
+    }),
+  )
+  stale.addBody(Buffer.from('{"a":1}'))
+  t.equal(stale.valid, false)
+  t.equal(stale.staleWhileRevalidate, true)
+  t.equal(stale.staleWhileRevalidate, true, 'deadline memoized')
+
+  // entries held in memory (e.g. by the decoded-entry memo in a
+  // long-lived process) must still expire once their deadline passes
+  await new Promise(res => setTimeout(res, 2600))
+  t.equal(fresh.valid, false, 'expires after max-age passes')
+  t.equal(
+    stale.staleWhileRevalidate,
+    false,
+    'swr window closes after its deadline passes',
+  )
+})
+
+t.test('setting the date re-evaluates validity', t => {
+  const old = new Date(Date.now() - 20 * 60 * 1000).toUTCString()
+  const e = new CacheEntry(
+    200,
+    toRawHeaders({
+      'content-type': 'application/json',
+      date: old,
+      'cache-control': 'max-age=300',
+    }),
+  )
+  e.addBody(Buffer.from('{"a":1}'))
+  t.equal(e.valid, false)
+  t.equal(e.date?.toUTCString(), old)
+  const now = new Date().toUTCString()
+  e.setHeader('Date', now)
+  t.equal(e.valid, true, 'fresh after a date refresh')
+  t.equal(e.date?.toUTCString(), now)
+
+  // no date at all memoizes the answer, not a deadline
+  const undated = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-type': 'application/json' }),
+  )
+  undated.addBody(Buffer.from('{"a":1}'))
+  t.equal(undated.valid, false)
+  undated.setHeader('date', now)
+  t.equal(undated.valid, true)
+  t.end()
+})
+
+t.test('gunzip bomb rejected', t => {
+  const c = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-encoding': 'gzip' }),
+  )
+  c.addBody(gzipSync(Buffer.alloc(2 * 1024 * 1024)))
+  t.throws(() => c.unzip(), {
+    message: 'cache entry exceeds maximum unpacked size',
+  })
+  t.end()
+})
+
+t.test('non-bomb gunzip errors pass through', t => {
+  const c = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-encoding': 'gzip' }),
+  )
+  c.addBody(Buffer.from([0x1f, 0x8b, 0xff, 0xff, 0xff, 0xff]))
+  t.throws(() => c.unzip(), {
+    message: 'unknown compression method',
+  })
+  t.end()
+})
+
+t.test('NRZ_TAR_MAX_UNPACKED_BYTES caps unzip', async t => {
+  process.env.NRZ_TAR_MAX_UNPACKED_BYTES = '4'
+  t.teardown(() => delete process.env.NRZ_TAR_MAX_UNPACKED_BYTES)
+  const { CacheEntry } = await t.mockImport<
+    typeof import('../src/cache-entry.ts')
+  >('../src/cache-entry.ts')
+  const c = new CacheEntry(
+    200,
+    toRawHeaders({ 'content-encoding': 'gzip' }),
+  )
+  c.addBody(gzipSync(Buffer.from('hello, world')))
+  t.throws(() => c.unzip(), {
+    message: 'cache entry exceeds maximum unpacked size',
+  })
+})
+
+t.test('decodeHead / encodeHead', t => {
+  t.equal(
+    CacheEntry.decodeHead(Buffer.alloc(0)).statusCode,
+    0,
+    'empty buffer',
+  )
+  t.equal(
+    CacheEntry.decodeHead(Buffer.from([100, 100, 100, 100, 1]))
+      .statusCode,
+    0,
+    'head shorter than declared size',
+  )
+
+  const tar = new CacheEntry(
+    200,
+    toRawHeaders({
+      'content-type': 'application/octet-stream',
+      etag: '"abc"',
+      date: new Date('2020-01-20').toUTCString(),
+    }),
+  )
+  tar.addBody(Buffer.from('tarball-bytes'))
+  const enc = tar.encode()
+  const headLen = enc.readUInt32BE(0)
+  const head = CacheEntry.decodeHead(enc)
+  t.equal(head.statusCode, 200)
+  t.equal(head.headSize, headLen)
+  t.equal(head.fromCache, true)
+  t.equal(head.buffer().byteLength, 0, 'body not loaded')
+  t.equal(head.getHeaderString('etag'), '"abc"')
+  t.strictSame(head.encodeHead(), enc.subarray(0, headLen))
+  t.strictSame(
+    Buffer.concat([tar.encodeHead(), tar.buffer()]),
+    enc,
+    'encode() is encodeHead + body',
+  )
+
+  const constructed = new CacheEntry(200, toRawHeaders({ a: 'b' }))
+  t.equal(constructed.headSize, undefined, 'not set until encoded')
+  constructed.encodeHead()
+  t.type(constructed.headSize, 'number')
+  t.end()
+})
+
+t.test('digest header', async t => {
+  const b64 = 'A'.repeat(86) + '=='
+  const entry = (h: Record<string, string>) =>
+    new CacheEntry(200, toRawHeaders(h))
+  t.equal(
+    entry({ 'repr-digest': `sha-512=:${b64}:` }).digest,
+    `sha512-${b64}`,
+  )
+  t.equal(
+    entry({ 'content-digest': `sha-512=:${b64}:` }).digest,
+    `sha512-${b64}`,
+    'content-digest is accepted too',
+  )
+  t.equal(
+    entry({
+      'repr-digest': `sha-256=:${'B'.repeat(43)}=:, sha-512=:${b64}:`,
+    }).digest,
+    `sha512-${b64}`,
+    'picks the sha-512 member of a dictionary',
+  )
+  t.equal(
+    entry({ 'repr-digest': `sha-256=:${'B'.repeat(43)}=:` }).digest,
+    undefined,
+  )
+  t.equal(
+    entry({ 'repr-digest': 'sha-512=:nope:' }).digest,
+    undefined,
+  )
+  t.equal(entry({}).digest, undefined)
+})
+
+t.test('checkDigest', async t => {
+  const body = Buffer.from('some bytes')
+  const b64 = createHash('sha512').update(body).digest('base64')
+  const entry = (h: Record<string, string>) => {
+    const ce = new CacheEntry(200, toRawHeaders(h))
+    ce.addBody(body)
+    return ce
+  }
+  const labelled = entry({ 'repr-digest': `sha-512=:${b64}:` })
+  t.equal(labelled.checkDigest(true), `sha512-${b64}`)
+  t.throws(
+    () =>
+      entry({
+        'repr-digest': `sha-512=:${'0'.repeat(86)}==:`,
+      }).checkDigest(false),
+    {
+      cause: {
+        code: 'EINTEGRITY',
+        wanted: `sha512-${'0'.repeat(86)}==`,
+        found: `sha512-${b64}`,
+      },
+    },
+  )
+  t.equal(entry({}).checkDigest(false), `sha512-${b64}`, 'optional')
+  t.throws(() => entry({}).checkDigest(true), {
+    cause: {
+      code: 'EINTEGRITY',
+      wanted: undefined,
+      found: `sha512-${b64}`,
+    },
+  })
+})
+
+t.test('deleteHeader', async t => {
+  const ce = new CacheEntry(
+    200,
+    toRawHeaders({ a: '1', Integrity: 'x', b: '2' }),
+  )
+  ce.deleteHeader('integrity')
+  t.strictSame(ce.headers, toRawHeaders({ a: '1', b: '2' }))
+  ce.deleteHeader('nope')
+  t.strictSame(ce.headers, toRawHeaders({ a: '1', b: '2' }))
 })

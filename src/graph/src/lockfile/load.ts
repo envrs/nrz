@@ -1,16 +1,36 @@
+import { error } from '@nrz/error-cause'
 import { PackageJson } from '@nrz/package-json'
-import { type Manifest } from '@nrz/types'
+import {
+  defaultGitHostArchives,
+  defaultGitHosts,
+  defaultJsrRegistries,
+  defaultRegistries,
+  defaultRegistryName,
+  defaultScopeRegistries,
+} from '@nrz/spec'
+import { isRecordStringString } from '@nrz/types'
 import { Monorepo } from '@nrz/workspaces'
-import { type SpecOptions } from '@nrz/spec'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { type PathScurry } from 'path-scurry'
 import { loadEdges } from './load-edges.ts'
 import { loadNodes } from './load-nodes.ts'
 import { Graph } from '../graph.ts'
-import { type LockfileData } from './types.ts'
+import { LOCKFILE_VERSION } from './types.ts'
+import type { PathScurry } from 'path-scurry'
+import type { NormalizedManifest } from '@nrz/types'
+import type { SpecOptions } from '@nrz/spec'
+import type {
+  LockfileData,
+  OptionsChange,
+  SpecCache,
+} from './types.ts'
+import type { GraphModifier } from '../modifiers.ts'
 
 export type LoadOptions = SpecOptions & {
+  /**
+   * An optional {@link Graph} object to hydrate extra data from.
+   */
+  actual?: Graph
   /**
    * The project root dirname.
    */
@@ -18,7 +38,11 @@ export type LoadOptions = SpecOptions & {
   /**
    * The project root manifest.
    */
-  mainManifest: Manifest
+  mainManifest: NormalizedManifest
+  /**
+   * The graph modifiers helper object.
+   */
+  modifiers?: GraphModifier
   /**
    * A {@link Monorepo} object, for managing workspaces
    */
@@ -31,6 +55,18 @@ export type LoadOptions = SpecOptions & {
    * A {@link PathScurry} object, for use in globs
    */
   scurry?: PathScurry
+  /**
+   * Whether to throw an error if a manifest is missing when loading nodes.
+   */
+  throwOnMissingManifest?: boolean
+  /**
+   * Shared intern cache for parsed lockfile specs.
+   */
+  specCache?: SpecCache
+  /**
+   * Already-parsed lockfile data. When set, skips the filesystem read.
+   */
+  lockfileData?: LockfileData
 }
 
 const loadLockfile = (projectRoot: string, lockfilePath: string) =>
@@ -40,67 +76,346 @@ const loadLockfile = (projectRoot: string, lockfilePath: string) =>
     }),
   ) as LockfileData
 
+export const loadData = (
+  projectRoot: string,
+  lockfilePath = 'nrz-lock.json',
+) => loadLockfile(projectRoot, lockfilePath)
+
 export const load = (options: LoadOptions): Graph => {
   const { projectRoot } = options
   return loadObject(
     options,
-    loadLockfile(projectRoot, 'nrz-lock.json'),
+    options.lockfileData ??
+      loadLockfile(projectRoot, 'nrz-lock.json'),
   )
 }
 
 export const loadHidden = (options: LoadOptions): Graph => {
   const { projectRoot } = options
+  // Ensure that missing manifests throw an error when loading hidden lockfiles
+  options.throwOnMissingManifest = true
   return loadObject(
     options,
     loadLockfile(projectRoot, 'node_modules/.nrz-lock.json'),
   )
 }
 
+/**
+ * Removes entries from `items` that match the corresponding
+ * entry in `defaultItems`, returning only non-default values.
+ */
+const removeDefaultItems = (
+  defaultItems: Record<string, string>,
+  items: Record<string, string>,
+) => {
+  const res: Record<string, string> = {}
+  for (const [key, value] of Object.entries(items)) {
+    if (!defaultItems[key] || defaultItems[key] !== value) {
+      res[key] = value
+    }
+  }
+  return res
+}
+
+const hasItems = (o: Record<string, unknown> | undefined) =>
+  !!o && Object.keys(o).length > 0
+
+/**
+ * Builds a normalized options object from the current runtime config
+ * using the same cleaning logic as `lockfile/save.ts` so that it can
+ * be compared directly against the options stored in a lockfile.
+ */
+const buildCurrentOptions = (
+  options: LoadOptions,
+): LockfileData['options'] => {
+  const cleanModifiers =
+    (
+      options.modifiers &&
+      isRecordStringString(options.modifiers.config)
+    ) ?
+      options.modifiers.config
+    : undefined
+
+  const cleanRegistries =
+    isRecordStringString(options.registries) ?
+      removeDefaultItems(defaultRegistries, options.registries)
+    : undefined
+
+  const cleanScopeRegistries =
+    isRecordStringString(options['scoped-registries']) ?
+      removeDefaultItems(
+        defaultScopeRegistries,
+        options['scoped-registries'],
+      )
+    : undefined
+
+  const cleanJsrRegistries =
+    isRecordStringString(options['jsr-registries']) ?
+      removeDefaultItems(
+        defaultJsrRegistries,
+        options['jsr-registries'],
+      )
+    : undefined
+
+  const cleanGitHosts =
+    isRecordStringString(options['git-hosts']) ?
+      removeDefaultItems(defaultGitHosts, options['git-hosts'])
+    : undefined
+
+  const cleanGitHostArchives =
+    isRecordStringString(options['git-host-archives']) ?
+      removeDefaultItems(
+        defaultGitHostArchives,
+        options['git-host-archives'],
+      )
+    : undefined
+
+  return {
+    ...(hasItems(cleanModifiers) ?
+      { modifiers: cleanModifiers }
+    : {}),
+    ...(hasItems(options.catalog) ?
+      { catalog: options.catalog }
+    : {}),
+    ...(hasItems(options.catalogs) ?
+      { catalogs: options.catalogs }
+    : {}),
+    ...(hasItems(cleanScopeRegistries) ?
+      { 'scoped-registries': cleanScopeRegistries }
+    : undefined),
+    ...(hasItems(cleanJsrRegistries) ?
+      { 'jsr-registries': cleanJsrRegistries }
+    : undefined),
+    ...(options.registry !== undefined ?
+      { registry: options.registry }
+    : undefined),
+    ...((
+      options['default-registry-alias'] !== undefined &&
+      options['default-registry-alias'] !== defaultRegistryName
+    ) ?
+      { 'default-registry-alias': options['default-registry-alias'] }
+    : undefined),
+    ...(hasItems(cleanRegistries) ?
+      { registries: cleanRegistries }
+    : undefined),
+    ...(hasItems(cleanGitHosts) ?
+      { 'git-hosts': cleanGitHosts }
+    : undefined),
+    ...(hasItems(cleanGitHostArchives) ?
+      { 'git-host-archives': cleanGitHostArchives }
+    : undefined),
+  }
+}
+
+type OptionsValue =
+  | string
+  | Record<string, string>
+  | Record<string, Record<string, string>>
+  | undefined
+
+const asRecord = (o: LockfileData['options']) =>
+  o as Record<string, OptionsValue>
+
+const unionKeys = (
+  a: Record<string, unknown> = {},
+  b: Record<string, unknown> = {},
+) => [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()
+
+const diffRecords = (
+  section: string,
+  from: Record<string, string> = {},
+  to: Record<string, string> = {},
+  changes: OptionsChange[],
+  prefix?: string,
+) => {
+  for (const key of unionKeys(from, to)) {
+    if (from[key] !== to[key]) {
+      changes.push({
+        section,
+        key: prefix === undefined ? key : `${prefix} ${key}`,
+        from: from[key],
+        to: to[key],
+      })
+    }
+  }
+}
+
+/**
+ * Compares the current config against the `options` block of a lockfile
+ * and returns the entries that differ. The comparison is per entry, so
+ * reordering keys in `nrz.json` is not a change.
+ */
+export const diffLockfileOptions = (
+  options: LoadOptions,
+  lockfileOptions: LockfileData['options'] = {},
+): OptionsChange[] => {
+  const current = asRecord(buildCurrentOptions(options))
+  const stored = asRecord(lockfileOptions)
+  const changes: OptionsChange[] = []
+  for (const section of unionKeys(stored, current)) {
+    const from = stored[section]
+    const to = current[section]
+    if (typeof from === 'string' || typeof to === 'string') {
+      if (from !== to) {
+        changes.push({
+          section,
+          from: from as string | undefined,
+          to: to as string | undefined,
+        })
+      }
+    } else if (section === 'catalogs') {
+      for (const name of unionKeys(from, to)) {
+        diffRecords(
+          section,
+          (
+            from as Record<string, Record<string, string>> | undefined
+          )?.[name],
+          (
+            to as Record<string, Record<string, string>> | undefined
+          )?.[name],
+          changes,
+          name,
+        )
+      }
+    } else {
+      diffRecords(
+        section,
+        from as Record<string, string>,
+        to as Record<string, string>,
+        changes,
+      )
+    }
+  }
+  return changes
+}
+
 export const loadObject = (
   options: LoadOptions,
-  lockfileData: LockfileData,
+  lockfileData: Omit<LockfileData, 'options' | 'lockfileVersion'> &
+    Partial<Pick<LockfileData, 'options' | 'lockfileVersion'>>,
 ) => {
+  const version = lockfileData.lockfileVersion
+  // Lockfile version is required, likely a corrupted lockfile if missing
+  if (version == null) {
+    throw error('Missing lockfile version', {
+      code: 'ELOCKFILEVERSION',
+      found: version,
+      wanted: LOCKFILE_VERSION,
+    })
+  }
+  // Lockfile version must match current version
+  if (version !== LOCKFILE_VERSION) {
+    throw error(
+      `Unsupported lockfile version.
+
+  Run: \`nrz update\` to start a new, supported lockfile.`,
+      {
+        code: 'ELOCKFILEVERSION',
+        found: version,
+        wanted: LOCKFILE_VERSION,
+      },
+    )
+  }
+
   const { mainManifest, scurry } = options
   const packageJson = options.packageJson ?? new PackageJson()
   const monorepo =
     options.monorepo ??
     Monorepo.maybeLoad(options.projectRoot, { packageJson, scurry })
   const {
-    'scope-registries': scopeRegistries,
+    catalog = {},
+    catalogs = {},
+    'scoped-registries': scopedRegistriesOption,
     registry,
     registries,
+    'default-registry-alias': defaultRegistryAlias,
     'git-hosts': gitHosts,
     'git-host-archives': gitHostArchives,
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  } = lockfileData.options || {}
+    /* c8 ignore next */
+  } = lockfileData.options ?? {}
+  // backwards-compat: legacy lockfiles wrote this field as `scope-registries`
+  const scopeRegistries =
+    scopedRegistriesOption ??
+    (
+      lockfileData.options as {
+        'scope-registries'?: Record<string, string>
+      }
+    )['scope-registries']
+
+  // Detect whether the current config options differ from those
+  // stored in the lockfile.  When they do the ideal builder must
+  // reset edges and rebuild the graph.
+  /* c8 ignore next */
+  const lockfileOptions = lockfileData.options ?? {}
+  const optionsChanges = diffLockfileOptions(options, lockfileOptions)
+
+  // Optimize options merging - only create new objects when needed
   const mergedOptions = {
     ...options,
-    'scope-registries': {
-      ...options['scope-registries'],
-      ...scopeRegistries,
-    },
+    // catalog entries are indirections resolved at parse time: prefer
+    // the current config so loading a lockfile (e.g. the hidden
+    // lockfile cache) yields the same edge specs as a fresh scan of
+    // the project; fall back to the stored values so a standalone
+    // lockfile still parses when the config no longer defines them
+    catalog: hasItems(options.catalog) ? options.catalog : catalog,
+    catalogs:
+      hasItems(options.catalogs) ? options.catalogs : catalogs,
+    'scoped-registries':
+      scopeRegistries ?
+        { ...options['scoped-registries'], ...scopeRegistries }
+      : options['scoped-registries'],
     registry: registry ?? options.registry,
-    registries: {
-      ...options.registries,
-      ...registries,
-    },
-    'git-hosts': {
-      ...options['git-hosts'],
-      ...gitHosts,
-    },
-    'git-host-archives': {
-      ...options['git-host-archives'],
-      ...gitHostArchives,
-    },
+    'default-registry-alias':
+      defaultRegistryAlias ?? options['default-registry-alias'],
+    registries:
+      registries ?
+        { ...options.registries, ...registries }
+      : options.registries,
+    'git-hosts':
+      gitHosts ?
+        { ...options['git-hosts'], ...gitHosts }
+      : options['git-hosts'],
+    'git-host-archives':
+      gitHostArchives ?
+        { ...options['git-host-archives'], ...gitHostArchives }
+      : options['git-host-archives'],
   }
   const graph = new Graph({
     ...mergedOptions,
     mainManifest,
     monorepo,
   })
+  graph.optionsChanges = optionsChanges
+  graph.optionsChanged = optionsChanges.length > 0
+  loadNodes(
+    graph,
+    lockfileData.nodes,
+    mergedOptions,
+    options.actual,
+    options.throwOnMissingManifest,
+  )
+  // Skip interning when modifiers are active — they mutate Spec.overridden
+  const specCache =
+    options.modifiers || !options.specCache ?
+      undefined
+    : {
+        specCache: options.specCache,
+        prefix: JSON.stringify([
+          lockfileOptions,
+          mergedOptions.catalog,
+          mergedOptions.catalogs,
+        ]),
+      }
+  loadEdges(graph, lockfileData.edges, mergedOptions, specCache)
 
-  loadNodes(graph, lockfileData.nodes)
-  loadEdges(graph, lockfileData.edges, mergedOptions)
+  // hydrate missing node-level registry data
+  for (const node of graph.nodes.values()) {
+    const [firstEdge] = node.edgesIn
+    if (firstEdge?.spec.registry) {
+      node.registry = firstEdge.spec.registry
+    }
+  }
 
+  graph.sortNodes()
   return graph
 }

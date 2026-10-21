@@ -1,9 +1,5 @@
-import {
-  emitter,
-  logRequest,
-  graphStep,
-  type Events,
-} from '../src/index.ts'
+import { emitter, logRequest, graphStep } from '../src/index.ts'
+import type { Events } from '../src/index.ts'
 
 import t from 'tap'
 
@@ -18,6 +14,13 @@ t.test('output', async t => {
   emitter.on('graphStep', stepHandler)
 
   logRequest('https://example.com', 'start')
+  logRequest('https://example.com', 'cache', { method: 'GET' })
+  logRequest('https://example.com', 'store')
+  logRequest('https://example.com', 'complete', {
+    method: 'GET',
+    statusCode: 200,
+    durationMs: 12,
+  })
   graphStep('build')()
 
   emitter.off('request', reqHandler)

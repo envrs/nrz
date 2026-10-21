@@ -3,11 +3,11 @@ import * as os from 'node:os'
 import { posix, win32 } from 'node:path'
 import { inspect } from 'node:util'
 import t from 'tap'
-import {
-  kCustomInspect,
-  type Scope,
-  type SpecOptions,
-  type Spec as SpecType,
+import { kCustomInspect } from '../src/index.ts'
+import type {
+  Scope,
+  SpecOptions,
+  Spec as SpecType,
 } from '../src/index.ts'
 
 const { Spec } = await t.mockImport<typeof import('../src/index.ts')>(
@@ -17,6 +17,15 @@ const { Spec } = await t.mockImport<typeof import('../src/index.ts')>(
     'node:os': { ...os, homedir: () => '/mock/home' },
   },
 )
+
+// there is no default registry any more; most of these cases predate
+// that change, so keep exercising them against the npm registry. The
+// `npm` alias is also no longer built in, so configure it explicitly for
+// the many cases that rely on `npm:` specs.
+const defaultOptions = {
+  registry: 'https://registry.npmjs.org/',
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
 
 t.strictSame(Spec.parseGitSelector(''), [{}])
 
@@ -158,7 +167,7 @@ t.test('basic parsing tests', t => {
   t.plan(specs.length)
   for (const v of specs) {
     t.test(v, t => {
-      const s = Spec.parse(v)
+      const s = Spec.parse(v, defaultOptions)
       t.matchSnapshot(inspect(s), 'inspect default')
       t.matchSnapshot(
         inspect(s, { colors: true }),
@@ -400,7 +409,7 @@ t.test('mixing scopes and names', t => {
       x: 'https://x.com/',
       i: 'https://i.com/',
     },
-    'scope-registries': scopeRegistries,
+    'scoped-registries': scopeRegistries,
   }
   for (const [scope, reg] of scopeRegs) {
     scopeRegistries[scope] = reg
@@ -443,7 +452,7 @@ t.test('invalid workspace specs', t => {
 })
 
 t.test('get final subspec in chain', t => {
-  const subby = Spec.parse('x@npm:y@npm:z@latest')
+  const subby = Spec.parse('x@npm:y@npm:z@latest', defaultOptions)
   const final = subby.final
   t.not(subby, final, 'final is not the alias spec')
   t.not(subby.subspec, final, 'final is not the first alias value')
@@ -453,7 +462,10 @@ t.test('get final subspec in chain', t => {
 })
 
 t.test('simplify in the toString result', t => {
-  const spec = Spec.parse('x@npm:y@npm:z@npm:a@npm:b@latest')
+  const spec = Spec.parse(
+    'x@npm:y@npm:z@npm:a@npm:b@latest',
+    defaultOptions,
+  )
   t.equal(spec.toString(), 'x@npm:b@latest')
   // test the memoization
   t.equal(spec.toString(), 'x@npm:b@latest')
@@ -464,10 +476,7 @@ t.test('parse argument options', t => {
   const nameAndBare = Spec.parse('foo', 'latest')
   const full = Spec.parse('foo@latest')
   t.matchOnly(full, nameAndBare)
-  t.equal(
-    full,
-    Spec.parse(full, { registry: 'https://khulnasoft.com' }),
-  )
+  t.equal(full, Spec.parse(full, { registry: 'https://nrz.khulnasoft.com' }))
   t.end()
 })
 
@@ -481,10 +490,10 @@ t.test('constructor argument options', t => {
 t.test('reverse-lookup registry: specifiers if named', t => {
   // verify that it works regardless of slashiness
   const specs = [
-    'x@registry:http://khulnasoft.com#x@latest',
-    'x@registry:http://khulnasoft.com/#x@latest',
+    'x@registry:http://nrz.khulnasoft.com#x@latest',
+    'x@registry:http://nrz.khulnasoft.com/#x@latest',
   ]
-  const urls = ['http://khulnasoft.com', 'http://khulnasoft.com/']
+  const urls = ['http://nrz.khulnasoft.com', 'http://nrz.khulnasoft.com/']
   const found: SpecType[] = []
   for (const s of specs) {
     for (const nrz of urls) {
@@ -493,8 +502,8 @@ t.test('reverse-lookup registry: specifiers if named', t => {
   }
   for (const spec of found) {
     t.equal(spec.namedRegistry, 'nrz')
-    t.equal(spec.registry, 'http://khulnasoft.com/')
-    t.equal(spec.options.registries.nrz, 'http://khulnasoft.com/')
+    t.equal(spec.registry, 'http://nrz.khulnasoft.com/')
+    t.equal(spec.options.registries.nrz, 'http://nrz.khulnasoft.com/')
   }
   t.matchSnapshot(found.map(s => String(s)))
   t.end()
@@ -584,8 +593,10 @@ t.test('try to guess the conventional tarball URL', t => {
     ['x@npm:z@latest'],
   ]
   const options = {
+    ...defaultOptions,
     registries: {
-      nrz: 'https://registry.khulnasoft.com',
+      npm: 'https://registry.npmjs.org/',
+      nrz: 'https://registry.nrz.khulnasoft.com',
     },
   }
   for (const [spec, path, r] of guesses) {
@@ -598,9 +609,7 @@ t.test('try to guess the conventional tarball URL', t => {
       )
     } else {
       const host =
-        r ?
-          'https://registry.khulnasoft.com'
-        : 'https://registry.npmjs.org'
+        r ? 'https://registry.nrz.khulnasoft.com' : 'https://registry.npmjs.org'
       const expect = String(new URL(path, host))
       t.equal(s.conventionalRegistryTarball, expect)
     }
@@ -620,7 +629,8 @@ t.test('git path selector must be relative', async t => {
   ]
   for (const bad of nogood) {
     t.throws(
-      () => Spec.parse(bad),
+      // named form, since a bare URL is not a valid package name
+      () => Spec.parse('x', bad),
       {
         message: 'Invalid path in git selector',
         cause: { spec: Spec },
@@ -630,10 +640,87 @@ t.test('git path selector must be relative', async t => {
   }
 })
 
-t.test(
-  'spec with registry:undefined uses default registry',
-  async t => {
-    const s = Spec.parse('foo@1.x', { registry: undefined })
-    t.equal(s.registry, 'https://registry.npmjs.org/')
-  },
-)
+t.test('spec with registry:undefined has no registry', async t => {
+  const s = Spec.parse('foo@1.x', { registry: undefined })
+  t.equal(s.registry, undefined)
+})
+
+t.test('undefined protocols', t => {
+  const protocolError = (proto: string, spec: string) => ({
+    message: `Protocol ${proto}: is not defined`,
+    cause: { spec, found: `${proto}:` },
+  })
+
+  t.throws(
+    () => Spec.parse('x', 'custom:1.x'),
+    protocolError('custom', 'x@custom:1.x'),
+  )
+  t.throws(
+    () => Spec.parseArgs('custom:foo'),
+    protocolError('custom', '(unknown)@custom:foo'),
+  )
+  t.throws(
+    () => Spec.parse('x@nrz:1.x'),
+    protocolError('nrz', 'x@nrz:1.x'),
+  )
+  t.throws(
+    () => Spec.parse('nrz:foo@1'),
+    protocolError('nrz', 'nrz:foo@1'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'link:../x'),
+    protocolError('link', 'x@link:../x'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'portal:../x'),
+    protocolError('portal', 'x@portal:../x'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'patch:foo@1'),
+    protocolError('patch', 'x@patch:foo@1'),
+  )
+
+  t.equal(Spec.parse('x', 'C:/x/y').type, 'file')
+  t.equal(Spec.parse('x', 'C:\\x\\y').distTag, 'C:\\x\\y')
+  t.equal(Spec.parse('x', 'notgithub.com:user/foo').type, 'git')
+  t.equal(Spec.parse('x', 'user/foo#semver:^1').type, 'git')
+  t.equal(Spec.parse('x@not-git@hostname.com:some/repo').type, 'git')
+  t.equal(Spec.parse('x', 'next-9').distTag, 'next-9')
+  t.equal(Spec.parse('x', 'latest').distTag, 'latest')
+  t.equal(Spec.parse('x', 'git@github.com:u/r').type, 'git')
+  t.equal(Spec.parse('npm:foo@1').type, 'registry')
+
+  t.equal(
+    Spec.parse('x', 'custom:foo@1', {
+      registries: { custom: 'https://example.com/' },
+    }).namedRegistry,
+    'custom',
+  )
+  t.equal(
+    Spec.parse('x', 'myhost:a/b', {
+      'git-hosts': {
+        myhost: 'git+ssh://git@myhost.com:$1/$2.git',
+      },
+    }).namedGitHost,
+    'myhost',
+  )
+  t.equal(
+    Spec.parse('x', 'deno:@a/b@1', {
+      'jsr-registries': { deno: 'https://jsr.example.com/' },
+    }).namedJsrRegistry,
+    'deno',
+  )
+
+  t.match(
+    Spec.parse('gh:@octocat/hello-world@1.0.0', defaultOptions),
+    { namedRegistry: 'gh' },
+  )
+  t.throws(() => Spec.parse('github:user/foo'), {
+    message: 'Invalid package name: not usable as a path segment',
+  })
+  t.throws(() => Spec.parse('https://server.com/foo.tgz'), {
+    message: 'Invalid package name: not usable as a path segment',
+  })
+
+  t.end()
+})

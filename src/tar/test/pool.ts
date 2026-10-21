@@ -1,17 +1,20 @@
 import t from 'tap'
-import { isResponseOK } from '../src/worker.ts'
+import { cloneAvailable } from '../src/clonefile.ts'
 import { Pool } from '../src/pool.ts'
 
-import { lstatSync } from 'fs'
-import { availableParallelism } from 'os'
-import { resolve } from 'path'
+import {
+  lstatSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { resolve } from 'node:path'
+import { brotliCompressSync } from 'node:zlib'
+import { storeIndexPath } from '../src/store-index.ts'
 import { makeTar } from './fixtures/make-tar.ts'
 
 const p = new Pool()
-t.equal(p.jobs, 8 * (Math.max(availableParallelism(), 2) - 1))
-
-// make it smaller so we can cover the contention cases
-p.jobs = 2
 
 const makePkg = (name: string, version: string): Buffer => {
   const pj = { name, version }
@@ -111,9 +114,136 @@ t.test('unpack all the things, but flattened', async t => {
   t.end()
 })
 
-t.test('response ok/error checking', t => {
-  t.equal(isResponseOK({ id: 1, ok: true }), true)
-  t.equal(isResponseOK({ id: 1, error: 'x' }), false)
-  t.equal(isResponseOK({ ok: true }), false, 'id required')
-  t.end()
+t.test('unpackFile', async t => {
+  const head = Buffer.from('cache head bytes')
+  const tarData = makePkg('file-pkg', '1.0.0')
+  const d = t.testdir()
+  const file = resolve(d, 'pkg.tgz')
+  writeFileSync(file, Buffer.concat([head, tarData]))
+  await p.unpackFile(file, resolve(d, 'out'), head.length)
+  t.match(
+    JSON.parse(readFileSync(resolve(d, 'out/package.json'), 'utf8')),
+    { name: 'file-pkg' },
+  )
+})
+
+t.test('brotli reaches every writer', async t => {
+  const d = t.testdir()
+  const tarData = makePkg('br-pkg', '1.0.0')
+  const br = brotliCompressSync(tarData)
+  const file = resolve(d, 'pkg.tar.br')
+  writeFileSync(file, br)
+
+  await p.unpack(br, resolve(d, 'buf'), 'brotli')
+  await p.unpackFile(file, resolve(d, 'file'), 0, 'brotli')
+  const { index } = await p.unpackToStore(
+    br,
+    resolve(d, 'store'),
+    'brotli',
+  )
+  t.match(index, { v: 1, name: 'br-pkg' })
+  for (const out of ['buf', 'file', 'store']) {
+    t.match(
+      JSON.parse(
+        readFileSync(resolve(d, out, 'package.json'), 'utf8'),
+      ),
+      { name: 'br-pkg' },
+    )
+  }
+})
+
+// every NRZ_TAR_SYNC setting has to place the same bytes, gzip or
+// brotli, from a buffer or from a file -- only where the work runs
+// differs.
+for (const sync of ['0', '1', undefined] as const) {
+  const what =
+    sync === undefined ? 'unset: parallel inflate, sync write'
+    : sync === '1' ? 'NRZ_TAR_SYNC=1: all on the main thread'
+    : 'NRZ_TAR_SYNC=0: the async writers'
+  t.test(what, async t => {
+    const prev = process.env.NRZ_TAR_SYNC
+    if (sync === undefined) delete process.env.NRZ_TAR_SYNC
+    else process.env.NRZ_TAR_SYNC = sync
+    t.teardown(() => {
+      if (prev === undefined) delete process.env.NRZ_TAR_SYNC
+      else process.env.NRZ_TAR_SYNC = prev
+    })
+    const { Pool } =
+      await t.mockImport<typeof import('../src/pool.ts')>(
+        '../src/pool.ts',
+      )
+    const p = new Pool()
+    const tarData = makePkg('async-pkg', '1.0.0')
+    const d = t.testdir()
+    const file = resolve(d, 'pkg.tgz')
+    writeFileSync(file, tarData)
+    const br = brotliCompressSync(tarData)
+    const brFile = resolve(d, 'pkg.tar.br')
+    writeFileSync(brFile, br)
+
+    await p.unpack(tarData, resolve(d, 'buf'))
+    await p.unpackFile(file, resolve(d, 'file'))
+    await p.unpack(br, resolve(d, 'buf-br'), 'brotli')
+    await p.unpackFile(brFile, resolve(d, 'file-br'), 0, 'brotli')
+    for (const out of ['buf', 'file', 'buf-br', 'file-br']) {
+      t.match(
+        JSON.parse(
+          readFileSync(resolve(d, out, 'package.json'), 'utf8'),
+        ),
+        { name: 'async-pkg' },
+      )
+    }
+
+    // where the work runs is observable: only the all-sync mode has
+    // finished writing by the time unpack() hands back its promise.
+    const out = resolve(d, 'timing')
+    const pending = p.unpack(tarData, out)
+    t.equal(
+      lstatSync(out, { throwIfNoEntry: false }) !== undefined,
+      sync === '1',
+      'wrote before yielding',
+    )
+    await pending
+    t.ok(lstatSync(out), 'and always after')
+  })
+}
+
+t.test('global store', async t => {
+  const d = t.testdir()
+  const { index } = await p.unpackToStore(
+    makePkg('store-pkg', '1.0.0'),
+    resolve(d, 'tmp'),
+  )
+  t.match(index, { v: 1, name: 'store-pkg', scripts: false })
+  const entry = resolve(d, 'entry')
+  writeFileSync(storeIndexPath(entry), JSON.stringify(index))
+  renameSync(resolve(d, 'tmp'), entry)
+  t.strictSame(await p.linkFromStore(entry, resolve(d, 'nm/a')), {
+    how: 'link',
+    index,
+  })
+  t.equal(statSync(resolve(d, 'nm/a/package.json')).nlink, 2)
+  t.match(
+    await p.linkFromStore(entry, resolve(d, 'nm/b'), { copy: true }),
+    { how: 'copy' },
+  )
+  t.equal(statSync(resolve(d, 'nm/b/package.json')).nlink, 1)
+  t.equal(
+    await p.linkFromStore(resolve(d, 'missing'), resolve(d, 'nm/c')),
+    false,
+  )
+  // a clone needs macOS and node:ffi: a miss where it cannot work
+  const cloned = await p.linkFromStore(entry, resolve(d, 'nm/d'), {
+    clone: true,
+  })
+  if (cloneAvailable()) {
+    t.strictSame(cloned, { how: 'clone', index })
+    t.equal(statSync(resolve(d, 'nm/d/package.json')).nlink, 1)
+  } else {
+    t.equal(cloned, false)
+    t.equal(
+      lstatSync(resolve(d, 'nm/d'), { throwIfNoEntry: false }),
+      undefined,
+    )
+  }
 })

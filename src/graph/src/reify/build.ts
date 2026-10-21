@@ -2,27 +2,51 @@
 // at the end, we get back to the importers, and run their prepare
 // script as well as install script.
 
-import { type PackageJson } from '@nrz/package-json'
+import type { PackageJson } from '@nrz/package-json'
 import { run } from '@nrz/run'
-import { statSync } from 'fs'
-import { chmod } from 'fs/promises'
-import { graphRun } from 'graph-run'
-import { type PathScurry } from 'path-scurry'
-import { type Diff } from '../diff.ts'
-import { type Node } from '../node.ts'
+import { graphRun } from '@nrz/graph-run'
+import type { PathScurry } from 'path-scurry'
+import type { DepID } from '@nrz/dep-id'
+import type { Diff } from '../diff.ts'
+import type { Node } from '../node.ts'
 import { nonEmptyList } from '../non-empty-list.ts'
-import { binPaths } from './bin-paths.ts'
 import { optionalFail } from './optional-fail.ts'
+import { binChmod } from './bin-chmod.ts'
+import { hasBindingGyp } from './binding-gyp.ts'
+import { scriptsManifest } from './scripts-manifest.ts'
+import { unshare } from './unshare.ts'
+
+/**
+ * Returns an object mapping registries to the names of the packages built.
+ */
+export type BuildResult = {
+  success: Node[]
+  failure: Node[]
+  /** needed builds skipped as they have no security data */
+  skipped?: Node[]
+  /**
+   * why `skipped` builds have no security data: the request timed
+   * out, or socket.dev has not scanned them yet
+   */
+  skippedReason?: 'timeout' | 'unscanned'
+}
 
 export const build = async (
   diff: Diff,
   packageJson: PackageJson,
   scurry: PathScurry,
-) => {
+  allowScriptsNodes: Set<DepID>,
+): Promise<BuildResult> => {
   const graph = diff.to
   const nodes = nonEmptyList([...graph.importers])
+  const res: BuildResult = { success: [], failure: [] }
+
+  // determine if scripts should run - check if node is in allowed set
+  const shouldRunScripts = (node: Node): boolean =>
+    allowScriptsNodes.has(node.id)
+
   /* c8 ignore next - all graphs have at least one importer */
-  if (!nodes) return
+  if (!nodes) return res
 
   await graphRun<Node, unknown>({
     graph: nodes,
@@ -33,12 +57,33 @@ export const build = async (
       // most recent build.
       // For now, just always build all importers, because we don't
       // track all that other stuff.
-      if (!node.importer && !diff.nodes.add.has(node)) return
 
-      await visit(packageJson, scurry, node, signal, path).then(
-        x => x,
-        optionalFail(diff, node),
+      if (
+        !node.importer &&
+        (!diff.nodes.add.has(node) || !shouldRunScripts(node))
       )
+        return
+
+      try {
+        await visit(packageJson, scurry, node, signal, path)
+        if (!node.importer) {
+          node.buildState = 'built'
+          res.success.push(node)
+        }
+        /* c8 ignore start - windows on CI is missing those tests */
+      } catch (err) {
+        // Check if this is an optional failure that was handled
+        if (node.optional) {
+          node.buildState = 'failed'
+          res.failure.push(node)
+          // Let optionalFail handle the error
+          await Promise.reject(err).catch(optionalFail(diff, node))
+        } else {
+          // Re-throw non-optional failures
+          throw err
+        }
+      }
+      /* c8 ignore stop */
     },
 
     getDeps: node => {
@@ -50,6 +95,8 @@ export const build = async (
       return deps
     },
   })
+
+  return res
 }
 
 const visit = async (
@@ -59,8 +106,13 @@ const visit = async (
   signal: AbortSignal,
   _path: Node[],
 ): Promise<void> => {
-  node.manifest ??= packageJson.read(node.resolvedLocation(scurry))
-  const { manifest } = node
+  // at this point we might have to read the manifest from disk if it's
+  // currently nullish, that could happen in a scenario where the ideal
+  // graph is from a lockfile and there's no actual graph available
+  // to hydrate the manifest data from.
+  const dir = node.resolvedLocation(scurry)
+  node.manifest ??= packageJson.read(dir)
+  const manifest = scriptsManifest(node.manifest, dir, packageJson)
   const { scripts = {} } = manifest
 
   const {
@@ -72,19 +124,16 @@ const visit = async (
     postprepare,
   } = scripts
 
-  // if it has install script, run it
-  const runInstall = !!(install || preinstall || postinstall)
-  if (runInstall) {
-    await run({
-      signal,
-      arg0: 'install',
-      ignoreMissing: true,
-      packageJson,
-      cwd: node.resolvedLocation(scurry),
-      projectRoot: node.projectRoot,
-      manifest,
-    })
-  }
+  // Check for binding.gyp file (npm's implicit install detection)
+  // "If there is a binding.gyp file in the root of your package and you
+  // haven't defined your own install or preinstall scripts, npm will default
+  // the install command to compile using node-gyp via node-gyp rebuild"
+  const hasImplicitInstall =
+    hasBindingGyp(node, scurry) && !install && !preinstall
+
+  // if it has install script or binding.gyp (implicit install), run it
+  const runInstall =
+    !!(install || preinstall || postinstall) || hasImplicitInstall
 
   // if it's an importer or git, run prepare
   const prepable =
@@ -92,35 +141,33 @@ const visit = async (
   const runPrepare =
     !!(prepare || preprepare || postprepare) && prepable
 
+  // store links share inodes with the global store
+  if ((runInstall || runPrepare) && node.inNrzStore())
+    await unshare(dir)
+
+  if (runInstall) {
+    await run({
+      signal,
+      arg0: 'install',
+      ignoreMissing: true,
+      packageJson,
+      cwd: dir,
+      projectRoot: node.projectRoot,
+      manifest,
+    })
+  }
+
   if (runPrepare) {
     await run({
       signal,
       arg0: 'prepare',
       ignoreMissing: true,
       packageJson,
-      cwd: node.resolvedLocation(scurry),
+      cwd: dir,
       projectRoot: node.projectRoot,
       manifest,
     })
   }
 
-  const chmods: Promise<unknown>[] = []
-  for (const bin of Object.values(binPaths(manifest))) {
-    const path = scurry.resolve(
-      `${node.resolvedLocation(scurry)}/${bin}`,
-    )
-    chmods.push(makeExecutable(path))
-  }
-  await Promise.all(chmods)
-}
-
-// 0 is "not yet set"
-// This is defined by doing `0o111 | <mode>` so that systems
-// that create files group-writable result in 0o775 instead of 0o755
-let execMode = 0
-const makeExecutable = async (path: string) => {
-  if (!execMode) {
-    execMode = (statSync(path).mode & 0o777) | 0o111
-  }
-  await chmod(path, execMode)
+  await binChmod(node, scurry)
 }

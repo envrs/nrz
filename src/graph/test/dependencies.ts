@@ -1,13 +1,25 @@
 import t from 'tap'
 import {
+  addKey,
   asDependency,
+  asDependencySpecError,
   asDependencyTypeShort,
+  getDependencies,
+  getRawDependencies,
   isDependency,
   isDependencyTypeShort,
+  isDependencySaveType,
   shorten,
+  shouldInstallDepType,
 } from '../src/dependencies.ts'
 import { Spec } from '@nrz/spec'
-import { type DependencyTypeLong } from '@nrz/types'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import { error } from '@nrz/error-cause'
+import type {
+  DependencyTypeLong,
+  Manifest,
+  NodeLike,
+} from '@nrz/types'
 
 t.test('shorten', async t => {
   t.strictSame(
@@ -49,6 +61,24 @@ t.test('shorten', async t => {
     /Invalid dependency type name/,
     'should throw if trying to retrieve from an unkown type',
   )
+})
+
+t.test('addKey', async t => {
+  t.equal(addKey(Spec.parse('foo', '^1.0.0')), 'foo', 'named')
+  for (const arg of [
+    'github:u/r',
+    'https://example.com/x.tgz',
+    'file:../x',
+  ]) {
+    const spec = Spec.parseArgs(arg)
+    t.equal(spec.name, '(unknown)', `${arg} has no name`)
+    t.equal(addKey(spec), spec.spec, `${arg} keys by its spec string`)
+    t.equal(
+      addKey(spec),
+      String(spec),
+      'which is what String() gives',
+    )
+  }
 })
 
 t.test('isDependency', async t => {
@@ -109,6 +139,21 @@ t.test('isDependencyTypeShort', async t => {
   )
 })
 
+t.test('isDependencySaveType', async t => {
+  t.ok(
+    isDependencySaveType('prod'),
+    'should be ok if type is a valid save type',
+  )
+  t.ok(
+    isDependencySaveType('implicit'),
+    'should be ok if type is a valid save type',
+  )
+  t.notOk(
+    isDependencySaveType('unknown'),
+    'should not be ok if type is not a valid short type',
+  )
+})
+
 t.test('asDependencyTypeShort', async t => {
   const type = asDependencyTypeShort('prod')
   t.strictSame(type, 'prod', 'valid short type')
@@ -118,4 +163,762 @@ t.test('asDependencyTypeShort', async t => {
     /Invalid dependency type/,
     'should throw if type is not a valid short type',
   )
+})
+
+// Helper function to create mock NodeLike objects for testing
+const createMockNode = (
+  overrides: Partial<NodeLike> = {},
+  manifest?: Pick<Manifest, 'peerDependenciesMeta'> | null,
+): NodeLike => ({
+  id: joinDepIDTuple(['registry', 'npm', 'test-pkg@1.0.0']),
+  confused: false,
+  edgesIn: new Set(),
+  edgesOut: new Map(),
+  manifest,
+  options: {},
+  workspaces: undefined,
+  rawManifest: manifest,
+  name: 'test-pkg',
+  version: '1.0.0',
+  integrity: null,
+  resolved: null,
+  importer: false,
+  graph: {} as any,
+  mainImporter: false,
+  projectRoot: '/test',
+  dev: false,
+  optional: false,
+  registry: 'https://registry.npmjs.org/',
+  toJSON: () => ({}) as any,
+  toString: () => 'test-node',
+  setResolved: () => {},
+  setConfusedManifest: () => {},
+  maybeSetConfusedManifest: () => {},
+  ...overrides,
+})
+
+t.test('shouldInstallDepType', async t => {
+  const cases: [string, Partial<NodeLike>, boolean][] = [
+    ['importer', { importer: true }, true],
+    ['git', { id: joinDepIDTuple(['git', 'github:a/b', '']) }, true],
+    ['file', { id: joinDepIDTuple(['file', './lib']) }, false],
+    ['registry', {}, false],
+  ]
+  for (const [label, overrides, dev] of cases) {
+    const node = createMockNode(overrides)
+    t.equal(
+      shouldInstallDepType(node, 'devDependencies'),
+      dev,
+      `${label}: devDependencies`,
+    )
+    t.equal(
+      shouldInstallDepType(node, 'dependencies'),
+      true,
+      `${label}: dependencies`,
+    )
+  }
+})
+
+t.test('getRawDependencies', async t => {
+  t.test(
+    'should return empty map for node with no manifest',
+    async t => {
+      const node = createMockNode()
+      const result = getRawDependencies(node)
+      t.strictSame(result.size, 0, 'should return empty map')
+    },
+  )
+
+  t.test(
+    'should return empty map for node with empty manifest',
+    async t => {
+      const node = createMockNode({}, {})
+      const result = getRawDependencies(node)
+      t.strictSame(result.size, 0, 'should return empty map')
+    },
+  )
+
+  t.test('should parse basic dependencies', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+        express: '^4.18.0',
+      },
+      devDependencies: {
+        jest: '^29.0.0',
+      },
+      optionalDependencies: {
+        fsevents: '^2.3.0',
+      },
+      peerDependencies: {
+        react: '^18.0.0',
+      },
+    }
+    const node = createMockNode({ importer: true }, manifest)
+    const result = getRawDependencies(node)
+
+    t.strictSame(result.size, 5, 'should return all dependencies')
+
+    const lodash = result.get('lodash')
+    t.strictSame(lodash?.name, 'lodash')
+    t.strictSame(lodash?.bareSpec, '^4.17.21')
+    t.strictSame(lodash?.type, 'dependencies')
+    t.strictSame(lodash?.registry, 'https://registry.npmjs.org/')
+
+    const jest = result.get('jest')
+    t.strictSame(jest?.name, 'jest')
+    t.strictSame(jest?.type, 'devDependencies')
+
+    const fsevents = result.get('fsevents')
+    t.strictSame(fsevents?.type, 'optionalDependencies')
+
+    const react = result.get('react')
+    t.strictSame(react?.type, 'peerDependencies')
+  })
+
+  t.test(
+    'should skip devDependencies for non-importer, non-git, non-file deps',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+        },
+        devDependencies: {
+          jest: '^29.0.0',
+        },
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+        },
+        manifest,
+      )
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        1,
+        'should only include prod dependencies',
+      )
+      t.ok(result.has('lodash'), 'should include prod dependency')
+      t.notOk(result.has('jest'), 'should skip dev dependency')
+    },
+  )
+
+  t.test(
+    'should include devDependencies for importer nodes',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+        },
+        devDependencies: {
+          jest: '^29.0.0',
+        },
+      }
+      const node = createMockNode({ importer: true }, manifest)
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should include both prod and dev dependencies',
+      )
+      t.ok(result.has('lodash'), 'should include prod dependency')
+      t.ok(result.has('jest'), 'should include dev dependency')
+    },
+  )
+
+  t.test(
+    'should include devDependencies for git dependencies',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+        },
+        devDependencies: {
+          jest: '^29.0.0',
+        },
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple([
+            'git',
+            'https://github.com/user/repo.git',
+            'main',
+          ]),
+        },
+        manifest,
+      )
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should include both prod and dev dependencies',
+      )
+      t.ok(result.has('lodash'), 'should include prod dependency')
+      t.ok(
+        result.has('jest'),
+        'should include dev dependency for git deps',
+      )
+    },
+  )
+
+  t.test(
+    'should include devDependencies for file dependencies',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+        },
+        devDependencies: {
+          jest: '^29.0.0',
+        },
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple(['file', 'local-pkg']),
+        },
+        manifest,
+      )
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should include both prod and dev dependencies',
+      )
+      t.ok(result.has('lodash'), 'should include prod dependency')
+      t.ok(
+        result.has('jest'),
+        'should include dev dependency for file deps',
+      )
+    },
+  )
+
+  t.test('a dual declaration keeps the regular type', async t => {
+    const importerManifest: Manifest = {
+      dependencies: { c: '^1.0.0' },
+      devDependencies: { d: '^1.0.0' },
+      optionalDependencies: { o: '^1.0.0' },
+      peerDependencies: { c: '*', d: '*', o: '*', p: '^1.0.0' },
+    }
+    const importer = createMockNode(
+      { importer: true },
+      importerManifest,
+    )
+    const result = getRawDependencies(importer)
+    t.strictSame(result.get('c')?.bareSpec, '^1.0.0')
+    t.strictSame(result.get('c')?.type, 'dependencies')
+    t.strictSame(result.get('d')?.type, 'devDependencies')
+    // optionalDependencies is collected after peerDependencies, so it
+    // still overrides it
+    t.strictSame(result.get('o')?.type, 'optionalDependencies')
+    t.strictSame(result.get('p')?.type, 'peerDependencies')
+
+    // a registry node does not install devDependencies, so there is no
+    // regular entry for the peer to lose to
+    const depManifest: Manifest = {
+      devDependencies: { d: '^1.0.0' },
+      peerDependencies: { d: '*' },
+    }
+    const dep = createMockNode(
+      { id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']) },
+      depManifest,
+    )
+    t.strictSame(
+      getRawDependencies(dep).get('d')?.type,
+      'peerDependencies',
+    )
+  })
+
+  t.test(
+    'should handle bundleDependencies for non-importer, non-git nodes',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+          express: '^4.18.0',
+          bundled: '^1.0.0',
+        },
+        bundleDependencies: ['bundled'],
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+        },
+        manifest,
+      )
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should exclude bundled dependencies',
+      )
+      t.ok(
+        result.has('lodash'),
+        'should include non-bundled dependency',
+      )
+      t.ok(
+        result.has('express'),
+        'should include non-bundled dependency',
+      )
+      t.notOk(
+        result.has('bundled'),
+        'should exclude bundled dependency',
+      )
+    },
+  )
+
+  t.test(
+    'should include bundleDependencies for importer nodes',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+          bundled: '^1.0.0',
+        },
+        bundleDependencies: ['bundled'],
+      }
+      const node = createMockNode({ importer: true }, manifest)
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should include all dependencies for importers',
+      )
+      t.ok(result.has('lodash'), 'should include dependency')
+      t.ok(
+        result.has('bundled'),
+        'should include bundled dependency for importers',
+      )
+    },
+  )
+
+  t.test(
+    'should include bundleDependencies for git nodes',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+          bundled: '^1.0.0',
+        },
+        bundleDependencies: ['bundled'],
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple([
+            'git',
+            'https://github.com/user/repo.git',
+            'main',
+          ]),
+        },
+        manifest,
+      )
+      const result = getRawDependencies(node)
+
+      t.strictSame(
+        result.size,
+        2,
+        'should include all dependencies for git deps',
+      )
+      t.ok(result.has('lodash'), 'should include dependency')
+      t.ok(
+        result.has('bundled'),
+        'should include bundled dependency for git deps',
+      )
+    },
+  )
+
+  t.test('should handle bundleDependencies as array', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+        bundled1: '^1.0.0',
+        bundled2: '^2.0.0',
+      },
+      bundleDependencies: ['bundled1', 'bundled2'],
+    }
+    const node = createMockNode(
+      {
+        importer: false,
+        id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+      },
+      manifest,
+    )
+    const result = getRawDependencies(node)
+
+    t.strictSame(
+      result.size,
+      1,
+      'should exclude multiple bundled dependencies',
+    )
+    t.ok(
+      result.has('lodash'),
+      'should include non-bundled dependency',
+    )
+    t.notOk(
+      result.has('bundled1'),
+      'should exclude bundled dependency',
+    )
+    t.notOk(
+      result.has('bundled2'),
+      'should exclude bundled dependency',
+    )
+  })
+
+  t.test('should handle invalid bundleDependencies', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+      },
+      bundleDependencies: 'not-an-array' as any,
+    }
+    const node = createMockNode(
+      {
+        importer: false,
+        id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+      },
+      manifest,
+    )
+    const result = getRawDependencies(node)
+
+    t.strictSame(
+      result.size,
+      1,
+      'should handle invalid bundleDependencies gracefully',
+    )
+    t.ok(result.has('lodash'), 'should include dependency')
+  })
+
+  t.test('should use node registry in dependencies', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+      },
+    }
+    const customRegistry = 'https://custom.registry.com/'
+    const node = createMockNode(
+      { registry: customRegistry },
+      manifest,
+    )
+    const result = getRawDependencies(node)
+
+    const lodash = result.get('lodash')
+    t.strictSame(
+      lodash?.registry,
+      customRegistry,
+      'should use node registry',
+    )
+  })
+})
+
+t.test('getDependencies', async t => {
+  t.test(
+    'should return empty map for node with no dependencies',
+    async t => {
+      const node = createMockNode({}, {})
+      const result = getDependencies(node, {})
+
+      t.strictSame(result.size, 0, 'should return empty map')
+    },
+  )
+
+  t.test('should parse dependencies with specs', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+        express: '~4.18.0',
+      },
+      devDependencies: {
+        jest: '^29.0.0',
+      },
+      optionalDependencies: {
+        fsevents: '^2.3.0',
+      },
+      peerDependencies: {
+        react: '^18.0.0',
+      },
+    }
+    const node = createMockNode({ importer: true }, manifest)
+    const result = getDependencies(node, {})
+
+    t.strictSame(result.size, 5, 'should return all dependencies')
+
+    const lodash = result.get('lodash')
+    t.ok(lodash?.spec, 'should have parsed spec')
+    t.strictSame(
+      lodash?.spec.name,
+      'lodash',
+      'should parse spec name',
+    )
+    t.strictSame(
+      lodash?.spec.bareSpec,
+      '^4.17.21',
+      'should parse spec version',
+    )
+    t.strictSame(
+      lodash?.type,
+      'prod',
+      'should convert type to short form',
+    )
+
+    const jest = result.get('jest')
+    t.strictSame(jest?.type, 'dev', 'should convert dev type')
+
+    const fsevents = result.get('fsevents')
+    t.strictSame(
+      fsevents?.type,
+      'optional',
+      'should convert optional type',
+    )
+
+    const react = result.get('react')
+    t.strictSame(react?.type, 'peer', 'should convert peer type')
+  })
+
+  t.test('should handle peerOptional dependencies', async t => {
+    const manifest: Manifest = {
+      peerDependencies: {
+        react: '^18.0.0',
+        'optional-peer': '^1.0.0',
+      },
+      peerDependenciesMeta: {
+        'optional-peer': { optional: true },
+      },
+    }
+    const node = createMockNode({ importer: true }, manifest)
+    const result = getDependencies(node, {})
+
+    const react = result.get('react')
+    t.strictSame(react?.type, 'peer', 'should be peer dependency')
+
+    const optionalPeer = result.get('optional-peer')
+    t.strictSame(
+      optionalPeer?.type,
+      'peerOptional',
+      'should be peerOptional dependency',
+    )
+  })
+
+  t.test(
+    'should pass registry from node to spec parsing',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          'scoped-pkg': '^1.0.0',
+        },
+      }
+      const customRegistry = 'https://custom.registry.com/'
+      const node = createMockNode(
+        { registry: customRegistry },
+        manifest,
+      )
+      const result = getDependencies(node, {})
+
+      const scopedPkg = result.get('scoped-pkg')
+      t.ok(scopedPkg?.spec, 'should have parsed spec')
+      // The spec should have been created with the custom registry
+      t.strictSame(
+        scopedPkg?.spec.name,
+        'scoped-pkg',
+        'should parse name correctly',
+      )
+    },
+  )
+
+  t.test(
+    'falls back to options.registry when the node has none',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: { lodash: '^4.17.21' },
+      }
+      const node = createMockNode({ registry: undefined }, manifest)
+      const optionsRegistry = 'https://options.registry.com/'
+      const result = getDependencies(node, {
+        registry: optionsRegistry,
+      })
+      t.strictSame(
+        result.get('lodash')?.spec.registry,
+        optionsRegistry,
+        'uses the configured registry',
+      )
+
+      // and with neither, the spec simply has no registry
+      const none = getDependencies(node, {})
+      t.strictSame(none.get('lodash')?.spec.registry, undefined)
+    },
+  )
+
+  t.test('should pass options to spec parsing', async t => {
+    const manifest: Manifest = {
+      dependencies: {
+        lodash: '^4.17.21',
+      },
+    }
+    const node = createMockNode({}, manifest)
+    const options = {
+      registry: 'https://test.registry.com/',
+    }
+    const result = getDependencies(node, options)
+
+    const lodash = result.get('lodash')
+    t.ok(lodash?.spec, 'should have parsed spec with options')
+    t.strictSame(
+      lodash?.spec.name,
+      'lodash',
+      'should parse name correctly',
+    )
+  })
+
+  t.test(
+    'should skip bundled dependencies based on getRawDependencies logic',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+          bundled: '^1.0.0',
+        },
+        bundleDependencies: ['bundled'],
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+        },
+        manifest,
+      )
+      const result = getDependencies(node, {})
+
+      t.strictSame(
+        result.size,
+        1,
+        'should exclude bundled dependencies',
+      )
+      t.ok(
+        result.has('lodash'),
+        'should include non-bundled dependency',
+      )
+      t.notOk(
+        result.has('bundled'),
+        'should exclude bundled dependency',
+      )
+    },
+  )
+
+  t.test(
+    'should skip devDependencies for non-importer nodes',
+    async t => {
+      const manifest: Manifest = {
+        dependencies: {
+          lodash: '^4.17.21',
+        },
+        devDependencies: {
+          jest: '^29.0.0',
+        },
+      }
+      const node = createMockNode(
+        {
+          importer: false,
+          id: joinDepIDTuple(['registry', '', 'some-pkg@1.0.0']),
+        },
+        manifest,
+      )
+      const result = getDependencies(node, {})
+
+      t.strictSame(
+        result.size,
+        1,
+        'should only include prod dependencies',
+      )
+      t.ok(result.has('lodash'), 'should include prod dependency')
+      t.notOk(result.has('jest'), 'should skip dev dependency')
+    },
+  )
+
+  t.test(
+    'points catalog errors at the declaring manifest',
+    async t => {
+      const manifest: Manifest = { dependencies: { a: 'catalog:' } }
+      const node = createMockNode({ importer: true }, manifest)
+      t.throws(() => getDependencies(node, {}), {
+        message: 'Default catalog not found for a@catalog:',
+        cause: {
+          code: 'ECONFIG',
+          from: './package.json (dependencies)',
+        },
+      })
+    },
+  )
+})
+
+t.test('asDependencySpecError', async t => {
+  const node = createMockNode()
+  for (const er of [
+    'str',
+    new Error('x'),
+    error('x', { code: 'EUSAGE' }),
+  ]) {
+    t.equal(
+      asDependencySpecError(er, node, 'prod'),
+      er,
+      'passes through',
+    )
+  }
+
+  const er = error('Default catalog not found for a@catalog:', {
+    code: 'ECONFIG',
+    spec: 'a@catalog:',
+    validOptions: ['catalog:dev'],
+    wanted: ['catalog:dev'],
+  })
+  const res = asDependencySpecError(er, node, 'prod')
+  t.match(res, {
+    message: 'Default catalog not found for a@catalog:',
+    cause: {
+      code: 'ECONFIG',
+      spec: 'a@catalog:',
+      validOptions: ['catalog:dev'],
+      wanted: ['catalog:dev'],
+      from: './package.json (dependencies)',
+    },
+  })
+  t.equal(
+    (res as Error & { cause: { cause: unknown } }).cause.cause,
+    er,
+  )
+
+  const ws = createMockNode({ location: './packages/a' })
+  t.match(asDependencySpecError(er, ws, 'peerOptional'), {
+    cause: { from: './packages/a/package.json (peerDependencies)' },
+  })
+  t.match(asDependencySpecError(er, ws, 'dev'), {
+    cause: { from: './packages/a/package.json (devDependencies)' },
+  })
+  t.match(asDependencySpecError(er, ws, 'dev', 'nrz-lock.json'), {
+    cause: {
+      from: 'nrz-lock.json (./packages/a/package.json devDependencies)',
+    },
+  })
+  for (const [location, from] of [
+    ['nested', './nested/package.json (dependencies)'],
+    ['.hidden/a', './.hidden/a/package.json (dependencies)'],
+    ['../a', '../a/package.json (dependencies)'],
+    ['/a', '/a/package.json (dependencies)'],
+    ['C:/a', 'C:/a/package.json (dependencies)'],
+  ]) {
+    t.match(
+      asDependencySpecError(er, createMockNode({ location }), 'prod'),
+      { cause: { from } },
+      `location ${location}`,
+    )
+  }
 })

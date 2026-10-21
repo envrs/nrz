@@ -8,29 +8,25 @@
 exports[`test/lockfile/load.ts > TAP > load > must match snapshot 1`] = `
 [
   Node {
-    id: 'file·.',
+    id: 'file~_d',
     location: '.',
     importer: true,
     edgesOut: [
-      Edge spec(linked@file:./linked) -prod-> to: Node {
-        id: 'file·linked',
-        location: './node_modules/.nrz/file·linked/node_modules/linked',
-        resolved: 'linked'
-      },
+      Edge spec(linked@file:./linked) -prod-> to: Node { id: 'file~linked', location: 'linked', resolved: 'linked' },
       Edge spec(foo@^1.0.0 || 1.2.3 ||  2.3.4) -prod-> to: Node {
-        id: '··foo@1.0.0',
-        location: './node_modules/.nrz/··foo@1.0.0/node_modules/foo',
+        id: '~npm~foo@1.0.0',
+        location: './node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo',
         resolved: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
         integrity: 'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=='
       },
       Edge spec(bar@^1.0.0) -prod-> to: Node {
-        id: '··bar@1.0.0',
-        location: './node_modules/.nrz/··bar@1.0.0/node_modules/bar',
+        id: '~npm~bar@1.0.0',
+        location: './node_modules/.nrz/~npm~bar@1.0.0/node_modules/bar',
         resolved: 'https://registry.example.com/bar/-/bar-1.0.0.tgz',
         integrity: 'sha512-6/deadbeef==',
         edgesOut: [
           Edge spec(baz@^1.0.0) -prod-> to: Node {
-            id: '··baz@1.0.0',
+            id: '~npm~baz@1.0.0',
             location: './node_modules/.pnpm/baz@1.0.0/node_modules/baz',
             resolved: 'https://registry.npmjs.org/baz/-/baz-1.0.0.tgz'
           }
@@ -45,6 +41,7 @@ exports[`test/lockfile/load.ts > TAP > load > must match snapshot 1`] = `
 exports[`test/lockfile/load.ts > TAP > load with custom git hosts > should build specs with custom git hosts 1`] = `
 Spec {
   "bareSpec": "example:foo/bar",
+  "catalog": undefined,
   "conventionalRegistryTarball": undefined,
   "distTag": undefined,
   "file": undefined,
@@ -55,13 +52,17 @@ Spec {
   "name": "foo",
   "namedGitHost": "example",
   "namedGitHostPath": "foo/bar",
+  "namedJsrRegistry": undefined,
   "namedRegistry": undefined,
   "options": Object {
+    "catalog": Object {},
+    "catalogs": Object {},
+    "default-registry-alias": "npm",
     "git-host-archives": Object {
       "bitbucket": "https://bitbucket.org/$1/$2/get/$committish.tar.gz",
       "example": "git+ssh://example.com/$1/$2/archive/$3.tar.gz",
       "gist": "https://codeload.github.com/gist/$1/tar.gz/$committish",
-      "github": "https://codeload.github.com/$1/$2/tar.gz/$committish",
+      "github": "https://api.github.com/repos/$1/$2/tarball/$committish",
       "gitlab": "https://gitlab.com/$1/$2/repository/archive.tar.gz?ref=$committish",
     },
     "git-hosts": Object {
@@ -71,6 +72,9 @@ Spec {
       "github": "git+ssh://git@github.com:$1/$2.git",
       "gitlab": "git+ssh://git@gitlab.com:$1/$2.git",
     },
+    "jsr-registries": Object {
+      "jsr": "https://npm.jsr.io/",
+    },
     "mainManifest": Object {
       "name": "my-project",
       "version": "1.0.0",
@@ -78,11 +82,13 @@ Spec {
     "projectRoot": "{ROOT}",
     "registries": Object {
       "custom": "http://example.com",
+      "gh": "https://npm.pkg.github.com/",
       "npm": "https://registry.npmjs.org/",
     },
     "registry": "https://registry.npmjs.org/",
-    "scope-registries": Object {},
+    "scoped-registries": Object {},
   },
+  "overridden": false,
   "range": undefined,
   "registry": undefined,
   "registrySpec": undefined,
@@ -101,13 +107,13 @@ Spec {
 exports[`test/lockfile/load.ts > TAP > load with custom git hosts > should load custom git hosts graph 1`] = `
 [
   Node {
-    id: 'file·.',
+    id: 'file~_d',
     location: '.',
     importer: true,
     edgesOut: [
       Edge spec(foo@example:foo/bar) -prod-> to: Node {
-        id: 'git·example%3Afoo§bar·',
-        location: './node_modules/.nrz/git·example%3Afoo§bar·/node_modules/foo',
+        id: 'git~example_cfoo+bar~',
+        location: './node_modules/.nrz/git~example_cfoo+bar~/node_modules/foo',
         resolved: 'example:foo/bar'
       }
     ]
@@ -118,6 +124,7 @@ exports[`test/lockfile/load.ts > TAP > load with custom git hosts > should load 
 exports[`test/lockfile/load.ts > TAP > load with custom scope registry > should build specs with custom scope registry 1`] = `
 Spec {
   "bareSpec": "^1.0.0",
+  "catalog": undefined,
   "conventionalRegistryTarball": undefined,
   "distTag": undefined,
   "file": undefined,
@@ -128,12 +135,16 @@ Spec {
   "name": "@myscope/foo",
   "namedGitHost": undefined,
   "namedGitHostPath": undefined,
+  "namedJsrRegistry": undefined,
   "namedRegistry": undefined,
   "options": Object {
+    "catalog": Object {},
+    "catalogs": Object {},
+    "default-registry-alias": "npm",
     "git-host-archives": Object {
       "bitbucket": "https://bitbucket.org/$1/$2/get/$committish.tar.gz",
       "gist": "https://codeload.github.com/gist/$1/tar.gz/$committish",
-      "github": "https://codeload.github.com/$1/$2/tar.gz/$committish",
+      "github": "https://api.github.com/repos/$1/$2/tarball/$committish",
       "gitlab": "https://gitlab.com/$1/$2/repository/archive.tar.gz?ref=$committish",
     },
     "git-hosts": Object {
@@ -142,6 +153,9 @@ Spec {
       "github": "git+ssh://git@github.com:$1/$2.git",
       "gitlab": "git+ssh://git@gitlab.com:$1/$2.git",
     },
+    "jsr-registries": Object {
+      "jsr": "https://npm.jsr.io/",
+    },
     "mainManifest": Object {
       "name": "my-project",
       "version": "1.0.0",
@@ -149,13 +163,15 @@ Spec {
     "projectRoot": "{ROOT}",
     "registries": Object {
       "custom": "http://example.com",
+      "gh": "https://npm.pkg.github.com/",
       "npm": "https://registry.npmjs.org/",
     },
     "registry": "https://registry.npmjs.org/",
-    "scope-registries": Object {
+    "scoped-registries": Object {
       "@myscope": "http://example.com",
     },
   },
+  "overridden": false,
   "range": Range {
     "includePrerelease": false,
     "isAny": false,
@@ -216,14 +232,14 @@ Spec {
 exports[`test/lockfile/load.ts > TAP > load with custom scope registry > should load custom scope registry graph 1`] = `
 [
   Node {
-    id: 'file·.',
+    id: 'file~_d',
     location: '.',
     importer: true,
     edgesOut: [
       Edge spec(@myscope/foo@^1.0.0) -prod-> to: Node {
-        id: '··@myscope§foo@1.0.0',
-        location: './node_modules/.nrz/··@myscope§foo@1.0.0/node_modules/@myscope/foo',
-        resolved: 'https://registry.npmjs.org/@myscope/foo/-/foo-1.0.0.tgz'
+        id: '~npm~@myscope+foo@1.0.0',
+        location: './node_modules/.nrz/~npm~@myscope+foo@1.0.0/node_modules/@myscope/foo',
+        resolved: 'http://example.com/@myscope/foo/-/foo-1.0.0.tgz'
       }
     ]
   }
@@ -233,29 +249,25 @@ exports[`test/lockfile/load.ts > TAP > load with custom scope registry > should 
 exports[`test/lockfile/load.ts > TAP > loadHidden > must match snapshot 1`] = `
 [
   Node {
-    id: 'file·.',
+    id: 'file~_d',
     location: '.',
     importer: true,
     edgesOut: [
-      Edge spec(linked@file:./linked) -prod-> to: Node {
-        id: 'file·linked',
-        location: './node_modules/.nrz/file·linked/node_modules/linked',
-        resolved: 'linked'
-      },
+      Edge spec(linked@file:./linked) -prod-> to: Node { id: 'file~linked', location: 'linked', resolved: 'linked' },
       Edge spec(foo@^1.0.0 || 1.2.3 ||  2.3.4) -prod-> to: Node {
-        id: '··foo@1.0.0',
-        location: './node_modules/.nrz/··foo@1.0.0/node_modules/foo',
+        id: '~npm~foo@1.0.0',
+        location: './node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo',
         resolved: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
         integrity: 'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=='
       },
       Edge spec(bar@^1.0.0) -prod-> to: Node {
-        id: '··bar@1.0.0',
-        location: './node_modules/.nrz/··bar@1.0.0/node_modules/bar',
+        id: '~npm~bar@1.0.0',
+        location: './node_modules/.nrz/~npm~bar@1.0.0/node_modules/bar',
         resolved: 'https://registry.example.com/bar/-/bar-1.0.0.tgz',
         integrity: 'sha512-6/deadbeef==',
         edgesOut: [
           Edge spec(baz@^1.0.0) -prod-> to: Node {
-            id: '··baz@1.0.0',
+            id: '~npm~baz@1.0.0',
             location: './node_modules/.pnpm/baz@1.0.0/node_modules/baz',
             resolved: 'https://registry.npmjs.org/baz/-/baz-1.0.0.tgz'
           }
@@ -269,6 +281,7 @@ exports[`test/lockfile/load.ts > TAP > loadHidden > must match snapshot 1`] = `
 
 exports[`test/lockfile/load.ts > TAP > missing options object > should be able to parse lockfile without options object 1`] = `
 {
+  "lockfileVersion": 1,
   "options": {
     "registries": {
       "example": "http://foo"
@@ -281,6 +294,7 @@ exports[`test/lockfile/load.ts > TAP > missing options object > should be able t
 
 exports[`test/lockfile/load.ts > TAP > option-defined values should overwrite lockfile values > should overwrite lockfile values with option-defined values 1`] = `
 {
+  "lockfileVersion": 1,
   "options": {
     "registry": "http://example.com",
     "registries": {
@@ -295,22 +309,22 @@ exports[`test/lockfile/load.ts > TAP > option-defined values should overwrite lo
 
 exports[`test/lockfile/load.ts > TAP > workspaces > must match snapshot 1`] = `
 [
-  Node { id: 'file·.', location: '.', importer: true },
+  Node { id: 'file~_d', location: '.', importer: true },
   Node {
-    id: 'workspace·packages§b',
+    id: 'workspace~packages+b',
     location: './packages/b',
     importer: true,
     edgesOut: [
       Edge spec(c@^1.0.0) -prod-> to: Node {
-        id: '··c@1.0.0',
-        location: './node_modules/.nrz/··c@1.0.0/node_modules/c',
+        id: '~npm~c@1.0.0',
+        location: './node_modules/.nrz/~npm~c@1.0.0/node_modules/c',
         resolved: 'https://registry.npmjs.org/c/-/c-1.0.0.tgz',
         integrity: 'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=='
       }
     ]
   },
   Node {
-    id: 'workspace·packages§a',
+    id: 'workspace~packages+a',
     location: './packages/a',
     importer: true
   }

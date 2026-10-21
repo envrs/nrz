@@ -1,9 +1,11 @@
-import { type DepID, type DepIDTuple, splitDepID } from '@nrz/dep-id'
+import { splitDepID } from '@nrz/dep-id'
+import type { DepID, DepIDTuple } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
 import { parse, Version } from '@nrz/semver'
-import { type GitSelectorParsed, Spec } from '@nrz/spec'
+import { defaultRegistryName, Spec } from '@nrz/spec'
+import type { GitSelectorParsed } from '@nrz/spec'
 import { Monorepo } from '@nrz/workspaces'
-import { relative, resolve } from 'path'
+import { relative, resolve } from 'node:path'
 
 /**
  * Return true if the node referenced by this DepID would satisfy the
@@ -35,17 +37,49 @@ export const satisfiesTuple = (
   const { options } = spec
   spec = spec.final
   const [type, first, second] = tuple
+
+  // When a registry spec matches a workspace package by name and
+  // version, treat it as satisfied. This allows monorepo packages
+  // that reference each other with plain semver specs (e.g.
+  // "@dev/build-tools": "^1.0.0") to resolve to local workspace
+  // packages, matching npm/pnpm/yarn behavior.
+  if (spec.type === 'registry' && type === 'workspace') {
+    if (!monorepo) return false
+    const ws = monorepo.get(first)
+    if (ws?.name !== spec.name) return false
+    if (!spec.range) return true
+    const v = parse(ws.manifest.version ?? '')
+    return !!v && spec.range.test(v)
+  }
+
   if (spec.type !== type) return false
 
   switch (spec.type) {
     case 'registry': {
+      /* c8 ignore start - should be impossible */
       if (!first) {
         // must be from the default registry
         if (spec.registry !== options.registry) {
           return false
         }
-      } else {
-        const namedRegistry = options.registries[first]
+        /* c8 ignore stop */
+      } else if (
+        // With no configured registry, a plain registry spec has no
+        // registry of its own, but getTuple() still stamps its DepID with
+        // the `npm` name. Treating that as a mismatch would make
+        // satisfies() contradict getId(), so let it through and fall to
+        // the name/version checks below.
+        !(
+          first === defaultRegistryName &&
+          !spec.registry &&
+          !options.registry
+        )
+      ) {
+        let namedRegistry = options.registries[first]
+        /* c8 ignore next 3 */
+        if (!namedRegistry && first === defaultRegistryName) {
+          namedRegistry = options.registry
+        }
         if (namedRegistry && namedRegistry !== spec.registry) {
           // we know the name, and it's not the registry being used
           return false
@@ -116,7 +150,7 @@ export const satisfiesTuple = (
       /* c8 ignore next - always set to something, even if empty */
       const [parsed, committish] = Spec.parseGitSelector(second ?? '')
       if (gitCommittish && committish)
-        return !!committish.startsWith(gitCommittish)
+        return committish.startsWith(gitCommittish)
       for (const [k, v] of Object.entries(gitSelectorParsed)) {
         if (parsed[k as keyof GitSelectorParsed] !== v) return false
       }

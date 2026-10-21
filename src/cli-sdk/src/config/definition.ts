@@ -1,0 +1,1017 @@
+import { error } from '@nrz/error-cause'
+import { XDG } from '@nrz/xdg'
+import { jack } from 'jackspeak'
+
+export const defaultView =
+  // If stdout is a TTY, use human output
+  process.stdout.isTTY ? 'human'
+    // If its not a TTY but is a CI environment, use human output
+    // TODO: make a better view option for CI environments
+  : process.env.CI ? 'human'
+    // Otherwise, use json output
+  : 'json'
+
+export const defaultEditor = () =>
+  process.env.EDITOR ||
+  process.env.VISUAL ||
+  (process.platform === 'win32' ?
+    `${process.env.SYSTEMROOT}\\notepad.exe`
+  : 'vi')
+
+const canonicalCommands = {
+  access: 'access',
+  bugs: 'bugs',
+  build: 'build',
+  cache: 'cache',
+  ci: 'ci',
+  config: 'config',
+  create: 'create',
+  deprecate: 'deprecate',
+  'dist-tag': 'dist-tag',
+  docs: 'docs',
+  exec: 'exec',
+  'exec-local': 'exec-local',
+  help: 'help',
+  init: 'init',
+  install: 'install',
+  login: 'login',
+  logout: 'logout',
+  list: 'list',
+  ls: 'ls',
+  outdated: 'outdated',
+  pack: 'pack',
+  ping: 'ping',
+  pkg: 'pkg',
+  profile: 'profile',
+  publish: 'publish',
+  query: 'query',
+  registry: 'registry',
+  repo: 'repo',
+  'run-exec': 'run-exec',
+  run: 'run',
+  setup: 'setup',
+  skills: 'skills',
+  token: 'token',
+  uninstall: 'uninstall',
+  unpublish: 'unpublish',
+  update: 'update',
+  'exec-cache': 'exec-cache',
+  version: 'version',
+  view: 'view',
+  whoami: 'whoami',
+} as const
+
+const aliases = {
+  i: 'install',
+  add: 'install',
+  rm: 'uninstall',
+  u: 'update',
+  p: 'pkg',
+  pub: 'publish',
+  q: 'query',
+  b: 'build',
+  r: 'run',
+  'run-script': 'run',
+  rx: 'run-exec',
+  x: 'exec',
+  xl: 'exec-local',
+  h: 'help',
+  '?': 'help',
+  info: 'view',
+  ls: 'list',
+  show: 'view',
+  xc: 'exec-cache',
+} as const
+
+/**
+ * Command aliases mapped to their canonical names
+ */
+export const commands = {
+  ...canonicalCommands,
+  ...aliases,
+} as const
+
+/**
+ * Canonical command names mapped to an array of its aliases
+ */
+export const commandAliases = Object.entries(aliases).reduce(
+  (acc, [alias, canonical]) => {
+    const commandAliases = acc.get(canonical)
+    if (commandAliases) {
+      commandAliases.push(alias)
+    } else {
+      acc.set(canonical, [alias])
+    }
+    return acc
+  },
+  new Map<string, string[]>(),
+)
+
+export type Commands = typeof commands
+
+export const getCommand = (
+  s?: string,
+): Commands[keyof Commands] | undefined =>
+  s && s in commands ? commands[s as keyof Commands] : undefined
+
+const xdg = new XDG('nrz')
+const cacheDir = xdg.cache()
+
+/**
+ * Fields that are parsed as a set of key=value pairs
+ */
+export const recordFields = [
+  'git-hosts',
+  'registries',
+  'git-host-archives',
+  'scoped-registries',
+  'jsr-registries',
+] as const
+
+export type RecordField = (typeof recordFields)[number]
+
+export const isRecordField = (s: string): s is RecordField =>
+  recordFields.includes(s as RecordField)
+
+/** Valid `store-linker` values. */
+export const storeLinkers = [
+  'auto',
+  'hardlink',
+  'clone',
+  'copy',
+  'unpack',
+] as const
+
+const j = jack({
+  envPrefix: 'NRZ',
+  allowPositionals: true,
+  usage: `nrz [<options>] [<cmd> [<args> ...]]`,
+  // nrz options can appear on either side of the command/script
+  // name. To forward an argument (especially a flag-like one) to
+  // the underlying bin/script without nrz interpreting it, place
+  // it after a `--` terminator, e.g.:
+  //   nrz run scriptName --nrz-flag -- --script-flag --more
+  // Node's `parseArgs` natively treats everything following `--`
+  // as positional, so no special-casing is needed here.
+})
+  .heading('nrz')
+  .description(
+    `More documentation available at <https://docs.nrz.khulnasoft.com>`,
+  )
+  .heading('Subcommands')
+
+j.description(Object.keys(canonicalCommands).join(', '), {
+  pre: true,
+}).description(
+  'Run `nrz <cmd> --help` for more information about a specific command',
+)
+
+export const definition = j
+  /**
+   * Definition of all configuration values used by nrz.
+   */
+  .heading('Configuration')
+  .description(
+    `The \`nrz.json\` file in the XDG specified config directory is loaded
+     first, and then the \`nrz.json\` file in the root of the current
+     project, if present, is layered on top of it.
+
+     Scalar values are overridden by the innermost layer that sets them.
+     Object type values are merged together key by key. Set a field, or a
+     key within an object field, to \`null\` in the JSON configuration to
+     explicitly remove it.
+
+     Registry *selection* is an exception, since \`--registry\` outranks any
+     \`--registries\` alias. A layer that sets any of \`registry\`,
+     \`registries\`, or \`default-registry-alias\` owns selection: the
+     \`registry\` and \`default-registry-alias\` it does *not* set are
+     dropped, rather than inherited from an outer layer. So a project that
+     configures its own registry is never sent to the user-level one, while
+     the aliases in the user config stay addressable by name.
+
+     Command-specific fields may be set in a nested \`command\` object that
+     overrides any options defined at the top level.
+
+     Object type values given in the environment or on the command line
+     are merged key by key over the config files (command line wins over
+     environment); other values replace them.
+    `,
+  )
+
+  .flag({
+    color: {
+      short: 'c',
+      description: 'Use colors (Default for TTY)',
+    },
+    'no-color': {
+      short: 'C',
+      description: 'Do not use colors (Default for non-TTY)',
+    },
+  })
+
+  .opt({
+    registry: {
+      hint: 'url',
+      description: `Sets the registry for fetching packages, when no registry
+                    is explicitly set on a specifier.
+
+                    For example, \`express@latest\` will be resolved by looking
+                    up the metadata from this registry.
+
+                    There is **no default**. When unset, bare specifiers fall
+                    back to the registry alias named by
+                    \`--default-registry-alias\` (\`npm\` by default). If that
+                    alias is also unconfigured, commands that need a registry
+                    fail with a config error. Run \`nrz setup\` (or
+                    \`nrz login\`) to configure one.
+
+                    See https://docs.nrz.khulnasoft.com/cli
+      `,
+    },
+
+    'default-registry-alias': {
+      hint: 'name',
+      default: 'npm',
+      description: `The name of the registry alias (a key in
+                    \`--registries\`) that bare specifiers (e.g.
+                    \`express@latest\`) and transitive dependencies without an
+                    explicit registry protocol resolve through, when neither
+                    \`--registry\` nor a matching \`--scoped-registries\` entry
+                    applies.
+
+                    Defaults to \`npm\`. Note that the \`npm\` alias has **no**
+                    built-in URL -- it must be configured (for example via
+                    \`nrz setup\`, which points it at your nrz.io registry),
+                    otherwise bare specifiers will have no registry to resolve
+                    against.
+      `,
+    },
+  })
+
+  .optList({
+    registries: {
+      hint: 'name=url',
+      description: `Specify named registry hosts by their prefix. To choose
+                    which alias is used for non-namespaced specifiers, use the
+                    \`--default-registry-alias\` option.
+
+                    Prefixes can be used as a package alias. For example:
+
+                    \`\`\`
+                    nrz --registries loc=http://reg.local install foo@loc:foo@1.x
+                    \`\`\`
+
+                    There is **no** built-in \`npm\` registry URL; the \`npm\`
+                    alias must be configured (e.g. via \`nrz setup\`) before it
+                    can be used. The \`gh\` alias has a built-in default
+                    that can be overridden here. A name used by
+                    \`--jsr-registries\` or \`--git-hosts\` (e.g. \`jsr\`,
+                    \`github\`), or a built-in protocol (e.g. \`file\`), is
+                    an error.
+
+                    Aliases given on the command line or in
+                    \`NRZ_REGISTRIES\` (newline-delimited) merge with the
+                    configured ones, later sources winning per key. Pass
+                    \`--save-config\` to \`install\`, \`add\` or
+                    \`update\` to save them to \`nrz.json\`.
+                    `,
+    },
+
+    'scoped-registries': {
+      hint: '@scope=url',
+      description: `Map package name scopes to registry URLs.
+
+                    For example,
+                    \`--scoped-registries @acme=https://registry.acme/\`
+                    would tell nrz to fetch any packages named
+                    \`@acme/...\` from the \`https://registry.acme/\`
+                    registry.
+
+                    Note: this way of specifying registries is more ambiguous,
+                    compared with using the \`--registries\` field and explicit
+                    prefixes, because instead of failing when the configuration
+                    is absent, it will instead attempt to fetch from the
+                    default registry.
+
+                    By comparison, using
+                    \`--registries acme=https://registry.acme/\` and then
+                    specifying dependencies such as \`"foo": "acme:foo@1.x"\`
+                    means that regardless of the name, the package will be
+                    fetched from the explicitly named registry, or fail if
+                    no registry is defined with that name.
+
+                    However, custom registry aliases are not supported by other
+                    package managers.`,
+    },
+
+    'jsr-registries': {
+      hint: 'name=url',
+      description: `Map alias names to JSR.io registry urls.
+
+                    For example,
+                    \`--jsr-registries acme=https://jsr.acme.io/\` would
+                    tell nrz to fetch any packages with the \`acme:\` registry
+                    prefix from the \`https://jsr.acme.io/\` registry, using
+                    the "npm Compatibility" translation. So for example,
+                    the package \`acme:@foo/bar\` would fetch the
+                    \`@jsr/foo__bar\` package from the \`jsr.acme.io\`
+                    registry.
+
+                    By default the \`jsr\` alias is always mapped to
+                    \`https://npm.jsr.io/\`, so existing \`jsr:\` packages will
+                    be fetched from the public \`jsr\` registry appropriately.
+                   `,
+    },
+
+    'git-hosts': {
+      hint: `name=template`,
+      short: 'G',
+      description: `Map a shorthand name to a git remote URL template.
+
+                    The \`template\` may contain placeholders, which will be
+                    swapped with the relevant values.
+
+                    \`$1\`, \`$2\`, etc. are replaced with the appropriate
+                    n-th path portion. For example, \`github:user/project\`
+                    would replace the \`$1\` in the template with \`user\`,
+                    and \`$2\` with \`project\`.`,
+    },
+
+    'git-host-archives': {
+      hint: `name=template`,
+      short: 'A',
+      description: `Similar to the \`--git-host <name>=<template>\` option,
+                    this option can define a template string that will be
+                    expanded to provide the URL to download a pre-built
+                    tarball of the git repository.
+
+                    In addition to the n-th path portion expansions performed
+                    by \`--git-host\`, this field will also expand the
+                    string \`$committish\` in the template, replacing it with
+                    the resolved git committish value to be fetched.`,
+    },
+  })
+
+  .opt({
+    cache: {
+      hint: 'path',
+      description: `
+        Location of the nrz on-disk cache. Defaults to the platform-specific
+        directory recommended by the XDG specification.
+      `,
+      default: cacheDir,
+    },
+    'store-linker': {
+      hint: 'auto | hardlink | clone | copy | unpack',
+      description: `How packages are placed in \`node_modules\`. Every
+                    linker but \`unpack\` fills a global store under
+                    \`cache\` in the background, then places packages
+                    from it.
+
+                    - auto: Default. On Linux, hardlink from the global
+                      store, copying any file that cannot be linked. On
+                      macOS, clone from it, on a Node with \`node:ffi\`
+                      (26.1 and later, and \`--allow-ffi\` under
+                      \`--permission\`); a hardlink is the slowest way
+                      to place a file on APFS, so macOS without it, and
+                      Windows, unpack by default.
+                    - hardlink: Hardlink from the global store on every
+                      platform.
+                    - clone: Clone each package directory from the
+                      global store copy-on-write (\`clonefile\`, macOS
+                      on APFS). Files share storage with the store
+                      until edited, so editing in place is safe.
+                      Unpacks where cloning fails.
+                    - copy: Copy from the global store. Use this when
+                      editing files in \`node_modules\` in place, since
+                      a hardlink shares its content with every project.
+                    - unpack: Unpack each package tarball, skipping the
+                      global store.
+
+                    A hardlinked package is copied right before its
+                    install scripts run, so they don't change its files
+                    in the store; a cloned one needs no copy.
+                    An invalid \`NRZ_STORE_LINKER\` warns and uses
+                    \`unpack\`.`,
+      validOptions: storeLinkers,
+      default: 'auto',
+    },
+    tag: {
+      description: `Default \`dist-tag\` to install or publish`,
+      default: 'latest',
+    },
+    before: {
+      hint: 'date',
+      description: `Do not install any packages published after this date`,
+    },
+    os: {
+      description: `The operating system to use as the selector when choosing
+                    packages based on their \`os\` value.`,
+      default: process.platform,
+    },
+    arch: {
+      description: `CPU architecture to use as the selector when choosing
+                    packages based on their \`cpu\` value.`,
+      default: process.arch,
+    },
+    libc: {
+      description: `Override the libc family to use as the selector when choosing
+                    packages based on their \`libc\` value (e.g. glibc, musl).
+                    By default, this is auto-detected on Linux systems.`,
+    },
+    'node-version': {
+      hint: 'version',
+      description: `Node version to use when choosing packages based on
+                    their \`engines.node\` value.`,
+      default: process.version,
+    },
+  })
+
+  .flag({
+    'git-shallow': {
+      description: `Set to force \`--depth=1\` on all git clone actions.
+                    When set explicitly to false with --no-git-shallow,
+                    then \`--depth=1\` will not be used.
+
+                    When not set explicitly, \`--depth=1\` will be used for
+                    git hosts known to support this behavior.`,
+    },
+  })
+  .num({
+    'fetch-retries': {
+      hint: 'n',
+      description: `Number of retries to perform when encountering network
+                    errors or likely-transient errors from git hosts.`,
+      default: 3,
+    },
+    'fetch-retry-factor': {
+      hint: 'n',
+      description: `The exponential backoff factor to use when retrying
+                    requests due to network issues.`,
+      default: 2,
+    },
+    'fetch-retry-mintimeout': {
+      hint: 'n',
+      description: `Number of milliseconds before starting first retry`,
+      default: 0,
+    },
+    'fetch-retry-maxtimeout': {
+      hint: 'n',
+      description: `Maximum number of milliseconds between two retries`,
+      default: 30_000,
+    },
+    'stale-while-revalidate-factor': {
+      hint: 'n',
+      default: 60,
+      description: `If the server does not serve a \`stale-while-revalidate\`
+                    value in the \`cache-control\` header, then this multiplier
+                    is applied to the \`max-age\` or \`s-maxage\` values.
+
+                    By default, this is \`60\`, so for example a response that
+                    is cacheable for 5 minutes will allow a stale response
+                    while revalidating for up to 5 hours.
+
+                    If the server *does* provide a \`stale-while-revalidate\`
+                    value, then that is always used.
+
+                    Set to 0 to prevent any \`stale-while-revalidate\` behavior
+                    unless explicitly allowed by the server's \`cache-control\`
+                    header.
+      `,
+    },
+  })
+
+  .opt({
+    identity: {
+      short: 'i',
+      validate: (v: unknown) =>
+        typeof v === 'string' && /^[a-z0-9]*$/.test(v),
+      hint: 'name',
+      default: '',
+      description: `Provide a string to define an identity for storing auth
+                    information when logging into registries.
+
+                    Authentication tokens will be stored in the XDG data
+                    directory, in \`nrz/auth/$\{identity}/keychain.json\`.
+
+                    If no identity is provided, then the default \`''\` will
+                    be used, storing the file at \`nrz/auth/keychain.json\`.
+
+                    May only contain lowercase alphanumeric characters.
+                    `,
+    },
+  })
+
+  .optList({
+    workspace: {
+      hint: 'ws',
+      short: 'w',
+      description: `Set to limit the spaces being worked on when working on
+                    workspaces.
+
+                    Can be paths or glob patterns matching paths.
+
+                    Specifying workspaces by package.json name is not
+                    supported.`,
+    },
+    'workspace-group': {
+      description: `Specify named workspace group names to load and operate on
+                    when doing recursive operations on workspaces.`,
+    },
+  })
+
+  .opt({
+    scope: {
+      short: 's',
+      hint: 'query',
+      description:
+        'Set to filter the scope of an operation using a DSS Query.',
+    },
+    target: {
+      short: 't',
+      hint: 'query',
+      description:
+        'Set to select packages using a DSS Query selector.',
+    },
+  })
+
+  .flag({
+    'if-present': {
+      description: `When running scripts across multiple packages,
+                    only include packages that have the script.
+
+                    If this is not set, then the run will fail if any
+                    packages do not have the script.
+
+                    This will default to true if --scope, --workspace,
+                    --workspace-group, or --recursive is set. Otherwise,
+                    it will default to false.`,
+    },
+  })
+
+  .flag({
+    recursive: {
+      short: 'r',
+      description: `Run an operation across multiple workspaces.
+
+                    No effect when used in non-monorepo projects.
+
+                    Implied by setting --workspace or --workspace-group. If
+                    not set, then the action is run on the project root.`,
+    },
+
+    bail: {
+      short: 'b',
+      description: `When running scripts across multiple workspaces, stop
+                    on the first failure.`,
+      default: true,
+    },
+
+    'no-bail': {
+      short: 'B',
+      description: `When running scripts across multiple workspaces, continue
+                    on failure, running the script for all workspaces.`,
+    },
+  })
+
+  .opt({
+    config: {
+      hint: 'all | user | project',
+      description: `Specify which configuration to show or operate on when running
+                    \`nrz config\` commands, and which file
+                    \`nrz skills link\` saves \`allow-skills\` to. For read
+                    operations (get, pick, list):
+                    \`all\` shows merged configuration from both user and project
+                    files (default). For write operations (set, delete, edit):
+                    defaults to \`project\`. \`user\` shows/modifies only user-level
+                    configuration, \`project\` shows/modifies only project-level
+                    configuration.`,
+      validOptions: ['all', 'user', 'project'] as const,
+      default: 'all',
+    },
+
+    editor: {
+      hint: 'program',
+      description: `The blocking editor to use for \`nrz config edit\` and
+                    any other cases where a file should be opened for
+                    editing.
+
+                    Defaults to the \`EDITOR\` or \`VISUAL\` env if set, or
+                    \`notepad.exe\` on Windows, or \`vi\` elsewhere.`,
+      default: defaultEditor(),
+    },
+
+    'script-shell': {
+      hint: 'program',
+      description: `The shell to use when executing \`package.json#scripts\`.
+
+                    For \`nrz exec\` and \`nrz exec-local\`, this is never set,
+                    meaning that command arguments are run exactly as provided.
+
+                    For \`nrz run\` (and other things that run lifecycle
+                    scripts in \`package.json#scripts\`), the entire command
+                    with all arguments is provided as a single string, meaning
+                    that some value must be provided for shell interpretation,
+                    and so for these contexts, the \`script-shell\` value will
+                    default to \`/bin/sh\` on POSIX systems or \`cmd.exe\` on
+                    Windows.
+      `,
+    },
+
+    'fallback-command': {
+      hint: 'command',
+      description: `The command to run when the first argument doesn't
+                    match any known commands.
+
+                    For pnpm-style behavior, set this to 'run-exec'. e.g:
+                    \`\`\`
+                    nrz config set fallback-command=run-exec
+                    \`\`\``,
+      default: 'help',
+      validOptions: Object.keys(canonicalCommands),
+    },
+  })
+
+  .opt({
+    package: {
+      hint: 'p',
+      description: `When running \`nrz exec\`, this allows you to explicitly
+                    set the package to search for bins. If not provided, then
+                    nrz will interpret the first argument as the package, and
+                    attempt to run the default executable.`,
+    },
+  })
+
+  .opt({
+    call: {
+      hint: 'cmd',
+      description: `When running \`nrz exec\`, provide an arbitrary command
+                    string to execute after installing and adding any specified
+                    package bins to the PATH.
+
+                    If a package is specified (via positionals or
+                    \`--package\`), it will be installed and its executables
+                    added to the PATH before the \`--call\` command runs.
+
+                    The command string is executed via the configured
+                    \`script-shell\`, or the \`SHELL\` environment variable,
+                    falling back to \`/bin/sh\` on Unix or \`cmd.exe\` on
+                    Windows. On Unix, the shell is invoked with \`-c\`; on
+                    Windows with \`/c\`.
+
+                    Example:
+                    \`nrz exec create-react-app --call="echo $PWD"\`
+                    \`nrz exec --call="echo $PWD" --scope=":workspace"\``,
+    },
+  })
+
+  .opt({
+    view: {
+      hint: 'output',
+      default: defaultView,
+      description: `Configures the output format for commands.
+
+                    Defaults to \`human\` if stdout is a TTY, or \`json\`
+                    if it is not.
+
+                    - human: Maximally ergonomic output reporting for human
+                      consumption.
+                    - json: Parseable JSON output for machines.
+                    - inspect: Output results with \`util.inspect\`.
+                    - mermaid: Output mermaid diagramming syntax. (Only
+                      relevant for certain commands.)
+                    - svg: Render the dependency graph as an SVG image and
+                      open it. (Only relevant for certain commands.)
+                    - png: Render the dependency graph as a PNG image and
+                      open it. (Only relevant for certain commands.)
+                    - count: Output the number of dependency relationships in
+                      the result set.
+                    - silent: Suppress all output to stdout.
+
+                    If the requested view format is not supported for the
+                    current command, or if no option is provided, then it
+                    will fall back to the default.
+      `,
+      validOptions: [
+        'human',
+        'json',
+        'mermaid',
+        'svg',
+        'png',
+        'count',
+        'inspect',
+        'silent',
+      ] as const,
+    },
+  })
+
+  .opt({
+    loglevel: {
+      hint: 'level',
+      default: 'info',
+      description: `Sets the verbosity of diagnostic logging written to
+                    stderr (registry requests, warnings, etc). This is
+                    independent of \`--view\`, which controls a command's
+                    result output on stdout.
+
+                    - silent: No diagnostic logging.
+                    - error: Only errors.
+                    - warn: Errors and warnings.
+                    - info: Default. High-level progress.
+                    - verbose: Adds per-request logging (each registry URL
+                      with its cache/stale/fetch outcome and status code).
+                    - debug: Everything, including low-level detail.
+
+                    \`--verbose\` is shorthand for \`--loglevel=verbose\`.`,
+      validOptions: [
+        'silent',
+        'error',
+        'warn',
+        'info',
+        'verbose',
+        'debug',
+      ] as const,
+    },
+  })
+
+  .flag({
+    verbose: {
+      description: `Shorthand for \`--loglevel=verbose\`. Streams each
+                    registry request to stderr with its cache/fetch outcome
+                    and status code, useful for debugging request behavior.`,
+    },
+  })
+
+  .optList({
+    'dashboard-root': {
+      hint: 'path',
+      description: `The root directory to use for the dashboard browser-based UI.
+                    If not set, the user home directory is used.`,
+    },
+  })
+
+  .flag({
+    'save-dev': {
+      short: 'D',
+      description: `Save installed packages to a package.json file as
+                    devDependencies`,
+    },
+    'save-exact': {
+      short: 'E',
+      description: `Save installed packages to package.json with an exact
+                    version rather than using the default semver range
+                    operator (e.g. \`1.2.3\` instead of \`^1.2.3\`).`,
+    },
+    'save-optional': {
+      short: 'O',
+      description: `Save installed packages to a package.json file as
+                    optionalDependencies`,
+    },
+    'save-peer': {
+      description: `Save installed packages to a package.json file as
+                    peerDependencies`,
+    },
+    'save-prod': {
+      short: 'P',
+      description: `Save installed packages into dependencies specifically.
+                    This is useful if a package already exists in
+                    devDependencies or optionalDependencies, but you want to
+                    move it to be a non-optional production dependency.`,
+    },
+    'save-types': {
+      description: `Also save the matching \`@types/*\` package as a
+                    devDependency for each added registry package that
+                    ships no TypeScript types of its own.`,
+    },
+    'save-config': {
+      description: `Save the registry and git host options given on the
+                    command line or via \`NRZ_*\` env (\`--registry\`,
+                    \`--registries\`, \`--default-registry-alias\`,
+                    \`--scoped-registries\`, \`--jsr-registries\`,
+                    \`--git-hosts\`, \`--git-host-archives\`) to the
+                    project \`nrz.json\` (or the user one with
+                    \`--config=user\`) after a successful \`install\`,
+                    \`add\` or \`update\`. Values a config file already
+                    has are left alone.`,
+    },
+    'migrate-workspaces': {
+      description: `Save workspaces read from the \`workspaces\` field of
+                    the root \`package.json\` or from
+                    \`pnpm-workspace.yaml\` to the project \`nrz.json\` on
+                    \`nrz install\`. \`nrz.json\` then takes precedence.
+
+                    Set \`--no-migrate-workspaces\` to skip this; an
+                    already saved \`workspaces\` field stays until
+                    removed.`,
+      default: true,
+    },
+  })
+
+  .opt({
+    'save-prefix': {
+      description: `The version prefix to use when saving dependencies to
+                    package.json (e.g. \`^\`, \`~\`, \`>=\`, or empty string
+                    for exact versions). Defaults to \`^\`.
+                    Ignored when \`--save-exact\` is set.`,
+      default: '^',
+    },
+  })
+
+  .opt({
+    'expect-results': {
+      hint: 'value',
+      validate: (v: unknown) =>
+        typeof v === 'string' && /^([<>]=?)?[0-9]+$/.test(v),
+      description: `When running \`nrz query\`, this option allows you to
+                    set a expected number of resulting items.
+
+                    Accepted values are numbers and strings.
+
+                    Strings starting with \`>\`, \`<\`, \`>=\` or \`<=\`
+                    followed by a number can be used to check if the result
+                    is greater than or less than a specific number.`,
+    },
+  })
+
+  .flag({
+    'dry-run': {
+      description: 'Run command without making any changes',
+    },
+    force: {
+      short: 'f',
+      description:
+        'Force potentially dangerous operations, such as unpublishing an entire package.',
+    },
+    'expect-lockfile': {
+      description:
+        'Fail if lockfile is missing or out of date. Used by ci command to enforce lockfile integrity.',
+    },
+    'frozen-lockfile': {
+      description:
+        'Fail if lockfile is missing or out of sync with package.json. Prevents any lockfile modifications.',
+    },
+    'lockfile-only': {
+      description:
+        'Only update the lockfile (nrz-lock.json) and package.json files, skip all node_modules operations including package extraction and filesystem changes.',
+    },
+    'brotli-tarballs': {
+      description: `Resolve to the Brotli (\`.tar.br\`) tarball when the
+                    registry advertises one for a version, transferring far
+                    less than the gzip \`.tgz\`.
+
+                    The \`.tar.br\` is its own artifact and hashes
+                    differently, so a version installed this way records that
+                    hash in \`nrz-lock.json\`. An existing lockfile keeps
+                    whichever artifact it already pinned; set
+                    \`--no-brotli-tarballs\` before resolving to pin the
+                    \`.tgz\` instead.`,
+      default: true,
+    },
+  })
+  .opt({
+    'allow-scripts': {
+      hint: 'query',
+      description: `Filter which packages are allowed to run lifecycle scripts using DSS query syntax.
+                    When provided, only packages matching the query will execute their
+                    install, preinstall, postinstall, prepare, preprepare, and postprepare scripts.
+                    Defaults to ':not(*)' which means no scripts will be run.
+
+                    Example: --allow-scripts=":root > *, #my-package"
+                    Runs scripts only for direct dependencies of the current project and any occurrences
+                    of a specific dependency with the name "my-package" anywhere in the dependency graph.`,
+    },
+  })
+  .opt({
+    'allow-skills': {
+      hint: 'query',
+      description: `Link the agent skills (folders with a \`SKILL.md\`) shipped by
+                    installed packages matching this DSS query into
+                    the project's agent skill dirs (see \`skills-dir\`)
+                    after \`install\`, \`ci\`, \`update\` or
+                    \`uninstall\`. End a selector with
+                    \`:skill(<name>, …)\` to pick single skills (\`*\`
+                    globs, double-quoted names). Unset (the default) or
+                    \`:not(*)\` links nothing and skips all skills work.
+
+                    \`nrz install --allow-skills=<query>\` saves the query
+                    to the project \`nrz.json\`; \`nrz skills link
+                    [<query>]\` sets, saves and applies it.
+
+                    Example: --allow-skills="#agent-browser:skill(agent-browser)"
+                    Links the agent-browser skill from a package with the same name.`,
+    },
+  })
+  .optList({
+    'skills-dir': {
+      hint: 'path',
+      description: `Dirs to link agent skills into (see \`allow-skills\`),
+                    relative to the project root. Replaces detection:
+                    \`.agents/skills\`, plus \`<folder>/skills\` for each
+                    agent folder at the project root (e.g. \`.claude/\`),
+                    \`.claude/skills\` inside Claude Code, and existing
+                    \`.<name>/skills\` dirs. An empty list (\`[]\` in
+                    nrz.json, or \`--skills-dir=\`) links nothing. Each
+                    dir must be inside the project, not in
+                    node_modules.`,
+    },
+  })
+  .opt({
+    access: {
+      description: 'Set the access level of the package',
+      validOptions: ['public', 'restricted'] as const,
+    },
+  })
+  .flag({
+    'git-tag-version': {
+      description: `Commit and tag the version change made by \`nrz version\`.
+
+                    Set \`--no-git-tag-version\` to bump the version in
+                    \`package.json\` without touching git at all, so that a
+                    series of bumps can be committed together.`,
+      default: true,
+    },
+    commit: {
+      description: `Create the version commit in \`nrz version\`.
+
+                    Set \`--no-commit\` to leave the bumped \`package.json\`
+                    uncommitted while still creating the git tag. Implied by
+                    \`--no-git-tag-version\`.`,
+      default: true,
+    },
+  })
+
+  .opt({
+    otp: {
+      description: `Provide an OTP to use when publishing a package.`,
+    },
+    'publish-directory': {
+      hint: 'path',
+      description: `Directory to use for pack and publish operations instead of the current directory.
+                    The directory must exist and nothing will be copied to it.`,
+    },
+  })
+
+  .flag({
+    telemetry: {
+      description: `Enable anonymous usage telemetry.
+
+                    nrz collects anonymized usage data to help improve
+                    the tool. No personally identifiable information is
+                    ever sent.
+
+                    Set \`--no-telemetry\` or \`NRZ_TELEMETRY=0\` or
+                    \`DO_NOT_TRACK=1\` to opt out.`,
+      default: true,
+    },
+  })
+
+  .flag({
+    yes: {
+      short: 'y',
+      description: `Automatically accept any confirmation prompts`,
+    },
+    version: {
+      short: 'v',
+      description: 'Print the version',
+    },
+    help: {
+      short: 'h',
+      description: 'Print helpful information',
+    },
+    all: {
+      short: 'a',
+      description: 'Show all commands, bins, and flags',
+    },
+  })
+
+/**
+ * The pristine `default` of every known config field, captured here at
+ * module load, before anything can call `jack.setConfigValues()`.
+ *
+ * Config layers are applied by overwriting jackspeak's defaults, and
+ * `setConfigValues()` can only set them. So when a layer stops setting a
+ * field (or removes it with `null`), the definitional default has to be
+ * put back explicitly, otherwise a value left behind by a previous apply
+ * would leak through.
+ */
+export const defaultValues: Record<string, unknown> =
+  Object.fromEntries(
+    Object.entries(definition.toJSON()).map(([field, def]) => [
+      field,
+      def.default,
+    ]),
+  )
+
+export const getSortedCliOptions = () => {
+  const defs = definition.toJSON()
+  return getSortedKeys().map((k: keyof typeof defs) => {
+    const def = defs[k]
+    /* c8 ignore next */
+    if (!def) throw error('invalid key found', { found: k })
+    if (def.type === 'boolean') return `--${k}`
+    return `--${k}=<${def.hint ?? k}>`
+  })
+}
+
+export const getSortedKeys = () =>
+  Object.keys(definition.toJSON()).sort((a, b) => a.localeCompare(b))

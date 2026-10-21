@@ -1,0 +1,86 @@
+---
+title: nrz setup
+sidebar:
+  label: setup
+---
+
+Usage:
+
+<Code code="$ nrz setup [<account>]" title="Terminal" lang="bash" />
+
+Configure the registry aliases for your nrz.io account so that
+`nrz install` and `nrx` work out of the box.
+
+The `npm` registry alias has no built-in URL, so a fresh project can't
+resolve bare specifiers (like `nrz install express`) until a registry
+is configured. `nrz setup` is the guided way to do that: sign up or
+log in at [https://www.nrz.io](https://www.nrz.io) first, then run the
+wizard.
+
+## What it does
+
+1. Prompts for your nrz.io account (or organization) slug if not
+   passed as an argument.
+2. Stages the two registry aliases every account is provisioned with:
+   - `npm` → `https://registry.nrz.io/<account>/npm/` (the default
+     [bare-spec alias](/client/registries#bare-specs-and---default-registry-alias))
+   - `main` → `https://registry.nrz.io/<account>/main/` (your
+     account's primary private registry)
+3. Optionally authenticates against those registries via the browser
+   web-login flow. A single token covers every registry on your
+   account, so the browser opens once and the token it returns is
+   saved for both the public `npm` mirror and your private `main`
+   registry.
+4. Loops to let you add any additional custom aliases (for partner or
+   team registries), optionally authenticating against each.
+5. Writes the staged aliases into your user `nrz.json` (merging with,
+   not clobbering, existing entries). Aliases that already live in a
+   `nrz.json` are left where they are, so a project-local alias does
+   not get copied into your user config (or the reverse).
+6. If your keychain has a token for only one of `npm` / `main`, copies
+   it to the other. Existing tokens are never overwritten, and
+   `NRZ_TOKEN*` environment tokens are never saved. This also runs
+   with `--yes` or when you skip authentication.
+
+If the project you run this in configures its own registries, the
+output says so:
+[project config takes precedence](/client/configuring#registry-selection-across-layers)
+for registry selection, so writing your user config would not take
+effect there. Re-run with `--config=project` to configure that
+project.
+
+## Options
+
+| Flag                       | Description                                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| `--config=<user\|project>` | Which config file to write to. Defaults to `user`; use `project` for the project.   |
+| `--registries=<name=url>`  | Additional registry aliases to stage non-interactively. Can be set multiple times.  |
+| `--yes`                    | Skip interactive prompts. Requires `<account>`, no browser auth; step 6 still runs. |
+
+## Examples
+
+Interactive setup for an account:
+
+<Code code="$ nrz setup my-account" title="Terminal" lang="bash" />
+
+Unattended setup (for CI or setup scripts):
+
+<Code
+  code="$ nrz setup my-account --yes --registries team=https://registry.example.com/"
+  title="Terminal"
+  lang="bash"
+/>
+
+Write to the project's `nrz.json` instead of your user config:
+
+<Code
+  code="$ nrz setup my-account --config=project"
+  title="Terminal"
+  lang="bash"
+/>
+
+## See also
+
+- [Working with Named Registries](/client/registries)
+- [Authentication](/client/auth)
+- [`nrz login`](/client/commands/login)

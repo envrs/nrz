@@ -1,8 +1,9 @@
 // given a RegistryClientOptions object, and a redirection response,
 
 import { error } from '@nrz/error-cause'
-import { type CacheEntry } from './cache-entry.ts'
-import { type RegistryClientRequestOptions } from './index.ts'
+import type { CacheEntry } from './cache-entry.ts'
+import { deleteHeader } from './delete-header.ts'
+import type { RegistryClientRequestOptions } from './index.ts'
 
 export type RedirectStatus = 301 | 302 | 303 | 307 | 308
 
@@ -10,7 +11,7 @@ const redirectStatuses = new Set([301, 302, 303, 307, 308])
 
 export type RedirectResponse = CacheEntry & {
   statusCode: RedirectStatus
-  getHeader(key: 'location'): Buffer
+  getHeader(key: 'location'): Uint8Array | undefined
 }
 
 export const isRedirect = (
@@ -28,6 +29,8 @@ export const isRedirect = (
  *
  * Throws an error if maxRedirections is hit or the redirections set already
  * contains the new location.
+ *
+ * Strips the `authorization` header when the redirect changes origin.
  *
  * Ensure that the response is in fact a redirection first, by calling
  * {@link isRedirect} on it.
@@ -47,7 +50,11 @@ export const redirect = (
       url: from,
     })
   }
-  const location = String(response.getHeader('location'))
+  const location = response.getHeaderString('location')
+  /* c8 ignore start */
+  if (!location)
+    throw error('Location header missing from redirect response')
+  /* c8 ignore stop */
   const nextURL = new URL(location, from)
   if (redirections.has(String(nextURL))) {
     throw error('Redirection cycle detected', {
@@ -63,6 +70,13 @@ export const redirect = (
   // eslint-disable-next-line @typescript-eslint/no-deprecated -- thats why we are deleting it
   delete nextOptions.path
   redirections.add(String(nextURL))
+  // a credential belongs to the origin it was resolved for
+  if (nextURL.origin !== from.origin) {
+    nextOptions.headers = deleteHeader(
+      nextOptions.headers,
+      'authorization',
+    )
+  }
   switch (response.statusCode) {
     case 303: {
       // drop body, change method to GET

@@ -1,0 +1,2060 @@
+import t from 'tap'
+import type { Test } from 'tap'
+import { resolve } from 'node:path'
+import { command, views, usage } from '../../src/commands/publish.ts'
+import type { CommandResultSingle } from '../../src/commands/publish.ts'
+import { PackageJson } from '@nrz/package-json'
+import { Monorepo } from '@nrz/workspaces'
+import {
+  RegistryClient,
+  assertOk,
+  registryBase,
+  requestError,
+} from '@nrz/registry-client'
+import type { LoadedConfig } from '../../src/config/index.ts'
+
+interface MockResponse {
+  statusCode?: number
+  text?: string
+  json?: Record<string, unknown>
+  headers?: Record<string, string>
+}
+
+interface MockCacheEntry {
+  statusCode: number
+  text: () => string
+  json: () => Record<string, unknown>
+  getHeader: (name: string) => Buffer | string | undefined
+  getHeaderString: (name: string) => string | undefined
+}
+
+interface TestConfig {
+  projectRoot?: string
+  options: {
+    packageJson: PackageJson
+    monorepo?:
+      | Monorepo
+      | {
+          name: string
+          path?: string
+          fullpath: string
+        }[]
+      | null
+    registry?: string
+    registries?: Record<string, string>
+    tag?: string
+    access?: string
+  }
+  positionals: string[]
+  values?: Record<string, unknown>
+  get?: (key: string) => unknown
+}
+
+const makeTestConfig = (config: TestConfig): LoadedConfig =>
+  ({
+    ...config,
+    get: (key: string) => config.values?.[key],
+  }) as LoadedConfig
+
+const mockResponses = new Map<string, MockResponse>()
+const requests: { url: string; method?: string }[] = []
+const originalRequest = RegistryClient.prototype.request
+
+t.beforeEach(() => {
+  mockResponses.clear()
+  requests.length = 0
+  RegistryClient.prototype.request = async function (
+    url: URL | string,
+    opts?: { method?: string },
+  ) {
+    const urlStr = url.toString()
+    requests.push({ url: urlStr, method: opts?.method })
+    const mockResponse = mockResponses.get(urlStr)
+
+    if (mockResponse) {
+      return {
+        statusCode: mockResponse.statusCode ?? 201,
+        text: () => mockResponse.text ?? '',
+        json: () => mockResponse.json ?? {},
+        getHeader: () => undefined,
+        getHeaderString: (name: string) =>
+          mockResponse.headers?.[name],
+      } as MockCacheEntry
+    }
+
+    return {
+      statusCode: 201,
+      text: () => '{"ok":true}',
+      json: () => ({ ok: true }),
+      getHeader: () => undefined,
+      getHeaderString: () => undefined,
+    } as MockCacheEntry
+  } as typeof originalRequest
+})
+
+t.afterEach(() => {
+  RegistryClient.prototype.request = originalRequest
+})
+
+t.test('usage', async t => {
+  t.matchSnapshot(usage().usage())
+})
+
+t.test('command', async t => {
+  t.test('publishes package successfully', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        tag: 'latest',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+
+    t.equal(result.name, '@test/package')
+    t.equal(result.version, '1.2.3')
+    t.equal(result.tag, 'latest')
+    t.equal(result.registry, 'https://registry.npmjs.org')
+    t.ok(result.size > 0, 'should have a size')
+    t.ok(result.unpackedSize > 0, 'should have unpacked size')
+    t.ok(Array.isArray(result.files), 'should have files array')
+    t.ok(result.files.length > 0, 'should have some files')
+    t.ok(result.shasum, 'should have computed shasum')
+    t.ok(result.integrity, 'should have computed integrity')
+    t.match(
+      result.shasum,
+      /^[a-f0-9]{40}$/,
+      'shasum should be valid SHA1',
+    )
+    t.match(
+      result.integrity,
+      /^sha512-/,
+      'integrity should be sha512',
+    )
+  })
+
+  t.test(
+    'treats 202 Accepted as success and surfaces npm-notice',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: '@test/package',
+          version: '1.2.3',
+          main: 'index.js',
+        }),
+        'index.js': '// test file',
+        'nrz.json': '{}',
+      })
+
+      t.chdir(dir)
+
+      const notice =
+        'Your package is being processed and may take a few minutes to become available.'
+      mockResponses.set(
+        'https://registry.npmjs.org/@test%2Fpackage',
+        {
+          statusCode: 202,
+          text: JSON.stringify({ success: true }),
+          headers: { 'npm-notice': notice },
+        },
+      )
+
+      // when running in CI, oidc() logs its token-exchange attempt to
+      // stderr, which would pollute the captured output asserted below
+      const savedEnv = { ...process.env }
+      delete process.env.GITHUB_ACTIONS
+      delete process.env.GITLAB_CI
+      delete process.env.CIRCLECI
+      t.teardown(() => Object.assign(process.env, savedEnv))
+
+      const errs = t.capture(console, 'error').args
+
+      const config = makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson: new PackageJson(),
+          registry: 'https://registry.npmjs.org',
+          tag: 'latest',
+        },
+        positionals: ['publish'],
+      })
+
+      const result = (await command(config)) as CommandResultSingle
+
+      t.equal(result.name, '@test/package')
+      t.equal(result.version, '1.2.3')
+      t.strictSame(
+        errs(),
+        [[`⚠️ ${notice}`]],
+        'should print the npm-notice header to stderr',
+      )
+    },
+  )
+
+  t.test('throws error if package has no name', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        version: '1.0.0',
+      }),
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(
+      command(config),
+      /Package must have a name and version/,
+    )
+  })
+
+  t.test('throws error if package has no version', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'bad-package',
+      }),
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(
+      command(config),
+      /Package must have a name and version/,
+    )
+  })
+
+  t.test('throws error if package is private', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'private-package',
+        version: '1.0.0',
+        private: true,
+      }),
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(
+      command(config),
+      /Package has been marked as private/,
+    )
+  })
+
+  t.test('handles registry errors', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    // Mock a failure response - need to URL encode the scoped package name
+    mockResponses.set('https://registry.npmjs.org/@test%2Fpackage', {
+      statusCode: 403,
+      text: JSON.stringify({ error: 'Publishing is not allowed' }),
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(command(config), {
+      message:
+        /Failed to publish package: 403 Forbidden — Publishing is not allowed/,
+      cause: {
+        // an account problem, not a bug to report
+        code: 'ENEEDAUTH',
+        url: new URL('https://registry.npmjs.org/@test%2Fpackage'),
+        method: 'PUT',
+      },
+    })
+    await t.rejects(
+      command(config),
+      /Run `nrz whoami` to see who you are logged in as/,
+      'should say how to check and change accounts',
+    )
+  })
+
+  t.test('handles 401 unauthorized', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    mockResponses.set('https://registry.npmjs.org/@test%2Fpackage', {
+      statusCode: 401,
+      text: JSON.stringify({ error: 'unauthorized' }),
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(command(config), {
+      message:
+        /Not logged in to https:\/\/registry\.npmjs\.org\. Run `nrz login` and try again\./,
+      cause: { code: 'ENEEDAUTH' },
+    })
+  })
+
+  t.test('server errors stay reportable', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        main: 'index.js',
+      }),
+      'index.js': '// test file',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    mockResponses.set('https://registry.npmjs.org/@test%2Fpackage', {
+      statusCode: 500,
+      text: 'boom',
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(command(config), {
+      message:
+        /Failed to publish package: 500 Internal Server Error — boom/,
+      cause: { code: 'EREQUEST', method: 'PUT' },
+    })
+  })
+
+  t.test('handles 404 errors with special message', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    // Mock a 404 response - need to URL encode the scoped package name
+    mockResponses.set('https://registry.npmjs.org/@test%2Fpackage', {
+      statusCode: 404,
+      text: 'Not Found',
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(
+      command(config),
+      /Make sure you're logged in and have access to publish the package/,
+    )
+  })
+
+  t.test('handles 409 conflict for existing version', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    mockResponses.set('https://registry.npmjs.org/@test%2Fpackage', {
+      statusCode: 409,
+      text: 'Conflict',
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(
+      command(config),
+      /@test\/package@1\.2\.3 already exists in the registry\. Bump the version and try again/,
+    )
+  })
+
+  t.test('uses custom tag when provided', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        tag: 'beta',
+      },
+      positionals: ['publish'],
+      values: { tag: 'beta' },
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(result.tag, 'beta')
+  })
+
+  t.test('defaults to latest tag when tag is empty', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/empty-tag',
+        version: '1.0.0',
+      }),
+      'index.js': 'console.log("hello");',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        tag: 'latest',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(
+      result.tag,
+      'latest',
+      'should default to latest tag when tag is empty',
+    )
+  })
+
+  t.test('computes shasum and integrity from tarball', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'dist-package',
+        version: '1.0.0',
+      }),
+      'index.js': 'console.log("test");',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    // The shasum and integrity should be computed from the actual tarball
+    t.ok(result.shasum, 'should have computed shasum')
+    t.ok(result.integrity, 'should have computed integrity')
+    t.match(
+      result.shasum,
+      /^[a-f0-9]{40}$/,
+      'shasum should be valid SHA1',
+    )
+    t.match(
+      result.integrity,
+      /^sha512-/,
+      'integrity should be sha512',
+    )
+  })
+
+  t.test('handles request errors', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const tempRequest = RegistryClient.prototype.request
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+    RegistryClient.prototype.request = async () => {
+      throw new Error('Network error')
+    }
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    await t.rejects(command(config), /Failed to publish package/)
+  })
+
+  t.test('dry-run mode', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'dry-run-package',
+        version: '1.0.0',
+      }),
+      'index.js': 'console.log("dry run test");',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        tag: 'latest',
+      },
+      positionals: ['publish'],
+      values: { 'dry-run': true },
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+
+    t.equal(result.name, 'dry-run-package')
+    t.equal(result.version, '1.0.0')
+    t.equal(result.tag, 'latest')
+    t.equal(result.registry, 'https://registry.npmjs.org')
+    t.ok(result.size > 0, 'should have computed size')
+    t.ok(
+      result.unpackedSize > 0,
+      'should have computed unpacked size',
+    )
+    t.ok(result.shasum, 'should have computed shasum')
+    t.ok(result.integrity, 'should have computed integrity')
+    t.ok(Array.isArray(result.files), 'should have files array')
+    t.ok(result.files.length > 0, 'should have some files')
+  })
+
+  t.test('uses custom access level', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        access: 'public',
+      },
+      positionals: ['publish'],
+      values: { access: 'public' },
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(result.access, 'public')
+  })
+
+  t.test('uses publishConfig.tag from manifest', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        publishConfig: {
+          tag: 'next',
+        },
+      }),
+      'index.js': '// test file',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        tag: 'latest',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(result.tag, 'next', 'should use publishConfig.tag')
+  })
+
+  t.test('uses publishConfig.access from manifest', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        publishConfig: {
+          access: 'public',
+        },
+      }),
+      'index.js': '// test file',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    let publishBody: string | undefined
+    const tempRequest = RegistryClient.prototype.request
+    RegistryClient.prototype.request = (async (
+      _url: URL | string,
+      opts?: { body?: string },
+    ) => {
+      publishBody = opts?.body
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      }
+    }) as unknown as typeof tempRequest
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(
+      result.access,
+      'public',
+      'should use publishConfig.access',
+    )
+    t.ok(publishBody, 'should have sent a request body')
+    const metadata = JSON.parse(publishBody!)
+    t.equal(
+      metadata.access,
+      'public',
+      'publish metadata should include access from publishConfig',
+    )
+  })
+
+  t.test('uses publishConfig.registry from manifest', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+        publishConfig: {
+          registry: 'https://custom.registry.example.com/',
+        },
+      }),
+      'index.js': '// test file',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(
+      result.registry,
+      'https://custom.registry.example.com',
+      'should use publishConfig.registry',
+    )
+  })
+
+  t.test(
+    'publishConfig takes precedence over config defaults',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: '@test/package',
+          version: '1.2.3',
+          publishConfig: {
+            tag: 'next',
+            access: 'restricted',
+          },
+        }),
+        'index.js': '// test file',
+        'nrz.json': '{}',
+      })
+
+      t.chdir(dir)
+
+      const config = makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson: new PackageJson(),
+          registry: 'https://registry.npmjs.org',
+          tag: 'latest',
+          access: 'public',
+        },
+        positionals: ['publish'],
+      })
+
+      const result = (await command(config)) as CommandResultSingle
+      t.equal(
+        result.tag,
+        'next',
+        'publishConfig.tag takes precedence',
+      )
+      t.equal(
+        result.access,
+        'restricted',
+        'publishConfig.access takes precedence',
+      )
+    },
+  )
+
+  t.test(
+    'falls back to config when publishConfig is absent',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: '@test/package',
+          version: '1.2.3',
+        }),
+        'index.js': '// test file',
+        'nrz.json': '{}',
+      })
+
+      t.chdir(dir)
+
+      const config = makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson: new PackageJson(),
+          registry: 'https://registry.npmjs.org',
+          tag: 'beta',
+          access: 'public',
+        },
+        positionals: ['publish'],
+      })
+
+      const result = (await command(config)) as CommandResultSingle
+      t.equal(result.tag, 'beta', 'should use config tag')
+      t.equal(result.access, 'public', 'should use config access')
+    },
+  )
+
+  t.test('does not send access when not explicitly set', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/package',
+        version: '1.2.3',
+        description: 'Test package for publish command',
+        main: 'index.js',
+      }),
+      'index.js': '// test file\nconsole.log("hello");',
+      'README.md': '# Test Package',
+      'nrz.json': '{}',
+    })
+
+    t.chdir(dir)
+
+    let publishBody: string | undefined
+    const tempRequest = RegistryClient.prototype.request
+    RegistryClient.prototype.request = (async (
+      _url: URL | string,
+      opts?: { body?: string },
+    ) => {
+      publishBody = opts?.body
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      }
+    }) as unknown as typeof tempRequest
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+      },
+      positionals: ['publish'],
+    })
+
+    const result = (await command(config)) as CommandResultSingle
+    t.equal(
+      result.access,
+      undefined,
+      'access should not be set in result',
+    )
+    t.ok(publishBody, 'should have sent a request body')
+    const metadata = JSON.parse(publishBody!)
+    t.notOk(
+      'access' in metadata,
+      'publish metadata should not include access field',
+    )
+  })
+
+  t.test('views format output correctly', async t => {
+    const result = {
+      id: 'test@1.0.0',
+      name: 'test',
+      version: '1.0.0',
+      tag: 'latest',
+      registry: 'https://registry.npmjs.org',
+      shasum: 'abc123def456abc123def456abc123def456abc123',
+      integrity: 'sha512-xyz789abcdef',
+      size: 2048,
+      access: 'public',
+      unpackedSize: 4096,
+      files: ['package.json', 'index.js', 'README.md'],
+    } as CommandResultSingle
+
+    t.test('human view', async t => {
+      const output = views.human(result)
+      t.match(output, /📦 Package: test@1\.0\.0/)
+      t.match(output, /🏷️ Tag: latest/)
+      t.match(output, /📡 Registry: https:\/\/registry\.npmjs\.org/)
+      t.match(output, /📁 3 Files/)
+      t.match(output, /package\.json/)
+      t.match(output, /index\.js/)
+      t.match(output, /README\.md/)
+      t.match(output, /📊 Package Size: 2\.05 kB/)
+      t.match(output, /📂 Unpacked Size: 4\.1?0? kB/)
+      t.match(
+        output,
+        /🔒 Shasum: abc123def456abc123def456abc123def456abc123/,
+      )
+      t.match(output, /🔐 Integrity: sha512-xyz789abcdef/)
+    })
+
+    t.test('human view without optional fields', async t => {
+      const minResult = {
+        ...result,
+        shasum: undefined,
+        integrity: undefined,
+      } as CommandResultSingle
+      const output = views.human(minResult)
+      t.notMatch(output, /🔒 Shasum/)
+      t.notMatch(output, /🔐 Integrity/)
+    })
+
+    t.test('json view', async t => {
+      const output = views.json(result)
+      t.same(output, result)
+    })
+  })
+})
+
+t.test('publish command with scope', async t => {
+  t.test('publishes packages matching scope query', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: '@test/a',
+            version: '1.0.0',
+            dependencies: { '@test/b': 'workspace:*' },
+          }),
+          'index.js': 'console.log("a")',
+          'nrz.json': '{}',
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: '@test/b',
+            version: '2.0.0',
+          }),
+          'index.js': 'console.log("b")',
+          'nrz.json': '{}',
+        },
+      },
+    })
+
+    // Mock the graph search to return workspace nodes
+    const mockNodes = [
+      {
+        id: 'file:packages/a',
+        toJSON: () => ({ location: 'packages/a' }),
+      },
+      {
+        id: 'file:packages/b',
+        toJSON: () => ({ location: 'packages/b' }),
+      },
+    ]
+
+    const mockQuery = {
+      search: async () => ({ nodes: mockNodes }),
+    }
+
+    const cmd = await t.mockImport<
+      typeof import('../../src/commands/publish.ts')
+    >('../../src/commands/publish.ts', {
+      '@nrz/graph': {
+        actual: {
+          load: () => ({
+            nodes: new Map(),
+          }),
+        },
+        install: () => {},
+        uninstall: () => {},
+        reify: {},
+        ideal: {},
+        asDependency: () => {},
+        createVirtualRoot: () => {},
+      },
+      '@nrz/query': {
+        Query: class {
+          search = mockQuery.search
+        },
+      },
+      '@nrz/registry-client': {
+        assertOk,
+        requestError,
+        RegistryClient: class {
+          async request() {
+            return {
+              statusCode: 201,
+              text: () => '{"ok":true}',
+              json: () => ({ ok: true }),
+              getHeader: () => undefined,
+              getHeaderString: () => undefined,
+            } as MockCacheEntry
+          }
+        },
+        oidc: async () => undefined,
+        registryBase,
+      },
+      '../../src/query-host-contexts.ts': {
+        createHostContextsMap: async () => new Map(),
+      },
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: new Monorepo(dir, {
+          config: { packages: ['packages/*'] },
+          load: {},
+        }),
+      },
+      positionals: ['publish'],
+      values: { scope: ':workspace' },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'scope') return ':workspace'
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await cmd.command(config)
+
+    t.ok(Array.isArray(result), 'should return array of results')
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 2, 'should publish both workspaces')
+
+    // a depends on b, so b goes first
+    t.equal(results[0]!.name, '@test/b')
+    t.equal(results[0]!.version, '2.0.0')
+    t.equal(results[1]!.name, '@test/a')
+    t.equal(results[1]!.version, '1.0.0')
+  })
+
+  t.test('handles empty scope query results', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: [] }),
+    })
+
+    const cmd = await t.mockImport<
+      typeof import('../../src/commands/publish.ts')
+    >('../../src/commands/publish.ts', {
+      '@nrz/graph': {
+        actual: {
+          load: () => ({
+            nodes: new Map(),
+          }),
+        },
+        install: () => {},
+        uninstall: () => {},
+        reify: {},
+        ideal: {},
+        asDependency: () => {},
+        createVirtualRoot: () => {},
+      },
+      '@nrz/query': {
+        Query: class {
+          search = async () => ({ nodes: [] })
+        },
+      },
+      '@nrz/registry-client': {
+        assertOk,
+        requestError,
+        RegistryClient: class {
+          async request() {
+            return {
+              statusCode: 201,
+              text: () => '{"ok":true}',
+              json: () => ({ ok: true }),
+              getHeader: () => undefined,
+              getHeaderString: () => undefined,
+            } as MockCacheEntry
+          }
+        },
+        oidc: async () => undefined,
+        registryBase,
+      },
+      '../../src/query-host-contexts.ts': {
+        createHostContextsMap: async () => new Map(),
+      },
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [],
+      },
+      positionals: ['publish'],
+      values: { scope: ':workspace#nonexistent' },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'scope') return ':workspace#nonexistent'
+      return undefined
+    }) as LoadedConfig['get']
+
+    await t.rejects(cmd.command(config), {
+      message: 'No workspaces or query results found',
+    })
+  })
+})
+
+t.test('publish command with workspace paths', async t => {
+  t.test('publishes specific workspace paths', async t => {
+    // Store original request
+    const tempRequest = RegistryClient.prototype.request
+
+    // Override registry client request to mock success
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: '@test/a',
+            version: '1.0.0',
+          }),
+          'index.js': 'console.log("a")',
+          'nrz.json': '{}',
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: '@test/b',
+            version: '2.0.0',
+          }),
+          'index.js': 'console.log("b")',
+          'nrz.json': '{}',
+        },
+      },
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { workspace: ['packages/a'] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace') return ['packages/a']
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+
+    t.ok(Array.isArray(result), 'should return array of results')
+    const results = result as CommandResultSingle[]
+    t.equal(
+      results.length,
+      1,
+      'should publish only specified workspace',
+    )
+
+    t.equal(results[0]!.name, '@test/a')
+    t.equal(results[0]!.version, '1.0.0')
+  })
+})
+
+t.test('publish command workspace filtering modes', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'root',
+      version: '1.0.0',
+    }),
+    'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: '@test/a',
+          version: '1.0.0',
+        }),
+        'index.js': 'console.log("a")',
+        'nrz.json': '{}',
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: '@test/b',
+          version: '2.0.0',
+        }),
+        'index.js': 'console.log("b")',
+        'nrz.json': '{}',
+      },
+    },
+  })
+
+  const tempRequest = RegistryClient.prototype.request
+  t.beforeEach(() => {
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+  })
+  t.teardown(() => {
+    RegistryClient.prototype.request = tempRequest
+  })
+
+  t.test('filters by workspace name', async t => {
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { workspace: ['@test/a'] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace') return ['@test/a']
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 1)
+    t.equal(results[0]!.name, '@test/a')
+  })
+
+  t.test('filters by workspace fullpath', async t => {
+    const fullpath = resolve(dir, 'packages/a')
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath,
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { workspace: [fullpath] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace') return [fullpath]
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 1)
+    t.equal(results[0]!.name, '@test/a')
+  })
+
+  t.test('filters by resolved relative path', async t => {
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { workspace: ['./packages/a'] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace') return ['./packages/a']
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 1)
+    t.equal(results[0]!.name, '@test/a')
+  })
+
+  t.test('filters by minimatch glob', async t => {
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { workspace: ['packages/*'] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace') return ['packages/*']
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 2)
+  })
+})
+
+t.test('publish command with workspace-group', async t => {
+  t.test('publishes all workspaces in group', async t => {
+    // Store original request
+    const tempRequest = RegistryClient.prototype.request
+
+    // Override registry client request to mock success
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: '@test/a',
+            version: '1.0.0',
+          }),
+          'index.js': 'console.log("a")',
+          'nrz.json': '{}',
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: '@test/b',
+            version: '2.0.0',
+          }),
+          'index.js': 'console.log("b")',
+          'nrz.json': '{}',
+        },
+      },
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { 'workspace-group': ['packages'] },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'workspace-group') return ['packages']
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+
+    t.ok(Array.isArray(result), 'should return array of results')
+    const results = result as CommandResultSingle[]
+    t.equal(
+      results.length,
+      2,
+      'should publish all workspaces in group',
+    )
+
+    t.equal(results[0]!.name, '@test/a')
+    t.equal(results[0]!.version, '1.0.0')
+    t.equal(results[1]!.name, '@test/b')
+    t.equal(results[1]!.version, '2.0.0')
+  })
+})
+
+t.test('publish command with recursive', async t => {
+  t.test('publishes all workspaces recursively', async t => {
+    // Store original request
+    const tempRequest = RegistryClient.prototype.request
+
+    // Override registry client request to mock success
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: '@test/a',
+            version: '1.0.0',
+          }),
+          'index.js': 'console.log("a")',
+          'nrz.json': '{}',
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: '@test/b',
+            version: '2.0.0',
+          }),
+          'index.js': 'console.log("b")',
+          'nrz.json': '{}',
+        },
+      },
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [
+          {
+            name: '@test/a',
+            path: 'packages/a',
+            fullpath: resolve(dir, 'packages/a'),
+          },
+          {
+            name: '@test/b',
+            path: 'packages/b',
+            fullpath: resolve(dir, 'packages/b'),
+          },
+        ],
+      },
+      positionals: ['publish'],
+      values: { recursive: true },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'recursive') return true
+      return undefined
+    }) as LoadedConfig['get']
+
+    const result = await command(config)
+
+    t.ok(Array.isArray(result), 'should return array of results')
+    const results = result as CommandResultSingle[]
+    t.equal(results.length, 2, 'should publish all workspaces')
+
+    t.equal(results[0]!.name, '@test/a')
+    t.equal(results[0]!.version, '1.0.0')
+    t.equal(results[1]!.name, '@test/b')
+    t.equal(results[1]!.version, '2.0.0')
+  })
+
+  t.test('handles empty monorepo array', async t => {
+    // Store original request
+    const tempRequest = RegistryClient.prototype.request
+
+    // Override registry client request to mock success
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: [] }),
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: [],
+      },
+      positionals: ['publish'],
+      values: { recursive: true },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'recursive') return true
+      return undefined
+    }) as LoadedConfig['get']
+
+    await t.rejects(command(config), {
+      message: 'No workspaces or query results found',
+    })
+  })
+
+  t.test('handles null monorepo', async t => {
+    // Store original request
+    const tempRequest = RegistryClient.prototype.request
+
+    // Override registry client request to mock success
+    RegistryClient.prototype.request = (async () => {
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      } as MockCacheEntry
+    }) as unknown as typeof tempRequest
+
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: [] }),
+    })
+
+    const config = makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registry: 'https://registry.npmjs.org',
+        monorepo: null,
+      },
+      positionals: ['publish'],
+      values: { recursive: true },
+    })
+    config.get = ((key: unknown) => {
+      if (key === 'recursive') return true
+      return undefined
+    }) as LoadedConfig['get']
+
+    await t.rejects(command(config), {
+      message: 'No workspaces or query results found',
+    })
+  })
+})
+
+t.test('publish command fallback to projectRoot', async t => {
+  t.test(
+    'uses projectRoot when package.json.find returns null',
+    async t => {
+      // Store original request
+      const tempRequest = RegistryClient.prototype.request
+
+      // Override registry client request to mock success
+      RegistryClient.prototype.request = (async () => {
+        return {
+          statusCode: 201,
+          text: () => '{"ok":true}',
+          json: () => ({ ok: true }),
+          getHeader: () => undefined,
+          getHeaderString: () => undefined,
+        } as MockCacheEntry
+      }) as unknown as typeof tempRequest
+
+      t.teardown(() => {
+        RegistryClient.prototype.request = tempRequest
+      })
+
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'root',
+          version: '1.0.0',
+        }),
+        'index.js': 'console.log("root")',
+        'nrz.json': '{}',
+      })
+
+      // Override process.cwd to return a different path
+      const originalCwd = process.cwd
+      process.cwd = () => '/fake/path'
+      t.teardown(() => {
+        process.cwd = originalCwd
+      })
+
+      const packageJson = new PackageJson()
+      // Override find to return null for process.cwd(), projectRoot for dir
+      const originalFind = packageJson.find.bind(packageJson)
+      packageJson.find = (cwd?: string) => {
+        if (cwd === '/fake/path') return undefined
+        if (cwd === dir) return resolve(dir, 'package.json')
+        return originalFind(cwd)
+      }
+
+      const config = makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson,
+          registry: 'https://registry.npmjs.org',
+        },
+        positionals: ['publish'],
+      })
+
+      const result = await command(config)
+
+      t.notOk(Array.isArray(result), 'should return single result')
+      const singleResult = result as CommandResultSingle
+      t.equal(singleResult.name, 'root')
+      t.equal(singleResult.version, '1.0.0')
+    },
+  )
+})
+
+t.test('human view with arrays', async t => {
+  t.test('formats multiple results', async t => {
+    const results = [
+      {
+        id: 'test-a@1.0.0',
+        name: 'test-a',
+        version: '1.0.0',
+        tag: 'latest',
+        registry: 'https://registry.npmjs.org',
+        shasum: 'abc123',
+        integrity: 'sha512-xyz',
+        size: 1024,
+        access: 'public',
+        unpackedSize: 2048,
+        files: ['package.json', 'index.js'],
+      },
+      {
+        id: 'test-b@2.0.0',
+        name: 'test-b',
+        version: '2.0.0',
+        tag: 'latest',
+        registry: 'https://registry.npmjs.org',
+        shasum: 'def456',
+        integrity: 'sha512-abc',
+        size: 2048,
+        access: 'public',
+        unpackedSize: 4096,
+        files: ['package.json', 'index.js'],
+      },
+    ] as CommandResultSingle[]
+
+    const output = views.human(results)
+    t.match(output, /test-a@1\.0\.0/)
+    t.match(output, /test-b@2\.0\.0/)
+    t.match(output, /🏷️ Tag: latest/)
+    t.match(output, /📡 Registry: https:\/\/registry\.npmjs\.org/)
+  })
+})
+
+t.test('readme in publish metadata', async t => {
+  /** Publish `files` from a testdir and hand back the version manifest sent. */
+  const publishedManifest = async (
+    t: Test,
+    files: Record<string, string | Record<string, string>>,
+    values?: Record<string, unknown>,
+  ) => {
+    const dir = t.testdir({ 'nrz.json': '{}', ...files })
+    t.chdir(dir)
+
+    let publishBody: string | undefined
+    const tempRequest = RegistryClient.prototype.request
+    RegistryClient.prototype.request = (async (
+      _url: URL | string,
+      opts?: { body?: string },
+    ) => {
+      publishBody = opts?.body
+      return {
+        statusCode: 201,
+        text: () => '{"ok":true}',
+        json: () => ({ ok: true }),
+        getHeader: () => undefined,
+        getHeaderString: () => undefined,
+      }
+    }) as unknown as typeof tempRequest
+    t.teardown(() => {
+      RegistryClient.prototype.request = tempRequest
+    })
+
+    await command(
+      makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson: new PackageJson(),
+          registry: 'https://registry.npmjs.org',
+        },
+        positionals: ['publish'],
+        values,
+      }),
+    )
+
+    t.ok(publishBody, 'should have sent a request body')
+    return JSON.parse(publishBody!).versions['1.0.0']
+  }
+
+  t.test('sends the readme alongside the manifest', async t => {
+    const manifest = await publishedManifest(t, {
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+      }),
+      'README.md': '# my-package',
+    })
+    t.equal(manifest.readme, '# my-package')
+    t.equal(manifest.readmeFilename, 'README.md')
+  })
+
+  t.test('prefers the markdown readme', async t => {
+    const manifest = await publishedManifest(t, {
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+      }),
+      README: 'plain',
+      'README.markdown': '# markdown',
+    })
+    t.equal(manifest.readme, '# markdown')
+    t.equal(manifest.readmeFilename, 'README.markdown')
+  })
+
+  t.test('falls back to a non-markdown readme', async t => {
+    const manifest = await publishedManifest(t, {
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+      }),
+      'README.txt': 'plain text',
+    })
+    t.equal(manifest.readme, 'plain text')
+    t.equal(manifest.readmeFilename, 'README.txt')
+  })
+
+  t.test('sends no readme fields when there is none', async t => {
+    const manifest = await publishedManifest(t, {
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+      }),
+      'index.js': '// test file',
+    })
+    t.equal(manifest.readme, undefined)
+    t.equal(manifest.readmeFilename, undefined)
+  })
+
+  t.test('ignores a readme below the package root', async t => {
+    const manifest = await publishedManifest(t, {
+      'package.json': JSON.stringify({
+        name: 'my-package',
+        version: '1.0.0',
+      }),
+      docs: { 'README.md': '# nested' },
+    })
+    t.equal(manifest.readme, undefined)
+    t.equal(manifest.readmeFilename, undefined)
+  })
+
+  t.test('reads the readme from the publish directory', async t => {
+    const manifest = await publishedManifest(
+      t,
+      {
+        'package.json': JSON.stringify({
+          name: 'my-package',
+          version: '1.0.0',
+        }),
+        'README.md': '# source',
+        dist: {
+          'package.json': JSON.stringify({
+            name: 'my-package',
+            version: '1.0.0',
+          }),
+          'README.md': '# published',
+        },
+      },
+      { 'publish-directory': 'dist' },
+    )
+    t.equal(manifest.readme, '# published')
+  })
+})
+
+t.test('publishConfig.registry alone is enough', async t => {
+  const monorepoDir = (t: Test, aConfig: object, bConfig: object) => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+            ...aConfig,
+          }),
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'b',
+            version: '1.0.0',
+            ...bConfig,
+          }),
+        },
+      },
+    })
+    return makeTestConfig({
+      projectRoot: dir,
+      options: {
+        packageJson: new PackageJson(),
+        registries: {},
+        tag: 'latest',
+        monorepo: ['a', 'b'].map(name => ({
+          name,
+          path: `packages/${name}`,
+          fullpath: resolve(dir, 'packages', name),
+        })),
+      },
+      positionals: ['publish'],
+      values: { recursive: true },
+    })
+  }
+  const custom = (path: string) => ({
+    publishConfig: { registry: `https://custom.example.com/${path}` },
+  })
+
+  t.test('no pre-command registry gate', async t => {
+    const mod =
+      (await import('../../src/commands/publish.ts')) as Record<
+        string,
+        unknown
+      >
+    t.notOk(mod.needsRegistry)
+  })
+
+  t.test('publishes w/o any configured registry', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: '@test/pc',
+        version: '1.0.0',
+        ...custom('reg'),
+      }),
+      'nrz.json': '{}',
+    })
+    t.chdir(dir)
+    const result = (await command(
+      makeTestConfig({
+        projectRoot: dir,
+        options: {
+          packageJson: new PackageJson(),
+          registries: {},
+          tag: 'latest',
+        },
+        positionals: ['publish'],
+      }),
+    )) as CommandResultSingle
+    t.equal(result.registry, 'https://custom.example.com')
+    t.strictSame(requests, [
+      {
+        url: 'https://custom.example.com/reg/@test%2Fpc',
+        method: 'PUT',
+      },
+    ])
+  })
+
+  t.test('each workspace uses its own publishConfig', async t => {
+    const config = monorepoDir(t, custom('a'), custom('b'))
+    await command(config)
+    t.strictSame(
+      requests.map(r => r.url),
+      [
+        'https://custom.example.com/a/a',
+        'https://custom.example.com/b/b',
+      ],
+    )
+  })
+
+  t.test('missing registry fails before publishing any', async t => {
+    const config = monorepoDir(t, custom('a'), {})
+    await t.rejects(command(config), {
+      message: /Missing registry configuration/,
+      cause: { code: 'ECONFIG' },
+    })
+    t.strictSame(requests, [])
+  })
+
+  t.test('configured registry resolved at most once', async t => {
+    let calls = 0
+    const cmd = await t.mockImport<
+      typeof import('../../src/commands/publish.ts')
+    >('../../src/commands/publish.ts', {
+      '../../src/require-registry.ts': {
+        ...(await import('../../src/require-registry.ts')),
+        resolveRegistry: async () => {
+          calls++
+          return 'https://registry.example.com/'
+        },
+      },
+    })
+    for (const [aConfig, bConfig, want] of [
+      [{}, {}, 1],
+      [custom('a'), custom('b'), 0],
+    ] as const) {
+      calls = 0
+      const config = monorepoDir(t, aConfig, bConfig)
+      config.options['dry-run'] = true
+      await cmd.command(config)
+      t.equal(calls, want)
+    }
+  })
+})

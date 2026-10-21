@@ -1,59 +1,210 @@
 import { asDepID } from '@nrz/dep-id/browser'
 import { error } from '@nrz/error-cause'
 import { fastSplit } from '@nrz/fast-split'
-import { Spec, type SpecOptions } from '@nrz/spec/browser'
+import { Spec } from '@nrz/spec/browser'
+import type { SpecOptions } from '@nrz/spec/browser'
 import { longDependencyTypes } from '@nrz/types'
-import { isDependencyTypeShort } from '../dependencies.ts'
-import { type GraphLike } from '../types.ts'
+import type {
+  DependencyTypeShort,
+  GraphLike,
+  NodeLike,
+} from '@nrz/types'
 import {
-  type LockfileData,
-  type LockfileEdgeKey,
-  type LockfileEdgeValue,
+  asDependencySpecError,
+  isDependencyTypeShort,
+} from '../dependencies.ts'
+import type {
+  LockfileData,
+  LockfileEdgeKey,
+  LockfileEdgeValue,
+  SpecCache,
 } from './types.ts'
+
+export type LoadEdgesCache = {
+  specCache: SpecCache
+  prefix: string
+}
+
+export type ProcessingEdge = {
+  fromNode: NodeLike
+  toNode: NodeLike | undefined
+  depType: DependencyTypeShort
+  spec: Spec
+}
+
+const retrieveNodeFromGraph = (
+  key: string,
+  value: string,
+  graph: GraphLike,
+  fromId: string,
+  seenNodes?: Map<string, NodeLike>,
+): NodeLike | undefined => {
+  const foundNode = graph.nodes.get(asDepID(fromId))
+  if (!foundNode) {
+    // workspace or file nodes may be missing if the folder was removed
+    // while still referenced in the lockfile — skip gracefully
+    if (fromId.startsWith('workspace') || fromId.startsWith('file')) {
+      return undefined
+    }
+    throw error('Edge info missing its `from` node', {
+      found: {
+        nodes: [...graph.nodes].map(([id]) => id),
+        from: foundNode,
+        fromId,
+        edge: { [key]: value },
+      },
+    })
+  }
+  if (seenNodes) {
+    seenNodes.set(fromId, foundNode)
+  }
+  return foundNode
+}
+
+const parseEdgeSpec = (
+  specName: string,
+  bareSpec: string,
+  options: SpecOptions,
+  cache?: LoadEdgesCache,
+): Spec => {
+  // graph.addEdge mutates name/spec on '(unknown)' instances
+  if (!cache || specName === '(unknown)') {
+    return Spec.parse(specName, bareSpec, options)
+  }
+  const key = `${cache.prefix}\0${specName}\0${bareSpec}`
+  const cached = cache.specCache.get(key)
+  if (cached) return cached
+  const spec = Spec.parse(specName, bareSpec, options)
+  cache.specCache.set(key, spec)
+  return spec
+}
 
 export const loadEdges = (
   graph: GraphLike,
   edges: LockfileData['edges'],
   options: SpecOptions,
+  cache?: LoadEdgesCache,
 ) => {
   const entries = Object.entries(edges) as [
     LockfileEdgeKey,
     LockfileEdgeValue,
   ][]
+
+  const edgeCount = entries.length
+  // Only use optimizations for non-trivial graphs
+  const useOptimizations = edgeCount > 50
+  const edgeProcessingQueue: ProcessingEdge[] = []
+
+  // Cache for frequently accessed nodes to avoid repeated Map lookups
+  const seenNodes =
+    useOptimizations ? new Map<string, NodeLike>() : undefined
+
   for (const [key, value] of entries) {
     const [fromId, specName] = fastSplit(key, ' ', 2)
     const [depType, valRest] = fastSplit(value, ' ', 2)
     const vrSplit = valRest?.lastIndexOf(' ') ?? -1
+
     // not a valid edge record
-    /* c8 ignore start */
     if (!valRest || !depType || !fromId || !specName || vrSplit < 1) {
       continue
     }
-    /* c8 ignore stop */
-    const spec = Spec.parse(
-      specName,
-      valRest.substring(0, vrSplit),
-      options,
-    )
-    const toId = valRest.substring(vrSplit + 1)
-    const from = graph.nodes.get(asDepID(fromId))
-    if (!from) {
-      throw error('Edge info missing its `from` node', {
-        found: {
-          nodes: [...graph.nodes].map(([id]) => id),
-          from,
-          fromId,
-          edge: { [key]: value },
-        },
-      })
-    }
-    const to =
-      toId === 'MISSING' ? undefined : graph.nodes.get(asDepID(toId))
+
+    // Validate dependency type early
     if (!isDependencyTypeShort(depType)) {
       throw error('Found unsupported dependency type in lockfile', {
         validOptions: [...longDependencyTypes],
       })
     }
-    graph.addEdge(depType, spec, from, to)
+
+    // Use cached node lookup for large graphs, direct lookup for small ones
+    let fromNode: NodeLike | undefined
+    if (seenNodes) {
+      const seen = seenNodes.get(fromId)
+      if (seen) {
+        fromNode = seen
+      } else {
+        fromNode = retrieveNodeFromGraph(
+          key,
+          value,
+          graph,
+          fromId,
+          seenNodes,
+        )
+      }
+    } else {
+      fromNode = retrieveNodeFromGraph(key, value, graph, fromId)
+    }
+
+    // skip edges from workspace nodes that no longer exist
+    if (!fromNode) continue
+
+    const toId = valRest.substring(vrSplit + 1)
+    let toNode: NodeLike | undefined = undefined
+
+    if (toId !== 'MISSING') {
+      if (seenNodes) {
+        const seen = seenNodes.get(toId)
+        if (seen) {
+          toNode = seen
+        } else {
+          toNode = graph.nodes.get(asDepID(toId))
+          if (toNode) {
+            seenNodes.set(toId, toNode)
+          }
+        }
+      } else {
+        toNode = graph.nodes.get(asDepID(toId))
+      }
+    }
+
+    // Use the merged options directly — they already carry the
+    // correct registry from the lockfile's `options` + caller config.
+    // `fromNode.registry` is not populated yet at this point (the
+    // post-load hydration loop in load.ts sets it *after* edges are
+    // loaded), so overriding here would always inject `undefined`
+    // and silently revert to the default npm registry.
+    // See nrz/nrz#1580.
+    let spec: Spec
+    try {
+      spec = parseEdgeSpec(
+        specName,
+        valRest.substring(0, vrSplit),
+        options,
+        cache,
+      )
+    } catch (er) {
+      // spec text is the lockfile's; hidden lockfile errors are
+      // swallowed, so only nrz-lock.json surfaces here
+      throw asDependencySpecError(
+        er,
+        fromNode,
+        depType,
+        'nrz-lock.json',
+      )
+    }
+
+    if (useOptimizations) {
+      edgeProcessingQueue.push({
+        fromNode,
+        toNode,
+        depType,
+        spec,
+      })
+    } else {
+      // Process immediately for small graphs
+      graph.addEdge(depType, spec, fromNode, toNode)
+    }
+  }
+
+  // Batch process all edges (only for non-trivial graphs)
+  if (useOptimizations) {
+    for (const {
+      fromNode,
+      toNode,
+      depType,
+      spec,
+    } of edgeProcessingQueue) {
+      graph.addEdge(depType, spec, fromNode, toNode)
+    }
   }
 }

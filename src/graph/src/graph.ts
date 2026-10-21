@@ -1,31 +1,77 @@
-import { getId, joinDepIDTuple, type DepID } from '@nrz/dep-id'
+import {
+  baseDepID,
+  getId,
+  joinDepIDTuple,
+  splitExtra,
+} from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
 import { satisfies } from '@nrz/satisfies'
-import { Spec, type SpecOptions } from '@nrz/spec'
-import { type Manifest, type DependencyTypeShort } from '@nrz/types'
-import { type Monorepo } from '@nrz/workspaces'
-import { inspect, type InspectOptions } from 'util'
-import { type Edge } from './edge.ts'
+import { assertPathSafeName, getOptions, Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import type {
+  GraphLike,
+  NodeLike,
+  NormalizedManifest,
+  DependencySaveType,
+} from '@nrz/types'
+import type { Monorepo } from '@nrz/workspaces'
+import { inspect } from 'node:util'
+import type { InspectOptions } from 'node:util'
 import { lockfileData } from './lockfile/save.ts'
-import { Node, type NodeOptions } from './node.ts'
-import { type GraphLike, type NodeLike } from './types.ts'
+import type { OptionsChange } from './lockfile/types.ts'
+import { Edge } from './edge.ts'
+import { copyPackageMetadata, Node } from './node.ts'
+import type { NodeOptions } from './node.ts'
+import { resolveSaveType } from './resolve-save-type.ts'
+import type { PeerContext } from './ideal/types.ts'
 
 const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
+
+const cacheKeySeparator = '│'
 
 // this is always the same, but we don't hard code it as a string,
 // in case the DepID module needs to change its delimiter again ever.
 const mainDepID = joinDepIDTuple(['file', '.'])
 
-export type ManifestInventory = Map<DepID, Manifest>
+export type ManifestInventory = Map<DepID, NormalizedManifest>
 
 const getMap = <T extends Map<any, any>>(m?: T) =>
   m ?? (new Map() as T)
+
+/**
+ * Get a cache key for a resolution based on the
+ * spec, location and query modifier.
+ */
+const getResolutionCacheKey = (
+  spec: Spec,
+  location: string,
+  extra: string,
+): string => {
+  const f = spec.final
+  // if it's a file: dep, then the fromNode location matters
+  const fromPrefix = f.type === 'file' ? location + ' : ' : ''
+  // the unique key should also precise what is the type of the spec,
+  // and in the case of a registry, what registry it is from.
+  const typePrecisionKey =
+    f.registry || f.type === 'registry' ?
+      // registry-type specs always get a registry segment, even when
+      // no registry is configured, since findResolution trusts cache
+      // hits without re-running satisfies()
+      `${cacheKeySeparator}registry` +
+      `${cacheKeySeparator}${f.registry ?? '<none>'}`
+    : f.gitRemote ?
+      `${cacheKeySeparator}git` + `${cacheKeySeparator}${f.gitRemote}`
+    : `${cacheKeySeparator}${f.type}`
+  const modifierSuffix = `${cacheKeySeparator}${extra}`
+  return fromPrefix + String(f) + typePrecisionKey + modifierSuffix
+}
 
 export type GraphOptions = SpecOptions & {
   /**
    * The main importer manifest info.
    */
-  mainManifest: Manifest
+  mainManifest: NormalizedManifest
   /**
    * An inventory of seen manifests.
    */
@@ -104,13 +150,80 @@ export class Graph implements GraphLike {
    */
   projectRoot: string
 
+  /**
+   * The peer context sets used to resolve peer dependencies within this graph.
+   */
+  peerContexts: PeerContext[]
+
+  /**
+   * Cache of forked peer contexts so identical fork operations can reuse
+   * previously created contexts instead of duplicating them.
+   *
+   * Key format is internal and constructed in `ideal/peers.ts`.
+   */
+  peerContextForkCache = new Map<string, PeerContext>()
+
+  /**
+   * Whether the options used to create this graph differ from the
+   * options stored in the lockfile it was loaded from. When true,
+   * the ideal builder must reset edges and rebuild the graph.
+   */
+  optionsChanged = false
+
+  /**
+   * The individual differences behind `optionsChanged`, in the order
+   * they are reported to the user. Empty when nothing changed.
+   */
+  optionsChanges: OptionsChange[] = []
+
+  /**
+   * Whether the lockfile on disk no longer matches this graph even
+   * though no node changed, e.g. an importer edge spec was rewritten to
+   * the value saved to `package.json`, a node dev/optional flag was
+   * re-derived, or the config options the graph was built with differ
+   * from the ones stored in the lockfile. Reify saves the lockfiles
+   * from its no-diff early return when set.
+   */
+  lockfileStale = false
+
+  /**
+   * Lockfile edge targets captured immediately before `resetEdges()`.
+   * Used by the ideal builder to reuse locked resolutions across a rebuild.
+   */
+  lockedResolutions?: Map<string, DepID>
+
+  /**
+   * Tracks the current peer context index.
+   */
+  currentPeerContextIndex = 0
+
+  /**
+   * Count of structural writes: nodes placed or removed, edges reset,
+   * created or re-pointed. Never reset; callers snapshot it and compare,
+   * so the ideal builder can tell whether a rebuild touched anything the
+   * peer identities depend on.
+   */
+  mutations = 0
+
   constructor(options: GraphOptions) {
     const { mainManifest, monorepo } = options
     this.#options = options
+    // hydrate spec options to their full contents, including defaults
+    const specOptions = getOptions({
+      registry: options.registry,
+      registries: options.registries,
+      'git-hosts': options['git-hosts'],
+      'git-host-archives': options['git-host-archives'],
+      'scoped-registries': options['scoped-registries'],
+      'jsr-registries': options['jsr-registries'],
+      catalog: options.catalog,
+      catalogs: options.catalogs,
+    })
     this.manifests = getMap(options.manifests)
     this.projectRoot = options.projectRoot
     this.#nodeOptions = {
       ...this.#options,
+      ...specOptions,
       graph: this,
     }
 
@@ -128,6 +241,7 @@ export class Graph implements GraphLike {
     mainImporter.setImporterLocation(mainImporterLocation)
     mainImporter.mainImporter = true
     this.mainImporter = mainImporter
+    this.mainImporter.workspaces = new Map()
     this.importers.add(mainImporter)
     this.manifests.set(mainImporter.id, mainManifest)
 
@@ -145,40 +259,146 @@ export class Graph implements GraphLike {
         wsNode.setImporterLocation(`./${ws.path}`)
         if (wsNode.manifest) {
           this.manifests.set(wsNode.id, wsNode.manifest)
+          // set bins for workspace nodes so they can be linked
+          // when another importer depends on this workspace
+          /* c8 ignore next 3 - tested by integration tests */
+          if (wsNode.manifest.bin) {
+            wsNode.bins = wsNode.manifest.bin
+          }
         }
         this.importers.add(wsNode)
+        // creates a virtual edge to connect the workspaces to the root node
+        const edge = new Edge(
+          'prod',
+          Spec.parse(wsNode.name, 'workspace:*', this.#options),
+          this.mainImporter,
+          wsNode,
+        )
+        this.mainImporter.workspaces.set(wsNode.name, edge)
+      }
+    }
+
+    // initializes the peer context set collection
+    const initialPeerContext: PeerContext = new Map()
+    initialPeerContext.index = this.currentPeerContextIndex
+    this.peerContexts = [initialPeerContext]
+  }
+
+  /**
+   * Get the next peer context index.
+   */
+  nextPeerContextIndex() {
+    return ++this.currentPeerContextIndex
+  }
+
+  /**
+   * Re-derive node `dev`/`optional` flags: a node is dev/optional only
+   * when every importer path crosses a dev/optional edge. Placement only
+   * ever lowers these flags, so removed or retyped edges leave them
+   * stale. Sets `lockfileStale` when any flag changes.
+   */
+  recomputeFlags() {
+    const reach = (skip: (edge: Edge) => boolean) => {
+      const seen = new Set<Node>(this.importers)
+      for (const node of seen) {
+        for (const edge of node.edgesOut.values()) {
+          if (edge.to && !skip(edge)) seen.add(edge.to)
+        }
+      }
+      return seen
+    }
+    const nonDev = reach(edge => edge.dev)
+    const nonOptional = reach(edge => edge.optional)
+    for (const node of this.nodes.values()) {
+      const dev = !nonDev.has(node)
+      const optional = !nonOptional.has(node)
+      if (node.dev !== dev || node.optional !== optional) {
+        node.dev = dev
+        node.optional = optional
+        this.lockfileStale = true
       }
     }
   }
 
   /**
-   * Delete all nodes that are unreachable from the importers.
+   * Delete all nodes and edges that are unreachable from the importers.
    * The collection of deleted nodes is returned.
    *
-   * NOTE: This can be extremely slow for large graphs, and is almost always
-   * unnecessary! Only call when it is known that some unreachable nodes may
-   * have been created, for example when deleting the unneeded subgraph when an
+   * Marking is O(N+E) and always runs, but when nothing is unreachable
+   * and every reachable node is registered under its own id, `nodes` is
+   * left alone — no rebuild, no sort, and an empty map is returned.
+   * Only call when it is known that some unreachable nodes may have been
+   * created, for example when deleting the unneeded subgraph when an
    * optional node fails to resolve/install.
    */
   gc() {
     const { nodes } = this
-    this.nodes = new Map()
+    this.edges.clear()
     const marked = new Set(this.importers)
-    for (const imp of marked) {
-      // don't delete the importer!
-      nodes.delete(imp.id)
-      this.nodes.set(imp.id, imp)
-      for (const { to } of imp.edgesOut.values()) {
-        if (!to || marked.has(to)) continue
-        marked.add(to)
-        nodes.delete(to.id)
-        this.nodes.set(to.id, to)
+    for (const node of marked) {
+      for (const edge of node.edgesOut.values()) {
+        this.edges.add(edge)
+        const { to } = edge
+        if (to) marked.add(to)
       }
+    }
+    let intact = marked.size === nodes.size
+    if (intact) {
+      for (const node of marked) {
+        if (nodes.get(node.id) !== node) {
+          intact = false
+          break
+        }
+      }
+    }
+    if (intact) return new Map<DepID, Node>()
+    this.nodes = new Map()
+    for (const node of marked) {
+      // don't delete the reachable ones!
+      nodes.delete(node.id)
+      this.nodes.set(node.id, node)
     }
     for (const node of nodes.values()) {
       this.removeNode(node)
     }
+    this.sortNodes()
     return nodes
+  }
+
+  /**
+   * Rebuild `nodes` so importers come first, then remaining nodes in
+   * DepID order. Matches lockfile save so a built graph and a
+   * save→load round-trip iterate the same way.
+   *
+   * A graph coming from the lockfile loader is already in that order, so
+   * the pass below detects it and keeps the map as-is.
+   */
+  sortNodes() {
+    const cmp = (a: Node, b: Node) => a.id.localeCompare(b.id, 'en')
+    const rest: Node[] = []
+    const importers = this.importers.values()
+    let seenImporters = 0
+    let sorted = true
+    let prev: Node | undefined
+    for (const node of this.nodes.values()) {
+      if (this.importers.has(node)) {
+        // importers must come first, in importer-set order
+        if (rest.length || importers.next().value !== node) {
+          sorted = false
+        }
+        seenImporters++
+        continue
+      }
+      if (sorted && prev && cmp(prev, node) > 0) sorted = false
+      prev = node
+      rest.push(node)
+    }
+    if (sorted && seenImporters === this.importers.size) return
+    rest.sort(cmp)
+    const nodes = new Map<DepID, Node>()
+    for (const node of this.importers) nodes.set(node.id, node)
+    for (const node of rest) nodes.set(node.id, node)
+    this.nodes = nodes
   }
 
   /**
@@ -187,16 +407,22 @@ export class Graph implements GraphLike {
    * pointing to nothing will be created to represent that missing dependency.
    */
   addEdge(
-    type: DependencyTypeShort,
+    type: DependencySaveType,
     spec: Spec,
     from: NodeLike,
     to?: NodeLike,
   ) {
+    if (to) {
+      const toNode = to as Node
+      toNode.detached = false
+    }
     // fix any nameless spec
     if (spec.name === '(unknown)') {
       if (to) {
         spec.name = to.name /* c8 ignore next */ || '(unknown)'
         spec.spec = `${to.name}@${spec.bareSpec}`
+        // this alias becomes the symlink segment in add-edge
+        assertPathSafeName(spec.name, spec.spec)
       } else {
         throw error(
           'Impossible to place a missing, nameless dependency',
@@ -212,6 +438,10 @@ export class Graph implements GraphLike {
         edge.spec.bareSpec === spec.bareSpec
       ) {
         if (to && to !== edge.to) {
+          this.mutations++
+          // removes this edge from its destination edgesIn ref
+          edge.to?.edgesIn.delete(edge)
+          // now swap the destination to the new one
           edge.to = to as Node
           edge.to.edgesIn.add(edge)
         }
@@ -219,8 +449,13 @@ export class Graph implements GraphLike {
       }
       this.edges.delete(edge)
     }
+    this.mutations++
     const f = from as Node
-    const edgeOut = f.addEdgesTo(type, spec, to as Node | undefined)
+    const edgeOut = f.addEdgesTo(
+      resolveSaveType(from, spec.name, type),
+      spec,
+      to as Node | undefined,
+    )
     this.edges.add(edgeOut)
     return edgeOut
   }
@@ -228,32 +463,40 @@ export class Graph implements GraphLike {
   /**
    * Find an existing node to satisfy a dependency
    */
-  findResolution(spec: Spec, fromNode: Node) {
+  findResolution(spec: Spec, fromNode: Node, extra = '') {
     const f = spec.final
-    // if it's a file: dep, then the fromNode location matters
-    const fromPref =
-      f.type === 'file' ? fromNode.location + ' : ' : ''
-    const sf = fromPref + String(f)
+    const sf = getResolutionCacheKey(f, fromNode.location, extra)
     const cached = this.resolutions.get(sf)
-    if (cached) return cached
+    if (cached && !cached.detached) return cached
     const nbn = this.nodesByName.get(f.name)
     if (!nbn) return undefined
+    const sat = (n: Node) =>
+      satisfies(
+        n.id,
+        f,
+        fromNode.location,
+        this.projectRoot,
+        this.monorepo,
+      )
+    // a live node always wins; a detached one is only a fallback, and is
+    // never cached, placePackage caches it again when it reattaches. a
+    // detached cached entry is what this location resolved to last time,
+    // so it wins over nodesByName (sorted id) order - but the cache is
+    // written at placement, not by satisfies(), so re-check it here.
+    let detached: Node | undefined =
+      cached?.detached && sat(cached) ? cached : undefined
     for (const node of nbn) {
-      if (
-        satisfies(
-          node.id,
-          f,
-          fromNode.location,
-          this.projectRoot,
-          this.monorepo,
-        )
-      ) {
-        this.resolutions.set(sf, node)
-        // always set by now, because the node was added at some point
-        this.resolutionsReverse.get(node)?.add(sf)
-        return node
+      if (!sat(node)) continue
+      if (node.detached) {
+        detached ??= node
+        continue
       }
+      this.resolutions.set(sf, node)
+      // always set by now, because the node was added at some point
+      this.resolutionsReverse.get(node)?.add(sf)
+      return node
     }
+    return detached
   }
 
   /**
@@ -261,7 +504,7 @@ export class Graph implements GraphLike {
    */
   addNode(
     id?: DepID,
-    manifest?: Manifest,
+    manifest?: NormalizedManifest,
     spec?: Spec,
     name?: string,
     version?: string,
@@ -277,18 +520,14 @@ export class Graph implements GraphLike {
     this.nodes.set(node.id, node)
     const nbn = this.nodesByName.get(node.name) ?? new Set()
     nbn.add(node)
-    this.nodesByName.set(node.name, nbn)
-    if (spec) {
-      const f = String(spec.final)
-      // if it's a file: type, then that is fromNode-specific,
-      // so we can't shortcut add it here.
-      if (spec.final.type !== 'file') {
-        this.resolutions.set(f, node)
-        const rrev = this.resolutionsReverse.get(node) ?? new Set()
-        rrev.add(f)
-        this.resolutionsReverse.set(node, rrev)
-      }
-    }
+
+    // ensure the nodes by name set is always sorted, this will help
+    // keeping a deterministic graph resolution when reusing nodes
+    const newByNameSet = new Set(
+      [...nbn].sort((a, b) => a.id.localeCompare(b.id, 'en')),
+    )
+    this.nodesByName.set(node.name, newByNameSet)
+
     if (manifest) {
       this.manifests.set(node.id, manifest)
     }
@@ -305,11 +544,13 @@ export class Graph implements GraphLike {
    */
   placePackage(
     fromNode: Node,
-    depType: DependencyTypeShort,
+    depType: DependencySaveType,
     spec: Spec,
-    manifest?: Manifest,
+    manifest?: NormalizedManifest,
     id?: DepID,
-  ) {
+    extra?: string,
+  ): Node | undefined {
+    this.mutations++
     // if no manifest is available, then create an edge that has no
     // reference to any other node, representing a missing dependency
     if (!manifest && !id) {
@@ -326,7 +567,7 @@ export class Graph implements GraphLike {
         depType === 'peerOptional',
     }
 
-    const depId = id || (manifest && getId(spec, manifest))
+    const depId = id || (manifest && getId(spec, manifest, extra))
 
     /* c8 ignore start - should not be possible */
     if (!depId) {
@@ -344,28 +585,107 @@ export class Graph implements GraphLike {
       this.addEdge(depType, spec, fromNode, toFoundNode)
       // the current only stays dev/optional if this dep lets it remain so
       // if it's not already, we don't make it dev or optional.
+      toFoundNode.detached = false
       toFoundNode.dev &&= flags.dev
       toFoundNode.optional &&= flags.optional
+
+      // Hydrate manifest and integrity on existing nodes (e.g. loaded
+      // from a lockfile without manifest data).  Without this, nodes
+      // that already have `resolved` set from the lockfile will never
+      // get their integrity populated because `setResolved()` is
+      // skipped when `resolved` is already present.
+      if (manifest) {
+        if (!toFoundNode.manifest) {
+          toFoundNode.manifest = manifest
+          this.manifests.set(toFoundNode.id, manifest)
+        }
+        // never onto a node resolved to a `.tar.br`: `dist.integrity`
+        // is the `.tgz` hash, a different artifact's bytes
+        if (!toFoundNode.brotli) {
+          toFoundNode.integrity ??= manifest.dist?.integrity
+        }
+      }
+
       return toFoundNode
     }
 
     // creates a new node and edges to its parent
-    const toNode = this.addNode(depId, manifest)
+    // Peer-fork rebuilds mint a provisional `peer.N` DepID that does not
+    // match the lockfile's content-hash ID, so exact-ID reuse misses.
+    // Copy integrity/resolved from the same package version (same tarball).
+    let samePackage: Node | undefined
+    const base = baseDepID(depId)
+    const nbn = this.nodesByName.get(manifest?.name ?? spec.name)
+    if (nbn) {
+      for (const n of nbn) {
+        if (baseDepID(n.id) !== base) continue
+        if (!n.integrity && !n.resolved) continue
+        samePackage = n
+        if (n.integrity) break
+      }
+    }
+    const toNode = this.addNode(depId, manifest, spec)
     toNode.registry = spec.registry
     toNode.dev = flags.dev
     toNode.optional = flags.optional
+    if (samePackage) copyPackageMetadata(toNode, samePackage)
+    // not onto a node bound for the `.tar.br`: `dist.integrity` is the
+    // `.tgz` hash, and that is a different artifact's bytes
+    if (!toNode.brotli) toNode.integrity ??= manifest?.dist?.integrity
+    // split extra into modifier and peerSetHash
+    if (extra) {
+      const { modifier, peerSetHash } = splitExtra(extra)
+      toNode.modifier = modifier
+      toNode.peerSetHash = peerSetHash
+    }
+
+    // add extra manifest info if available
+    if (manifest) {
+      const { bin, engines, os, cpu, libc } = manifest
+      // add platform info if available
+      if (engines || os || cpu || libc) {
+        const platform: NodeLike['platform'] = {}
+        if (engines) platform.engines = engines
+        if (os) platform.os = os
+        if (cpu) platform.cpu = cpu
+        if (libc) platform.libc = libc
+        toNode.platform = platform
+      }
+      // add bin info if available
+      if (bin) {
+        toNode.bins = bin
+      }
+    }
+    toNode.maybeSetConfusedManifest(spec, manifest)
+
     this.addEdge(depType, spec, fromNode, toNode)
+
+    // populate resolution cache if applicable
+    const f = getResolutionCacheKey(
+      spec.final,
+      fromNode.location,
+      extra || '',
+    )
+    this.resolutions.set(f, toNode)
+    const rrev = this.resolutionsReverse.get(toNode) ?? new Set()
+    rrev.add(f)
+    this.resolutionsReverse.set(toNode, rrev)
+
     return toNode
   }
 
   /**
    * Removes a node and its relevant edges from the graph.
    *
+   * Use the `keepEdges` option to keep the edges that were pointing to
+   * this node and only removes their `to` property value.
+   *
    * If a replacement is provided, then any edges that were previously
    * pointing to the removed node will be directed to the replacement,
    * if it is valid to do so.
    */
-  removeNode(node: Node, replacement?: Node) {
+  removeNode(node: Node, replacement?: Node, keepEdges?: boolean) {
+    this.mutations++
     this.nodes.delete(node.id)
     const nbn = this.nodesByName.get(node.name)
     // if it's the last one, just remove the set
@@ -391,10 +711,59 @@ export class Graph implements GraphLike {
         )
       ) {
         edge.to = replacement
+      } else if (keepEdges) {
+        edge.to = undefined
       } else {
         edge.from.edgesOut.delete(edge.spec.name)
         this.edges.delete(edge)
       }
+    }
+  }
+
+  /**
+   * Removes the resolved node of a given edge.
+   */
+  removeEdgeResolution(edge: Edge, extra = '') {
+    this.mutations++
+    const node = edge.to
+    const resolutionKey = getResolutionCacheKey(
+      edge.spec,
+      edge.from.location,
+      extra,
+    )
+    if (node) {
+      edge.to = undefined
+      this.resolutions.delete(resolutionKey)
+      this.resolutionsReverse.get(node)?.delete(resolutionKey)
+      this.nodesByName.delete(node.name)
+      node.edgesIn.delete(edge)
+      if (node.edgesIn.size === 0) {
+        this.nodes.delete(node.id)
+      }
+    }
+  }
+
+  /**
+   * Remove all edges from the graph while preserving nodes and resolution caches.
+   * This allows the graph to be reconstructed efficiently using the existing nodes.
+   */
+  resetEdges() {
+    this.mutations++
+    // Clear the global edges set
+    this.edges.clear()
+
+    // Clear all node edge relationships
+    for (const node of this.nodes.values()) {
+      // Mark nodes as detached so ideal rebuild treats them as candidates
+      // that must be (re)placed during traversal. Detached nodes with a
+      // manifest can skip refetch; detached nodes without a manifest must
+      // fetch from package-info during ideal rebuild. Importers are the
+      // traversal roots and are never re-placed, so they stay attached.
+      node.detached = !node.importer
+
+      // detaches all edges from this node
+      node.edgesOut.clear()
+      node.edgesIn.clear()
     }
   }
 

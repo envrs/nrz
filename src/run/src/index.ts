@@ -1,17 +1,32 @@
 import { error } from '@nrz/error-cause'
+import { userAgent } from '@nrz/user-agent'
 import { PackageJson } from '@nrz/package-json'
-import {
-  promiseSpawn,
-  type PromiseSpawnOptions,
-  type SpawnResultNoStdio,
-  type SpawnResultStdioStrings,
+import type {
+  PromiseSpawnOptions,
+  SpawnResultNoStdio,
+  SpawnResultStdioStrings,
 } from '@nrz/promise-spawn'
-import { type Manifest } from '@nrz/types'
+import { promiseSpawn } from '@nrz/promise-spawn'
+import type { Manifest } from '@nrz/types'
 import { foregroundChild } from 'foreground-child'
 import { proxySignals } from 'foreground-child/proxy-signals'
 import { statSync } from 'node:fs'
-import { delimiter, resolve } from 'node:path'
+import { delimiter, resolve, sep } from 'node:path'
 import { walkUp } from 'walk-up-path'
+import {
+  getNodeGypShimDir,
+  hasNodeGypReference,
+  hasNodeGypBinding,
+} from './node-gyp.ts'
+
+// Re-export all named exports from node-gyp.ts
+export * from './node-gyp.ts'
+
+/**
+ * The user agent string set as `npm_config_user_agent` in lifecycle script
+ * environments. Matches the `user-agent` header sent with registry requests.
+ */
+export const npmConfigUserAgent = userAgent
 
 /** map of which node_modules/.bin folders exist */
 const dotBins = new Map<string, boolean>()
@@ -30,18 +45,33 @@ const dirExists = (p: string) => {
   }
 }
 
+const nmBin = `${sep}node_modules${sep}.bin`
+
 /**
- * Add all exsting `node_modules/.bin` folders to the PATH that
+ * Add all existing `node_modules/.bin` folders to the PATH that
  * exist between the cwd and the projectRoot, so dependency bins
  * are found, with closer paths higher priority.
+ *
+ * If command contains node-gyp reference, also inject the shim directory
+ * as a fallback (after all existing PATH entries).
  */
-const addPaths = (
+const addPaths = async (
   projectRoot: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv => {
+  command?: string,
+): Promise<NodeJS.ProcessEnv> => {
   const { PATH = '' } = env
+  const PATHsplit = PATH.split(delimiter)
   const paths = new Set<string>()
+
+  // anything in the PATH that already has node_modules/.bin is a thing
+  // we put there, perhaps for the nrx exec cache usage
+  for (const p of PATHsplit) {
+    if (p.endsWith(nmBin)) {
+      paths.add(p)
+    }
+  }
   for (const p of walkUp(cwd)) {
     const dotBin = resolve(p, 'node_modules/.bin')
     if (dirExists(dotBin)) paths.add(dotBin)
@@ -51,6 +81,19 @@ const addPaths = (
     /* c8 ignore next - pretty rare to have an empty entry */
     if (p) paths.add(p)
   }
+
+  // If command has node-gyp, inject shim directory as fallback (last)
+  if (command && hasNodeGypReference(command)) {
+    try {
+      const shimDir = await getNodeGypShimDir()
+      paths.add(shimDir)
+      /* c8 ignore start */
+    } catch {
+      // Ignore shim creation errors, command will fail naturally if node-gyp is needed
+    }
+    /* c8 ignore stop */
+  }
+
   env.PATH = [...paths].join(delimiter)
   return env
 }
@@ -80,6 +123,13 @@ export type SharedOptions = PromiseSpawnOptions & {
    * platform-specific shell will be used.
    */
   'script-shell'?: boolean | string
+
+  /**
+   * If true, then `FORCE_COLOR=1` will be set in the environment so that
+   * scripts will typically have colored output enablled, even if the output
+   * is not a tty.
+   */
+  color?: boolean
 }
 
 /**
@@ -98,7 +148,10 @@ export type RunOptions = SharedOptions & {
   /**
    * Pass in a manifest to avoid having to read it at all
    */
-  manifest?: Manifest
+  manifest?: Pick<
+    Manifest,
+    'scripts' | 'gypfile' | 'hasInstallScript'
+  >
 
   /**
    * if the script is not defined in package.json#scripts, just ignore it and
@@ -196,37 +249,77 @@ const runImpl = async <
     packageJson = new PackageJson(),
     ignoreMissing = false,
     manifest,
+    'script-shell': shell = true,
     ...execArgs
   } = options
   const pjPath = resolve(options.cwd, 'package.json')
   // npm adds a `"install": "node-gyp rebuild"` if a binding.gyp
   // is present at the time of publish, EVEN IF it's not included
   // in the package. So, we need to read the actual package.json
-  // in those cases.
-  const untrustworthy = !!(
-    manifest?.gypfile &&
-    arg0 === 'install' &&
-    manifest.scripts?.install === 'node-gyp rebuild'
-  )
+  // in those cases. Likewise an abbreviated registry manifest only
+  // says `hasInstallScript`, and the scripts live on disk.
+  const untrustworthy =
+    !!manifest &&
+    ((manifest.gypfile === true &&
+      arg0 === 'install' &&
+      manifest.scripts?.install === 'node-gyp rebuild') ||
+      (manifest.hasInstallScript === true && !manifest.scripts))
   const pj =
     (untrustworthy ? undefined : manifest) ??
     packageJson.read(options.cwd)
   const { scripts } = pj
-  const command = scripts?.[arg0]
-  if (!command) {
+
+  const command =
+    scripts?.[arg0] ??
+    // npm's implicit install behavior: "If there is a binding.gyp file in the
+    // root of your package and you haven't defined your own install or preinstall
+    // scripts, npm will default the install command to compile using node-gyp
+    // via node-gyp rebuild"
+    ((
+      arg0 === 'install' &&
+      !scripts?.install &&
+      !scripts?.preinstall &&
+      hasNodeGypBinding(options.cwd)
+    ) ?
+      'node-gyp rebuild'
+    : undefined)
+
+  // Check for pre/post commands even if main command doesn't exist for cases
+  // like packages that have only a preinstall or postinstall script.
+  const precommand = !options.ignorePrePost && scripts?.[`pre${arg0}`]
+  const postcommand =
+    !options.ignorePrePost && scripts?.[`post${arg0}`]
+
+  const emptyResult = () =>
+    ({
+      command: '',
+      args: execArgs.args ?? [],
+      cwd: options.cwd,
+      status: 0,
+      signal: null,
+      stdout: empty,
+      stderr: empty,
+    }) as R
+
+  const execCommand = (command: string, preOrPost?: 'pre' | 'post') =>
+    execImpl({
+      arg0: command,
+      ...execArgs,
+      'script-shell': shell,
+      // pre/post scripts always have empty args, main script uses execArgs.args
+      args: preOrPost ? [] : (execArgs.args ?? []),
+      env: {
+        ...execArgs.env,
+        npm_config_user_agent: npmConfigUserAgent,
+        npm_package_json: pjPath,
+        npm_lifecycle_event: `${preOrPost ?? ''}${arg0}`,
+        npm_lifecycle_script: command,
+      },
+    })
+
+  if (!command && !precommand && !postcommand) {
     if (ignoreMissing) {
-      return {
-        command: '',
-        /* c8 ignore next */
-        args: execArgs.args ?? [],
-        cwd: options.cwd,
-        status: 0,
-        signal: null,
-        stdout: empty,
-        stderr: empty,
-        // `as` to workaround "could be instantiated with arbitrary type".
-        // it's private and used in 2 places, we know that it isn't.
-      } as R
+      return emptyResult()
     }
     throw error('Script not defined in package.json', {
       name: arg0,
@@ -237,60 +330,79 @@ const runImpl = async <
     })
   }
 
-  const precommand = !options.ignorePrePost && scripts[`pre${arg0}`]
   const pre =
-    precommand ?
-      await execImpl({
-        arg0: precommand,
-        ...execArgs,
-        args: [],
-        env: {
-          ...execArgs.env,
-          npm_package_json: pjPath,
-          npm_lifecycle_event: `pre${arg0}`,
-          npm_lifecycle_script: precommand,
-        },
-      })
-    : undefined
-  if (pre && (pre.status || pre.signal)) {
-    return pre as RunImplResult<R>
-  }
-  const result: RunImplResult<R> = await execImpl({
-    arg0: command,
-    ...execArgs,
-    env: {
-      ...execArgs.env,
-      npm_package_json: pjPath,
-      npm_lifecycle_event: arg0,
-      npm_lifecycle_script: command,
-    },
-  })
-  result.pre = pre
-  if (result.signal || result.status) {
-    return result
+    precommand ? await execCommand(precommand, 'pre') : undefined
+
+  if (pre?.status || pre?.signal) {
+    return {
+      ...pre,
+    }
   }
 
-  const postcommand = !options.ignorePrePost && scripts[`post${arg0}`]
-  if (!postcommand) return result
+  const main = command ? await execCommand(command) : emptyResult()
 
-  const post = await execImpl({
-    arg0: postcommand,
-    ...execArgs,
-    args: [],
-    env: {
-      ...execArgs.env,
-      npm_package_json: pjPath,
-      npm_lifecycle_event: `post${arg0}`,
-      npm_lifecycle_script: postcommand,
-    },
-  })
-
-  if (post.status || post.signal) {
-    const { status, signal } = post
-    return Object.assign(result, { post, status, signal })
+  if (main.signal || main.status) {
+    return {
+      ...main,
+      ...(pre ? { pre } : {}),
+    }
   }
-  result.post = post
-  return result
+
+  const post =
+    postcommand ? await execCommand(postcommand, 'post') : undefined
+
+  if (post?.signal || post?.status) {
+    return {
+      ...main,
+      ...(pre ? { pre } : {}),
+      post,
+      signal: post.signal,
+      status: post.status,
+    } as RunImplResult<R>
+  }
+
+  return {
+    ...main,
+    ...(pre ? { pre } : {}),
+    ...(post ? { post } : {}),
+  }
+}
+
+/**
+ * Escapes a string for safe inclusion in a POSIX shell command.
+ * Wraps in single quotes and escapes any embedded single quotes.
+ */
+const shellEscape = (s: string): string =>
+  `'${s.replace(/'/g, "'\\''")}'`
+
+const isPosixShell = (shell: boolean | string): boolean => {
+  if (typeof shell === 'string')
+    return !/(^|\\)cmd\.exe$/i.test(shell)
+  return process.platform !== 'win32'
+}
+
+/**
+ * When running through a POSIX shell, Node.js joins `spawn(cmd, args)`
+ * into a single string without escaping (DEP0190). This means
+ * characters like `#` are interpreted as shell comments, silently
+ * swallowing the rest of the command line.
+ *
+ * Fix: append shell-escaped args directly to the command string
+ * so the script is still shell-interpreted but args are passed
+ * literally.
+ *
+ * On Windows with cmd.exe, these characters are not special, so
+ * we leave args as-is to avoid injecting POSIX quotes that cmd.exe
+ * would pass through literally.
+ */
+const withShellArgs = (
+  shell: boolean | string,
+  arg0: string,
+  args: string[],
+): [cmd: string, args: string[]] => {
+  if (!shell || args.length === 0 || !isPosixShell(shell))
+    return [arg0, args]
+  return [`${arg0} ${args.map(shellEscape).join(' ')}`, []]
 }
 
 /**
@@ -305,23 +417,39 @@ export const exec = async (
     cwd,
     env = {},
     projectRoot,
-    'script-shell': shell = true,
+    'script-shell': shell = false,
+    color = false,
     ...spawnOptions
   } = options
 
-  const p = promiseSpawn(arg0, args, {
+  const [spawnCmd, spawnArgs] = withShellArgs(shell, arg0, args)
+
+  const p = promiseSpawn(spawnCmd, spawnArgs, {
+    // `signal` kills it when aborted
     ...spawnOptions,
     shell,
     stdio: 'pipe',
     stdioString: true,
     cwd,
-    env: addPaths(projectRoot, cwd, {
-      ...process.env,
-      ...env,
-    }),
+    env: await addPaths(
+      projectRoot,
+      cwd,
+      {
+        ...process.env,
+        ...env,
+        FORCE_COLOR: color && process.stdout.isTTY ? '1' : '0',
+      },
+      arg0,
+    ),
     windowsHide: true,
   })
   proxySignals(p.process)
+  // rejected on 'error'; a killed shell's own child would keep these
+  // pipes, and so this process, open
+  p.process.on('error', () => {
+    p.process.stdout.destroy()
+    p.process.stderr.destroy()
+  })
   return await p
 }
 
@@ -337,22 +465,34 @@ export const execFG = async (
     cwd,
     projectRoot,
     env = {},
-    'script-shell': shell = true,
+    'script-shell': shell = false,
+    color = true,
+    signal,
     ...spawnOptions
   } = options
 
+  const [spawnCmd, spawnArgs] = withShellArgs(shell, arg0, args)
+
+  const processEnv = await addPaths(
+    projectRoot,
+    cwd,
+    {
+      ...process.env,
+      ...env,
+      FORCE_COLOR: color ? '1' : '0',
+    },
+    arg0,
+  )
+
   return new Promise<SpawnResultNoStdio>(res => {
     foregroundChild(
-      arg0,
-      args,
+      spawnCmd,
+      spawnArgs,
       {
         ...spawnOptions,
         shell,
         cwd,
-        env: addPaths(projectRoot, cwd, {
-          ...process.env,
-          ...env,
-        }),
+        env: processEnv,
       },
       (status, signal) => {
         res({

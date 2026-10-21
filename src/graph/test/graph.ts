@@ -1,14 +1,19 @@
 import { hydrate, joinDepIDTuple } from '@nrz/dep-id'
-import { kCustomInspect, Spec, type SpecOptions } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import { kCustomInspect, Spec } from '@nrz/spec'
+import { normalizeManifest } from '@nrz/types'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { inspect } from 'node:util'
 import t from 'tap'
 import { Edge } from '../src/edge.ts'
 import { Graph } from '../src/graph.ts'
-import { type GraphLike } from '../src/types.ts'
+import type { Node } from '../src/node.ts'
 
 t.cleanSnapshot = s =>
-  s.replace(/^(\s+)"projectRoot": .*$/gm, '$1"projectRoot": #')
+  s
+    .replace(/^(\s+)"projectRoot": .*$/gm, '$1"projectRoot": #')
+    .replace(/^(\s+)"fullpath": .*$/gm, '$1"fullpath": #')
 
 Object.assign(Spec.prototype, {
   [kCustomInspect](this: Spec) {
@@ -28,10 +33,13 @@ t.test('Graph', async t => {
     name: 'my-project',
     version: '1.0.0',
   }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     ...configData,
     mainManifest,
-    projectRoot: t.testdirName,
+    projectRoot,
   })
   t.strictSame(
     graph.mainImporter.manifest?.name,
@@ -42,15 +50,17 @@ t.test('Graph', async t => {
     inspect(graph, { depth: 0 }),
     'should print with special tag name',
   )
-  const newNode = graph.addNode(
-    undefined,
+  const newNode = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@^1.0.0', configData),
     {
       name: 'foo',
       version: '1.0.0',
       dependencies: { localdep: 'file:localdep' },
     },
-    Spec.parse('foo@^1.0.0'),
   )
+  if (!newNode) throw new Error('failed to place foo@1.0.0')
   t.strictSame(
     graph.nodes.size,
     2,
@@ -71,16 +81,16 @@ t.test('Graph', async t => {
     'location gutcheck',
   )
 
-  const localdep = graph.addNode(
-    joinDepIDTuple(['file', newNode.location + '/localdep']),
+  const localdep = graph.placePackage(
+    newNode,
+    'prod',
+    Spec.parse('localdep@file:localdep', configData),
     { name: 'localdep', version: '1.2.3' },
-    Spec.parse('localdep@file:localdep'),
-    'localdep',
-    '1.2.3',
+    joinDepIDTuple(['file', 'localdep', newNode.id]),
   )
   t.equal(
     graph.findResolution(
-      Spec.parse('localdep@file:./localdep'),
+      Spec.parse('localdep@file:./localdep', configData),
       newNode,
     ),
     localdep,
@@ -88,26 +98,54 @@ t.test('Graph', async t => {
 
   t.equal(
     graph.findResolution(
-      Spec.parse('bar@npm:foo@1.x'),
+      Spec.parse('bar@npm:foo@1.x', configData),
       graph.mainImporter,
     ),
     newNode,
   )
   t.equal(
-    graph.findResolution(Spec.parse('foo@1.x'), graph.mainImporter),
+    graph.findResolution(
+      Spec.parse('foo@1.x', configData),
+      graph.mainImporter,
+    ),
     newNode,
   )
   t.equal(
-    graph.findResolution(Spec.parse('foo@3.x'), graph.mainImporter),
+    graph.findResolution(
+      Spec.parse('foo@3.x', configData),
+      graph.mainImporter,
+    ),
     undefined,
   )
   t.equal(
-    graph.findResolution(Spec.parse('asdf@1.x'), graph.mainImporter),
+    graph.findResolution(
+      Spec.parse('asdf@1.x', configData),
+      graph.mainImporter,
+    ),
     undefined,
   )
   t.same(
     graph.resolutionsReverse.get(newNode),
-    new Set(['foo@^1.0.0', 'foo@1.x']),
+    new Set([
+      'foo@^1.0.0│registry│https://registry.npmjs.org/│',
+      'foo@1.x│registry│https://registry.npmjs.org/│',
+    ]),
+  )
+  // a registry spec with no configured registry still gets a distinct
+  // registry segment, so it can't collide with a configured one
+  t.equal(
+    graph.findResolution(Spec.parse('foo@1.x'), graph.mainImporter),
+    newNode,
+    'registry-less spec resolves through satisfies()',
+  )
+  t.same(
+    graph.resolutionsReverse.get(newNode),
+    new Set([
+      'foo@^1.0.0│registry│https://registry.npmjs.org/│',
+      'foo@1.x│registry│https://registry.npmjs.org/│',
+      'foo@1.x│registry│<none>│',
+    ]),
+    'registry-less spec gets its own cache key',
   )
   t.same(graph.nodesByName.get('foo'), new Set([newNode]))
   const fooTwo = graph.addNode(
@@ -116,37 +154,132 @@ t.test('Graph', async t => {
       name: 'foo',
       version: '2.0.0',
     },
-    Spec.parse('foo@^2.0.0'),
+    Spec.parse('foo@^2.0.0', configData),
   )
   t.same(graph.nodesByName.get('foo'), new Set([newNode, fooTwo]))
 
   graph.addEdge(
-    'prod',
-    Spec.parse('foo', '^1.0.0 || 2'),
+    'implicit',
+    Spec.parse('foo', '^1.0.0 || 2', configData),
     graph.mainImporter,
     newNode,
   )
-  t.strictSame(
+  t.equal(
     graph.mainImporter.edgesOut.size,
     1,
     'should add edge to the list of edgesOut in its origin node',
   )
-  graph.addEdge(
+  t.equal(
+    graph.mainImporter.edgesOut.get('foo')?.type,
     'prod',
-    Spec.parse('foo@^1.0.0'),
+    '"implicit" type is saved as prod if not already existing',
+  )
+  graph.addEdge(
+    'dev',
+    Spec.parse('foo@^1.0.0', configData),
     graph.mainImporter,
     newNode,
   )
-  t.strictSame(
+  t.equal(
+    graph.mainImporter.edgesOut.get('foo')?.type,
+    'dev',
+    'saving as dev moves prod dep to dev',
+  )
+  graph.addEdge(
+    'implicit',
+    Spec.parse('foo@^1.0.1', configData),
+    graph.mainImporter,
+    newNode,
+  )
+  t.equal(
+    graph.mainImporter.edgesOut.get('foo')?.type,
+    'dev',
+    'saving as "implicit" leaves dep as dev',
+  )
+  t.equal(
+    String(graph.mainImporter.edgesOut.get('foo')?.spec),
+    'foo@^1.0.1',
+    'version was updated',
+  )
+  t.equal(
     graph.mainImporter.edgesOut.size,
     1,
     'should not allow for adding new edges between same nodes',
   )
-  graph.addEdge('prod', Spec.parse('missing@*'), graph.mainImporter)
+  graph.addEdge(
+    'prod',
+    Spec.parse('missing@*', configData),
+    graph.mainImporter,
+  )
   graph.removeNode(newNode, fooTwo)
   t.same(graph.nodesByName.get('foo'), new Set([fooTwo]))
   graph.removeNode(fooTwo)
   t.same(graph.nodesByName.get('foo'), undefined)
+})
+
+t.test('findResolution respects registries', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const registries = {
+    a: 'https://a.example.com/',
+    b: 'https://b.example.com/',
+  }
+  const graph = new Graph({
+    projectRoot,
+    ...configData,
+    registries,
+    mainManifest: { name: 'proj', version: '1.0.0' },
+  })
+
+  // add bar in registry a
+  const barA = graph.addNode(
+    joinDepIDTuple([
+      'registry',
+      'https://a.example.com/',
+      'bar@1.0.0',
+    ]),
+    { name: 'bar', version: '1.0.0' },
+    Spec.parse('bar@a:bar@1.0.0', { registries }),
+  )
+  // add bar in registry b
+  const barB = graph.addNode(
+    joinDepIDTuple([
+      'registry',
+      'https://b.example.com/',
+      'bar@1.0.0',
+    ]),
+    { name: 'bar', version: '1.0.0' },
+    Spec.parse('bar@b:bar@1.0.0', { registries }),
+  )
+
+  // same name, different registries
+  t.ok(barA, 'node for registry a created')
+  t.ok(barB, 'node for registry b created')
+
+  // resolve explicitly against a
+  const resA = graph.findResolution(
+    Spec.parse('bar@a:bar@1.x', { registries }),
+    graph.mainImporter,
+  )
+  t.equal(resA, barA, 'resolves to registry a node')
+
+  // resolve explicitly against b
+  const resB = graph.findResolution(
+    Spec.parse('bar@b:bar@1.x', { registries }),
+    graph.mainImporter,
+  )
+  t.equal(resB, barB, 'resolves to registry b node')
+
+  // resolve without registry uses any satisfying node (barA or barB)
+  const resAny = graph.findResolution(
+    Spec.parse('bar@1.x', configData),
+    graph.mainImporter,
+  )
+  t.notOk(
+    resAny,
+    'should not resolve to any node if its registry has not been specified',
+  )
 })
 
 t.test('using placePackage', async t => {
@@ -159,25 +292,29 @@ t.test('using placePackage', async t => {
       missing: '^1.0.0',
     },
   }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest,
   })
   const foo = graph.placePackage(
     graph.mainImporter,
     'prod',
-    Spec.parse('foo', '^1.0.0'),
+    Spec.parse('foo', '^1.0.0', configData),
     {
       name: 'foo',
       version: '1.0.0',
+      bin: { foo: './bin.js' }, // cover bin field handling
     },
   )
   t.ok(foo)
   const bar = graph.placePackage(
     graph.mainImporter,
     'prod',
-    Spec.parse('bar', '^1.0.0'),
+    Spec.parse('bar', '^1.0.0', configData),
     {
       name: 'bar',
       version: '1.0.0',
@@ -190,12 +327,12 @@ t.test('using placePackage', async t => {
   const baz = graph.placePackage(
     bar,
     'prod',
-    Spec.parse('baz', '^1.0.0'),
+    Spec.parse('baz', '^1.0.0', configData),
     {
       name: 'baz',
       version: '1.0.0',
       dist: {
-        tarball: 'https://registry.khulnasoft.com/baz',
+        tarball: 'https://registry.nrz.khulnasoft.com/baz',
       },
     },
   )
@@ -203,12 +340,17 @@ t.test('using placePackage', async t => {
   graph.placePackage(
     graph.mainImporter,
     'prod',
-    Spec.parse('missing', '^1.0.0'),
+    Spec.parse('missing', '^1.0.0', configData),
   )
-  graph.placePackage(baz, 'prod', Spec.parse('foo', '^1.0.0'), {
-    name: 'foo',
-    version: '1.0.0',
-  })
+  graph.placePackage(
+    baz,
+    'prod',
+    Spec.parse('foo', '^1.0.0', configData),
+    {
+      name: 'foo',
+      version: '1.0.0',
+    },
+  )
   t.matchSnapshot(inspect(graph, { depth: 3 }), 'the graph')
   const [edge] = baz.edgesIn
   if (!edge) throw new Error('failed to retrieve baz')
@@ -247,14 +389,32 @@ t.test('using placePackage', async t => {
     /Impossible to place a missing, nameless dependency/,
     'should throw an impossible to place error',
   )
+
+  // place a package using a github spec
+  graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar', 'github:foo/bar', configData),
+    {
+      name: 'bar',
+      version: '1.0.0',
+    },
+  )
+  t.matchSnapshot(
+    inspect(graph, { depth: 3 }),
+    'should add a type=git package',
+  )
 })
 
 t.test('main manifest missing name', async t => {
   const mainManifest = {
     version: '1.0.0',
   }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest,
   })
@@ -276,10 +436,12 @@ t.test('workspaces', async t => {
     name: 'my-project',
     version: '1.0.0',
   }
-  const dir = t.testdir({
+  const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: {
+        packages: ['./packages/*'],
+      },
     }),
     packages: {
       a: {
@@ -296,9 +458,11 @@ t.test('workspaces', async t => {
       },
     },
   })
-  const monorepo = Monorepo.maybeLoad(dir)
+  t.chdir(projectRoot)
+  unload('project')
+  const monorepo = Monorepo.maybeLoad(projectRoot)
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest,
     monorepo,
@@ -309,7 +473,7 @@ t.test('workspaces', async t => {
       graph,
       'should have a ref to its graph',
     )
-    importer.graph = 'Graph {}' as unknown as GraphLike
+    importer.graph = 'Graph {}' as unknown as Graph
   }
   t.matchSnapshot(
     graph.importers,
@@ -340,15 +504,18 @@ t.test('prevent duplicate edges', async t => {
     name: 'bar',
     version: '3.0.0',
   }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
     ...configData,
     mainManifest,
-    projectRoot: t.testdirName,
+    projectRoot,
   })
   graph.placePackage(
     graph.mainImporter,
     'prod',
-    Spec.parse('foo@*'),
+    Spec.parse('foo@*', configData),
     fooManifest,
   )
   graph.addNode(
@@ -369,19 +536,19 @@ t.test('prevent duplicate edges', async t => {
   if (!fooNode) throw new Error('did not get node added to graph')
   graph.addEdge(
     'prod',
-    Spec.parse('bar@*'),
+    Spec.parse('bar@*', configData),
     fooNode,
     graph.nodes.get(joinDepIDTuple(['registry', '', 'bar@1.0.0'])),
   )
   graph.addEdge(
     'prod',
-    Spec.parse('bar@*'),
+    Spec.parse('bar@*', configData),
     fooNode,
     graph.nodes.get(joinDepIDTuple(['registry', '', 'bar@1.0.0'])),
   )
   graph.addEdge(
     'prod',
-    Spec.parse('bar@*'),
+    Spec.parse('bar@*', configData),
     fooNode,
     graph.nodes.get(joinDepIDTuple(['registry', '', 'bar@2.0.0'])),
   )
@@ -390,7 +557,7 @@ t.test('prevent duplicate edges', async t => {
     new Set([
       new Edge(
         'prod',
-        Spec.parse('foo@*'),
+        Spec.parse('foo@*', configData),
         graph.nodes.get(joinDepIDTuple(['file', '.']))!,
         graph.nodes.get(
           joinDepIDTuple(['registry', '', 'foo@1.0.0']),
@@ -398,7 +565,7 @@ t.test('prevent duplicate edges', async t => {
       ),
       new Edge(
         'prod',
-        Spec.parse('bar@*'),
+        Spec.parse('bar@*', configData),
         graph.nodes.get(
           joinDepIDTuple(['registry', '', 'foo@1.0.0']),
         )!,
@@ -423,7 +590,7 @@ t.test('prevent duplicate edges', async t => {
   // create a missing edge to verify it's not a problem
   fooNode.edgesOut.set(
     joinDepIDTuple(['registry', '', 'asdf@1.0.0']),
-    new Edge('prod', Spec.parse('asdf@1'), fooNode),
+    new Edge('prod', Spec.parse('asdf@1', configData), fooNode),
   )
   const collected = graph.gc()
   t.match(
@@ -442,4 +609,2571 @@ t.test('prevent duplicate edges', async t => {
     ]),
     'garbage-collected nodes are returned',
   )
+})
+t.test('in-place edge replacement', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { foo: '*' },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  // Create multiple versions of the same package
+  const bar1 = graph.addNode(
+    joinDepIDTuple(['registry', '', 'bar@1.0.0']),
+    {
+      name: 'bar',
+      version: '1.0.0',
+    },
+    Spec.parse('bar@1.0.0', configData),
+  )
+
+  const bar2 = graph.addNode(
+    joinDepIDTuple(['registry', 'custom', 'bar@2.0.0']),
+    {
+      name: 'bar',
+      version: '2.0.0',
+    },
+    Spec.parse('bar@2.0.0', configData),
+  )
+
+  // Create an edge from main importer to bar1
+  const spec = Spec.parse('bar@*', configData)
+  const edge = graph.addEdge('prod', spec, graph.mainImporter, bar1)
+
+  // Verify initial edge setup is correct
+  t.equal(edge.to, bar1, 'edge initially points to bar1')
+  t.ok(bar1.edgesIn.has(edge), 'bar1 has the edge in its edgesIn set')
+  t.notOk(
+    bar2.edgesIn.has(edge),
+    'bar2 does not have the edge in its edgesIn set',
+  )
+  t.equal(
+    graph.mainImporter.edgesOut.get('bar'),
+    edge,
+    'edge is in mainImporter edgesOut',
+  )
+
+  // Now replace the edge destination with bar2
+  const replacedEdge = graph.addEdge(
+    'prod',
+    spec,
+    graph.mainImporter,
+    bar2,
+  )
+
+  // Verify the edge was properly updated
+  t.equal(replacedEdge, edge, 'the same edge object was returned')
+  t.equal(edge.to, bar2, 'edge now points to bar2')
+  t.notOk(
+    bar1.edgesIn.has(edge),
+    'bar1 no longer has the edge in its edgesIn set',
+  )
+  t.ok(
+    bar2.edgesIn.has(edge),
+    'bar2 now has the edge in its edgesIn set',
+  )
+  t.equal(
+    graph.mainImporter.edgesOut.get('bar'),
+    edge,
+    'edge is still in mainImporter edgesOut',
+  )
+  t.equal(graph.edges.size, 1, 'graph still has only one edge')
+})
+
+t.test('garbage collection', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { foo: '*' },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  // Add connected nodes that should be kept
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@*', configData),
+    {
+      name: 'foo',
+      version: '1.0.0',
+      dependencies: { bar: '*' },
+    },
+  )
+
+  graph.placePackage(foo!, 'prod', Spec.parse('bar@*', configData), {
+    name: 'bar',
+    version: '1.0.0',
+  })
+
+  // Add disconnected nodes that should be collected
+  const baz = graph.addNode(
+    joinDepIDTuple(['registry', '', 'baz@1.0.0']),
+    {
+      name: 'baz',
+      version: '1.0.0',
+    },
+  )
+
+  const qux = graph.addNode(
+    joinDepIDTuple(['registry', '', 'qux@1.0.0']),
+    {
+      name: 'qux',
+      version: '1.0.0',
+    },
+  )
+
+  // Create an edge between the disconnected nodes
+  graph.addEdge('prod', Spec.parse('qux@*', configData), baz, qux)
+
+  // Check initial state
+  t.equal(graph.nodes.size, 5, 'graph initially has 5 nodes')
+  t.equal(graph.edges.size, 3, 'graph initially has 3 edges')
+  t.ok(
+    graph.nodes.has(joinDepIDTuple(['registry', '', 'baz@1.0.0'])),
+    'baz node exists',
+  )
+  t.ok(
+    graph.nodes.has(joinDepIDTuple(['registry', '', 'qux@1.0.0'])),
+    'qux node exists',
+  )
+
+  // Run garbage collection
+  const collected = graph.gc()
+
+  // Verify nodes connected to importers are preserved
+  t.equal(graph.nodes.size, 3, 'graph has 3 nodes after gc')
+  t.ok(
+    graph.nodes.has(joinDepIDTuple(['file', '.'])),
+    'main importer node is preserved',
+  )
+  t.ok(
+    graph.nodes.has(joinDepIDTuple(['registry', '', 'foo@1.0.0'])),
+    'foo node is preserved',
+  )
+  t.ok(
+    graph.nodes.has(joinDepIDTuple(['registry', '', 'bar@1.0.0'])),
+    'bar node is preserved',
+  )
+
+  // Verify disconnected nodes are collected
+  t.equal(collected.size, 2, 'gc collected 2 nodes')
+  t.ok(
+    collected.has(joinDepIDTuple(['registry', '', 'baz@1.0.0'])),
+    'baz node was collected',
+  )
+  t.ok(
+    collected.has(joinDepIDTuple(['registry', '', 'qux@1.0.0'])),
+    'qux node was collected',
+  )
+
+  // Verify edge between baz and qux is removed
+  t.equal(graph.edges.size, 2, 'graph has 2 edges after gc')
+
+  // Verify the nodesByName entries are updated
+  t.notOk(
+    graph.nodesByName.has('baz'),
+    'baz removed from nodesByName',
+  )
+  t.notOk(
+    graph.nodesByName.has('qux'),
+    'qux removed from nodesByName',
+  )
+
+  // Add more nodes and run gc again to test the path where nodes are marked during traversal
+  graph.addNode(joinDepIDTuple(['registry', '', 'newnode@1.0.0']), {
+    name: 'newnode',
+    version: '1.0.0',
+  })
+
+  t.equal(
+    graph.nodes.size,
+    4,
+    'graph has 4 nodes after adding newnode',
+  )
+
+  const secondCollected = graph.gc()
+
+  t.equal(secondCollected.size, 1, 'second gc collected 1 node')
+  t.equal(graph.nodes.size, 3, 'graph has 3 nodes after second gc')
+  t.ok(
+    secondCollected.has(
+      joinDepIDTuple(['registry', '', 'newnode@1.0.0']),
+    ),
+    'newnode was collected',
+  )
+})
+
+t.test('extra parameter for modifiers', async t => {
+  const mainManifest = {
+    name: 'root-project',
+    version: '1.0.0',
+    dependencies: {
+      a: '^1.0.0',
+      b: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({
+    'nrz.json': JSON.stringify({
+      modifiers: {
+        ':root > #a': '1.0.0',
+        ':root > #a > #c': '1.0.0',
+      },
+    }),
+  })
+  t.chdir(projectRoot)
+  unload('project')
+
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  // Place package a with a selector path modifier ":root > #a"
+  const nodeA = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('a@^1.0.0', configData),
+    {
+      name: 'a',
+      version: '1.0.0',
+      dependencies: {
+        c: '^1.0.0',
+      },
+    },
+    undefined,
+    ':root > #a',
+  )
+
+  t.ok(nodeA, 'node a was created successfully')
+  t.equal(
+    nodeA?.modifier,
+    ':root > #a',
+    'node a has the correct modifier',
+  )
+
+  // Place package b with no extra parameter
+  const nodeB = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('b@^1.0.0', configData),
+    {
+      name: 'b',
+      version: '1.0.0',
+    },
+  )
+
+  t.ok(nodeB, 'node b was created successfully')
+  t.equal(nodeB?.modifier, undefined, 'node b has no modifier')
+
+  // Place package c with a nested selector path ":root > #a > #c"
+  const nodeC = graph.placePackage(
+    nodeA!,
+    'prod',
+    Spec.parse('c@^1.0.0', configData),
+    {
+      name: 'c',
+      version: '1.0.0',
+    },
+    undefined,
+    ':root > #a > #c',
+  )
+
+  t.ok(nodeC, 'node c was created successfully')
+  t.equal(
+    nodeC?.modifier,
+    ':root > #a > #c',
+    'node c has the correct modifier',
+  )
+
+  // Verify that we can find the nodes in the graph by their modifiers
+  const foundNodeA = [...graph.nodes.values()].find(
+    node => node.modifier === ':root > #a',
+  )
+
+  t.equal(foundNodeA, nodeA, 'can find node a by its modifier')
+
+  const foundNodeC = [...graph.nodes.values()].find(
+    node => node.modifier === ':root > #a > #c',
+  )
+
+  t.equal(foundNodeC, nodeC, 'can find node c by its modifier')
+
+  // Verify that the nodes have the correct structure
+  t.equal(nodeA?.name, 'a', 'node a has the correct name')
+
+  t.equal(nodeC?.name, 'c', 'node c has the correct name')
+
+  t.ok(
+    graph.mainImporter.edgesOut.has('a'),
+    'main importer has an edge to node a',
+  )
+
+  t.ok(nodeA?.edgesOut.has('c'), 'node a has an edge to node c')
+
+  // Verify the edge structure matches the selector paths
+  const edgeToA = graph.mainImporter.edgesOut.get('a')
+  t.equal(
+    edgeToA?.to,
+    nodeA,
+    'edge from root to a points to the correct node',
+  )
+
+  const edgeToC = nodeA?.edgesOut.get('c')
+  t.equal(
+    edgeToC?.to,
+    nodeC,
+    'edge from a to c points to the correct node',
+  )
+})
+
+t.test('removeEdgeResolution', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+      bar: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  t.test(
+    'should remove edge resolution and clean up caches',
+    async t => {
+      // Create a node and edge
+      const fooNode = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('foo@^1.0.0', configData),
+        {
+          name: 'foo',
+          version: '1.0.0',
+        },
+      )
+
+      const edge = graph.mainImporter.edgesOut.get('foo')
+      if (!edge || !fooNode)
+        throw new Error('Failed to create test setup')
+
+      // Verify initial state
+      t.equal(edge.to, fooNode, 'edge initially points to foo node')
+      t.ok(fooNode.edgesIn.has(edge), 'foo node has edge in edgesIn')
+      t.ok(graph.nodesByName.has('foo'), 'nodesByName has foo entry')
+      t.ok(
+        graph.resolutions.size > 0,
+        'resolutions cache has entries',
+      )
+      t.ok(
+        graph.resolutionsReverse.has(fooNode),
+        'resolutionsReverse has foo node entry',
+      )
+
+      // Remove the edge resolution
+      graph.removeEdgeResolution(edge)
+
+      // Verify the edge resolution was removed
+      t.equal(edge.to, undefined, 'edge.to is now undefined')
+      t.notOk(
+        fooNode.edgesIn.has(edge),
+        'foo node no longer has edge in edgesIn',
+      )
+      t.notOk(
+        graph.nodesByName.has('foo'),
+        'nodesByName no longer has foo entry',
+      )
+
+      // Removes from graph.nodes if there are
+      // no other edges linking to this node
+      t.ok(
+        !graph.nodes.has(fooNode.id),
+        'node removed from graph.nodes',
+      )
+    },
+  )
+
+  t.test('should handle edge with no resolved node', async t => {
+    // Create an unresolved edge
+    const missingEdge = graph.addEdge(
+      'prod',
+      Spec.parse('missing@^1.0.0', configData),
+      graph.mainImporter,
+    )
+
+    t.equal(missingEdge.to, undefined, 'edge has no resolved node')
+
+    // This should not throw and should be a no-op
+    t.doesNotThrow(
+      () => graph.removeEdgeResolution(missingEdge),
+      'removing resolution from unresolved edge should not throw',
+    )
+
+    t.equal(
+      missingEdge.to,
+      undefined,
+      'edge.to remains undefined after removeEdgeResolution',
+    )
+  })
+
+  t.test('should work with queryModifier parameter', async t => {
+    const queryModifier = ':root > #bar'
+
+    // Create a node and add it to resolution cache with query modifier
+    const barNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('bar@^1.0.0', configData),
+      {
+        name: 'bar',
+        version: '1.0.0',
+      },
+      undefined,
+      queryModifier,
+    )
+
+    const edge = graph.mainImporter.edgesOut.get('bar')
+    if (!edge || !barNode)
+      throw new Error('Failed to create test setup')
+
+    // Manually add to resolution cache with query modifier
+    const resolutionKey = `bar@^1.0.0│registry│https://registry.npmjs.org/│${queryModifier}`
+    graph.resolutions.set(resolutionKey, barNode)
+    const reverseSet =
+      graph.resolutionsReverse.get(barNode) ?? new Set()
+    reverseSet.add(resolutionKey)
+    graph.resolutionsReverse.set(barNode, reverseSet)
+
+    // Verify the cache entry exists
+    t.equal(
+      graph.resolutions.get(resolutionKey),
+      barNode,
+      'resolution cache has entry with query modifier',
+    )
+    t.ok(
+      graph.resolutionsReverse.get(barNode)?.has(resolutionKey),
+      'reverse resolution cache has entry',
+    )
+
+    // Remove edge resolution with query modifier
+    graph.removeEdgeResolution(edge, queryModifier)
+
+    // Verify the specific cache entry was removed
+    t.equal(
+      graph.resolutions.get(resolutionKey),
+      undefined,
+      'resolution cache entry with query modifier was removed',
+    )
+    t.notOk(
+      graph.resolutionsReverse.get(barNode)?.has(resolutionKey),
+      'reverse resolution cache entry was removed',
+    )
+
+    t.equal(edge.to, undefined, 'edge.to is now undefined')
+    t.notOk(
+      barNode.edgesIn.has(edge),
+      'bar node no longer has edge in edgesIn',
+    )
+    t.notOk(
+      graph.nodesByName.has('bar'),
+      'nodesByName no longer has bar entry',
+    )
+  })
+
+  t.test('should handle multiple nodes with same name', async t => {
+    // Create two different versions of the same package
+    const foo1Node = graph.addNode(
+      joinDepIDTuple(['registry', '', 'samename@1.0.0']),
+      {
+        name: 'samename',
+        version: '1.0.0',
+      },
+      Spec.parse('samename@1.0.0', configData),
+    )
+
+    const foo2Node = graph.addNode(
+      joinDepIDTuple(['registry', '', 'samename@2.0.0']),
+      {
+        name: 'samename',
+        version: '2.0.0',
+      },
+      Spec.parse('samename@2.0.0', configData),
+    )
+
+    // Create edges to both nodes
+    const edge1 = graph.addEdge(
+      'prod',
+      Spec.parse('samename@^1.0.0', configData),
+      graph.mainImporter,
+      foo1Node,
+    )
+
+    const edge2 = graph.addEdge(
+      'dev',
+      Spec.parse('samename@^2.0.0', configData),
+      graph.mainImporter,
+      foo2Node,
+    )
+
+    // Verify both nodes are in nodesByName
+    const nodesByName = graph.nodesByName.get('samename')
+    t.ok(nodesByName?.has(foo1Node), 'nodesByName has foo1 node')
+    t.ok(nodesByName?.has(foo2Node), 'nodesByName has foo2 node')
+    t.equal(
+      nodesByName?.size,
+      2,
+      'nodesByName has 2 nodes with same name',
+    )
+
+    // Remove resolution for one edge
+    graph.removeEdgeResolution(edge1)
+
+    // Verify the correct cleanup occurred
+    t.equal(edge1.to, undefined, 'edge1.to is now undefined')
+    t.notOk(
+      foo1Node.edgesIn.has(edge1),
+      'foo1 node no longer has edge1 in edgesIn',
+    )
+
+    // The nodesByName entry should be completely removed
+    // Note: This might be a bug in the implementation - it removes the entire entry
+    // rather than just the specific node, but we're testing the current behavior
+    t.notOk(
+      graph.nodesByName.has('samename'),
+      'nodesByName entry was removed entirely',
+    )
+
+    // edge2 should still be valid
+    t.equal(edge2.to, foo2Node, 'edge2 still points to foo2 node')
+    t.ok(
+      foo2Node.edgesIn.has(edge2),
+      'foo2 node still has edge2 in edgesIn',
+    )
+  })
+
+  t.test('should clean up resolution caches properly', async t => {
+    // Create a node with multiple resolution cache entries
+    const bazNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('baz@^1.0.0', configData),
+      {
+        name: 'baz',
+        version: '1.0.0',
+      },
+    )
+
+    if (!bazNode) throw new Error('Failed to create baz node')
+
+    const edge = graph.mainImporter.edgesOut.get('baz')
+    if (!edge) throw new Error('Failed to get baz edge')
+
+    // Manually add additional resolution cache entries
+    const additionalKey = 'baz@1.x'
+    graph.resolutions.set(additionalKey, bazNode)
+    const reverseSet =
+      graph.resolutionsReverse.get(bazNode) ?? new Set()
+    reverseSet.add(additionalKey)
+    graph.resolutionsReverse.set(bazNode, reverseSet)
+
+    // Verify initial cache state
+    t.ok(
+      graph.resolutions.has(additionalKey),
+      'additional resolution cache entry exists',
+    )
+    t.ok(
+      graph.resolutionsReverse.get(bazNode)?.has(additionalKey),
+      'reverse cache has additional entry',
+    )
+
+    // Remove edge resolution
+    graph.removeEdgeResolution(edge)
+
+    // The method should only remove the specific resolution key it calculates,
+    // not all entries for the node
+    t.ok(
+      graph.resolutions.has(additionalKey),
+      'additional resolution cache entry still exists',
+    )
+    t.ok(
+      graph.resolutionsReverse.get(bazNode)?.has(additionalKey),
+      'reverse cache still has additional entry',
+    )
+
+    // But the edge should be unresolved
+    t.equal(edge.to, undefined, 'edge.to is now undefined')
+    t.notOk(
+      bazNode.edgesIn.has(edge),
+      'baz node no longer has edge in edgesIn',
+    )
+  })
+})
+
+t.test('node platform data setting', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      'engines-pkg': '^1.0.0',
+      'os-pkg': '^1.0.0',
+      'cpu-pkg': '^1.0.0',
+      'combined-pkg': '^1.0.0',
+      'no-platform-pkg': '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  t.test('should set engines property from manifest', async t => {
+    const node = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('engines-pkg@^1.0.0', configData),
+      normalizeManifest({
+        name: 'engines-pkg',
+        version: '1.0.0',
+        engines: {
+          node: '>=16.0.0',
+          npm: '>=8.0.0',
+        },
+      }),
+    )
+
+    t.ok(node, 'node was created successfully')
+    t.ok(node?.platform, 'platform property is set')
+    t.strictSame(
+      node?.platform?.engines,
+      {
+        node: '>=16.0.0',
+        npm: '>=8.0.0',
+      },
+      'engines property correctly set on node.platform',
+    )
+    t.notOk(
+      node?.platform?.os,
+      'os property is not set when not in manifest',
+    )
+    t.notOk(
+      node?.platform?.cpu,
+      'cpu property is not set when not in manifest',
+    )
+  })
+
+  t.test('should set os property from manifest (string)', async t => {
+    const node = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('os-string-pkg@^1.0.0', configData),
+      normalizeManifest({
+        name: 'os-string-pkg',
+        version: '1.0.0',
+        os: 'linux',
+      }),
+    )
+
+    t.ok(node, 'node was created successfully')
+    t.ok(node?.platform, 'platform property is set')
+    t.strictSame(
+      node?.platform?.os,
+      ['linux'],
+      'os property correctly normalized to array on node.platform',
+    )
+    t.notOk(
+      node?.platform?.engines,
+      'engines property is not set when not in manifest',
+    )
+    t.notOk(
+      node?.platform?.cpu,
+      'cpu property is not set when not in manifest',
+    )
+  })
+
+  t.test('should set os property from manifest (array)', async t => {
+    const node = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('os-array-pkg@^1.0.0', configData),
+      {
+        name: 'os-array-pkg',
+        version: '1.0.0',
+        os: ['linux', 'darwin'],
+      },
+    )
+
+    t.ok(node, 'node was created successfully')
+    t.ok(node?.platform, 'platform property is set')
+    t.strictSame(
+      node?.platform?.os,
+      ['linux', 'darwin'],
+      'os property correctly set as array on node.platform',
+    )
+  })
+
+  t.test(
+    'should set cpu property from manifest (string)',
+    async t => {
+      const node = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('cpu-string-pkg@^1.0.0', configData),
+        normalizeManifest({
+          name: 'cpu-string-pkg',
+          version: '1.0.0',
+          cpu: 'x64',
+        }),
+      )
+
+      t.ok(node, 'node was created successfully')
+      t.ok(node?.platform, 'platform property is set')
+      t.strictSame(
+        node?.platform?.cpu,
+        ['x64'],
+        'cpu property correctly normalized to array on node.platform',
+      )
+      t.notOk(
+        node?.platform?.engines,
+        'engines property is not set when not in manifest',
+      )
+      t.notOk(
+        node?.platform?.os,
+        'os property is not set when not in manifest',
+      )
+    },
+  )
+
+  t.test('should set cpu property from manifest (array)', async t => {
+    const node = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('cpu-array-pkg@^1.0.0', configData),
+      {
+        name: 'cpu-array-pkg',
+        version: '1.0.0',
+        cpu: ['x64', 'arm64'],
+      },
+    )
+
+    t.ok(node, 'node was created successfully')
+    t.ok(node?.platform, 'platform property is set')
+    t.strictSame(
+      node?.platform?.cpu,
+      ['x64', 'arm64'],
+      'cpu property correctly set as array on node.platform',
+    )
+  })
+
+  t.test(
+    'should set libc property from manifest (string)',
+    async t => {
+      const node = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('libc-string-pkg@^1.0.0', configData),
+        normalizeManifest({
+          name: 'libc-string-pkg',
+          version: '1.0.0',
+          libc: 'glibc',
+        }),
+      )
+
+      t.ok(node, 'node was created successfully')
+      t.ok(node?.platform, 'platform property is set')
+      t.strictSame(
+        node?.platform?.libc,
+        ['glibc'],
+        'libc property correctly normalized to array on node.platform',
+      )
+      t.notOk(
+        node?.platform?.engines,
+        'engines property is not set when not in manifest',
+      )
+      t.notOk(
+        node?.platform?.os,
+        'os property is not set when not in manifest',
+      )
+      t.notOk(
+        node?.platform?.cpu,
+        'cpu property is not set when not in manifest',
+      )
+    },
+  )
+
+  t.test(
+    'should set libc property from manifest (array)',
+    async t => {
+      const node = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('libc-array-pkg@^1.0.0', configData),
+        {
+          name: 'libc-array-pkg',
+          version: '1.0.0',
+          libc: ['glibc', 'musl'],
+        },
+      )
+
+      t.ok(node, 'node was created successfully')
+      t.ok(node?.platform, 'platform property is set')
+      t.strictSame(
+        node?.platform?.libc,
+        ['glibc', 'musl'],
+        'libc property correctly set as array on node.platform',
+      )
+    },
+  )
+
+  t.test(
+    'should set all platform properties when present',
+    async t => {
+      const node = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('combined-pkg@^1.0.0', configData),
+        normalizeManifest({
+          name: 'combined-pkg',
+          version: '1.0.0',
+          engines: {
+            node: '>=18.0.0',
+          },
+          os: ['linux', 'darwin'],
+          cpu: 'x64',
+          libc: 'glibc',
+        }),
+      )
+
+      t.ok(node, 'node was created successfully')
+      t.ok(node?.platform, 'platform property is set')
+      t.strictSame(
+        node?.platform?.engines,
+        {
+          node: '>=18.0.0',
+        },
+        'engines property correctly set',
+      )
+      t.strictSame(
+        node?.platform?.os,
+        ['linux', 'darwin'],
+        'os property correctly set',
+      )
+      t.strictSame(
+        node?.platform?.cpu,
+        ['x64'],
+        'cpu property correctly normalized to array',
+      )
+      t.strictSame(
+        node?.platform?.libc,
+        ['glibc'],
+        'libc property correctly normalized to array',
+      )
+    },
+  )
+
+  t.test(
+    'should not set platform when no platform properties in manifest',
+    async t => {
+      const node = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('no-platform-pkg@^1.0.0', configData),
+        {
+          name: 'no-platform-pkg',
+          version: '1.0.0',
+          dependencies: {
+            some: '^1.0.0',
+          },
+        },
+      )
+
+      t.ok(node, 'node was created successfully')
+      t.notOk(
+        node?.platform,
+        'platform property should not be set when manifest has no platform data',
+      )
+    },
+  )
+
+  t.test(
+    'should not set platform when manifest is undefined',
+    async t => {
+      // Create an edge without manifest (missing dependency)
+      graph.addEdge(
+        'prod',
+        Spec.parse('missing-pkg@^1.0.0', configData),
+        graph.mainImporter,
+      )
+
+      const edge = graph.mainImporter.edgesOut.get('missing-pkg')
+      t.ok(edge, 'edge was created')
+      t.equal(
+        edge?.to,
+        undefined,
+        'edge has no target node (missing dependency)',
+      )
+
+      // Verify that placePackage without manifest doesn't crash
+      const result = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('missing-test-pkg@^1.0.0', configData),
+      )
+
+      t.equal(
+        result,
+        undefined,
+        'placePackage returns undefined for missing manifest',
+      )
+    },
+  )
+
+  t.test('should handle empty platform objects', async t => {
+    const node1 = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('empty-engines-pkg@^1.0.0', configData),
+      normalizeManifest({
+        name: 'empty-engines-pkg',
+        version: '1.0.0',
+        engines: {},
+      }),
+    )
+
+    t.ok(node1, 'node was created successfully')
+    t.notOk(
+      node1?.platform,
+      'platform property should not be set when engines is empty object',
+    )
+
+    const node2 = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('empty-array-pkg@^1.0.0', configData),
+      normalizeManifest({
+        name: 'empty-array-pkg',
+        version: '1.0.0',
+        os: [],
+        cpu: [],
+      }),
+    )
+
+    t.ok(node2, 'node was created successfully')
+    t.notOk(
+      node2?.platform,
+      'platform property should not be set when os and cpu are empty arrays',
+    )
+  })
+
+  t.test(
+    'should preserve platform data when reusing existing nodes',
+    async t => {
+      // First, create a node with platform data
+      const originalNode = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('reuse-pkg@^1.0.0', configData),
+        normalizeManifest({
+          name: 'reuse-pkg',
+          version: '1.0.0',
+          engines: {
+            node: '>=16.0.0',
+          },
+          os: 'linux',
+        }),
+      )
+
+      t.ok(originalNode, 'original node was created successfully')
+      t.ok(originalNode?.platform, 'original node has platform data')
+
+      // Now try to place the same package again (should reuse existing node)
+      const reusedNode = graph.placePackage(
+        graph.mainImporter,
+        'dev',
+        Spec.parse('reuse-pkg@^1.0.0', configData),
+        normalizeManifest({
+          name: 'reuse-pkg',
+          version: '1.0.0',
+          engines: {
+            node: '>=16.0.0',
+          },
+          os: 'linux',
+        }),
+      )
+
+      t.equal(
+        reusedNode,
+        originalNode,
+        'same node instance is reused',
+      )
+      t.ok(
+        reusedNode?.platform,
+        'platform data is preserved on reused node',
+      )
+      t.strictSame(
+        reusedNode?.platform?.engines,
+        { node: '>=16.0.0' },
+        'engines property is preserved',
+      )
+      t.strictSame(
+        reusedNode?.platform?.os,
+        ['linux'],
+        'os property is preserved as normalized array',
+      )
+    },
+  )
+})
+
+t.test('splitExtra and joinExtra integration', async t => {
+  const mainManifest = {
+    name: 'root-project',
+    version: '1.0.0',
+    dependencies: {
+      a: '^1.0.0',
+      b: '^1.0.0',
+      c: '^1.0.0',
+      d: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  t.test('should split extra with only modifier', async t => {
+    const nodeA = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('a@^1.0.0', configData),
+      {
+        name: 'a',
+        version: '1.0.0',
+      },
+      undefined,
+      ':root > #a',
+    )
+
+    t.ok(nodeA, 'node a created')
+    t.equal(nodeA?.modifier, ':root > #a', 'modifier set correctly')
+    t.equal(nodeA?.peerSetHash, undefined, 'peerSetHash not set')
+  })
+
+  t.test('should split extra with only peerSetHash', async t => {
+    const nodeB = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('b@^1.0.0', configData),
+      {
+        name: 'b',
+        version: '1.0.0',
+      },
+      undefined,
+      'peer.abc123',
+    )
+
+    t.ok(nodeB, 'node b created')
+    t.equal(nodeB?.modifier, undefined, 'modifier not set')
+    t.equal(
+      nodeB?.peerSetHash,
+      'peer.abc123',
+      'peerSetHash set correctly',
+    )
+  })
+
+  t.test(
+    'should split extra with both modifier and peerSetHash',
+    async t => {
+      const nodeC = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('c@^1.0.0', configData),
+        {
+          name: 'c',
+          version: '1.0.0',
+        },
+        undefined,
+        ':root > #cpeer.xyz789',
+      )
+
+      t.ok(nodeC, 'node c created')
+      t.equal(nodeC?.modifier, ':root > #c', 'modifier set correctly')
+      t.equal(
+        nodeC?.peerSetHash,
+        'peer.xyz789',
+        'peerSetHash set correctly',
+      )
+    },
+  )
+
+  t.test('should handle empty extra', async t => {
+    const nodeD = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('d@^1.0.0', configData),
+      {
+        name: 'd',
+        version: '1.0.0',
+      },
+    )
+
+    t.ok(nodeD, 'node d created')
+    t.equal(nodeD?.modifier, undefined, 'modifier not set')
+    t.equal(nodeD?.peerSetHash, undefined, 'peerSetHash not set')
+  })
+})
+
+t.test('nextPeerContextIndex', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  // Initial index should be 0
+  t.equal(
+    graph.currentPeerContextIndex,
+    0,
+    'initial peer context index is 0',
+  )
+
+  // Call nextPeerContextIndex and verify it increments and returns
+  const firstNext = graph.nextPeerContextIndex()
+  t.equal(firstNext, 1, 'first call returns 1')
+  t.equal(
+    graph.currentPeerContextIndex,
+    1,
+    'currentPeerContextIndex updated to 1',
+  )
+
+  // Call again to verify it continues incrementing
+  const secondNext = graph.nextPeerContextIndex()
+  t.equal(secondNext, 2, 'second call returns 2')
+  t.equal(
+    graph.currentPeerContextIndex,
+    2,
+    'currentPeerContextIndex updated to 2',
+  )
+
+  // Verify multiple sequential calls
+  graph.nextPeerContextIndex()
+  graph.nextPeerContextIndex()
+  const fifthNext = graph.nextPeerContextIndex()
+  t.equal(fifthNext, 5, 'fifth call returns 5')
+  t.equal(
+    graph.currentPeerContextIndex,
+    5,
+    'currentPeerContextIndex updated to 5',
+  )
+})
+
+t.test('resetEdges method', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+      bar: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  t.test('should clear all edges while preserving nodes', async t => {
+    // Create a complex graph structure
+    const fooNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo@^1.0.0', configData),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dependencies: {
+          baz: '^2.0.0',
+        },
+      },
+    )
+
+    const barNode = graph.placePackage(
+      graph.mainImporter,
+      'dev',
+      Spec.parse('bar@^1.0.0', configData),
+      {
+        name: 'bar',
+        version: '1.0.0',
+      },
+    )
+
+    const bazNode = graph.placePackage(
+      fooNode!,
+      'prod',
+      Spec.parse('baz@^2.0.0', configData),
+      {
+        name: 'baz',
+        version: '2.0.0',
+      },
+    )
+
+    // Verify initial state
+    t.equal(graph.nodes.size, 4, 'graph has 4 nodes initially')
+    t.equal(graph.edges.size, 3, 'graph has 3 edges initially')
+    t.equal(
+      graph.mainImporter.edgesOut.size,
+      2,
+      'main importer has 2 edges out',
+    )
+    t.equal(fooNode!.edgesOut.size, 1, 'foo has 1 edge out')
+    t.equal(fooNode!.edgesIn.size, 1, 'foo has 1 edge in')
+    t.equal(barNode!.edgesIn.size, 1, 'bar has 1 edge in')
+    t.equal(bazNode!.edgesIn.size, 1, 'baz has 1 edge in')
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify edges are cleared
+    t.equal(graph.edges.size, 0, 'graph edges set is empty')
+    t.equal(
+      graph.mainImporter.edgesOut.size,
+      0,
+      'main importer edgesOut cleared',
+    )
+    t.equal(fooNode!.edgesOut.size, 0, 'foo edgesOut cleared')
+    t.equal(fooNode!.edgesIn.size, 0, 'foo edgesIn cleared')
+    t.equal(barNode!.edgesOut.size, 0, 'bar edgesOut cleared')
+    t.equal(barNode!.edgesIn.size, 0, 'bar edgesIn cleared')
+    t.equal(bazNode!.edgesOut.size, 0, 'baz edgesOut cleared')
+    t.equal(bazNode!.edgesIn.size, 0, 'baz edgesIn cleared')
+
+    // Verify nodes are preserved
+    t.equal(graph.nodes.size, 4, 'all nodes still in graph')
+    t.ok(
+      graph.nodes.has(graph.mainImporter.id),
+      'main importer preserved',
+    )
+    t.ok(graph.nodes.has(fooNode!.id), 'foo node preserved')
+    t.ok(graph.nodes.has(barNode!.id), 'bar node preserved')
+    t.ok(graph.nodes.has(bazNode!.id), 'baz node preserved')
+  })
+
+  t.test('should preserve resolution caches', async t => {
+    // Create nodes and edges
+    const alphaNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('alpha@^1.0.0', configData),
+      {
+        name: 'alpha',
+        version: '1.0.0',
+      },
+    )
+
+    // Store cache state before reset
+    const resolutionSizeBefore = graph.resolutions.size
+    const resolutionsReverseSizeBefore = graph.resolutionsReverse.size
+
+    t.equal(resolutionSizeBefore, 4, 'resolutions cache populated')
+    t.equal(
+      resolutionsReverseSizeBefore,
+      4,
+      'resolutionsReverse cache populated',
+    )
+
+    // Verify resolution works before reset
+    const foundBefore = graph.findResolution(
+      Spec.parse('alpha@^1.0.0', configData),
+      graph.mainImporter,
+    )
+    t.equal(foundBefore, alphaNode, 'resolution works before reset')
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify caches are preserved
+    t.equal(
+      graph.resolutions.size,
+      resolutionSizeBefore,
+      'resolutions cache size unchanged',
+    )
+    t.equal(
+      graph.resolutionsReverse.size,
+      resolutionsReverseSizeBefore,
+      'resolutionsReverse cache size unchanged',
+    )
+
+    // Verify resolution still works after reset
+    const foundAfter = graph.findResolution(
+      Spec.parse('alpha@^1.0.0', configData),
+      graph.mainImporter,
+    )
+    t.equal(
+      foundAfter,
+      alphaNode,
+      'a detached node is the fallback candidate after reset',
+    )
+  })
+
+  t.test('should preserve nodesByName', async t => {
+    // Create multiple versions of same package
+    const betaNode1 = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('beta@^1.0.0', configData),
+      {
+        name: 'beta',
+        version: '1.0.0',
+      },
+    )
+
+    const betaNode2 = graph.addNode(
+      joinDepIDTuple(['registry', '', 'beta@2.0.0']),
+      {
+        name: 'beta',
+        version: '2.0.0',
+      },
+      Spec.parse('beta@2.0.0', configData),
+    )
+
+    // Verify nodesByName before reset
+    const betaSetBefore = graph.nodesByName.get('beta')
+    t.ok(betaSetBefore?.has(betaNode1!), 'beta v1 in nodesByName')
+    t.ok(betaSetBefore?.has(betaNode2), 'beta v2 in nodesByName')
+    t.equal(betaSetBefore?.size, 2, 'nodesByName has 2 beta versions')
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify nodesByName preserved
+    const betaSetAfter = graph.nodesByName.get('beta')
+    t.ok(
+      betaSetAfter?.has(betaNode1!),
+      'beta v1 still in nodesByName',
+    )
+    t.ok(betaSetAfter?.has(betaNode2), 'beta v2 still in nodesByName')
+    t.equal(
+      betaSetAfter?.size,
+      2,
+      'nodesByName still has 2 beta versions',
+    )
+  })
+
+  t.test('should allow graph reconstruction', async t => {
+    // Create initial graph
+    const gammaNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('gamma@^1.0.0', configData),
+      {
+        name: 'gamma',
+        version: '1.0.0',
+        dependencies: {
+          delta: '^1.0.0',
+        },
+      },
+    )
+
+    const deltaNode = graph.placePackage(
+      gammaNode!,
+      'prod',
+      Spec.parse('delta@^1.0.0', configData),
+      {
+        name: 'delta',
+        version: '1.0.0',
+      },
+    )
+
+    // Store node count
+    const nodeCount = graph.nodes.size
+
+    // Reset edges
+    graph.resetEdges()
+
+    t.equal(graph.edges.size, 0, 'no edges after reset')
+    t.equal(graph.nodes.size, nodeCount, 'nodes preserved')
+
+    // Reconstruct graph using existing nodes
+    const newEdge1 = graph.addEdge(
+      'prod',
+      Spec.parse('gamma@^1.0.0', configData),
+      graph.mainImporter,
+      gammaNode,
+    )
+    const newEdge2 = graph.addEdge(
+      'prod',
+      Spec.parse('delta@^1.0.0', configData),
+      gammaNode!,
+      deltaNode,
+    )
+
+    // Verify reconstruction
+    t.equal(graph.edges.size, 2, '2 edges after reconstruction')
+    t.ok(graph.edges.has(newEdge1), 'new edge1 in graph')
+    t.ok(graph.edges.has(newEdge2), 'new edge2 in graph')
+    t.equal(
+      graph.mainImporter.edgesOut.size,
+      1,
+      'main importer has 1 edge',
+    )
+    t.equal(gammaNode!.edgesOut.size, 1, 'gamma has 1 edge')
+    t.equal(gammaNode!.edgesIn.size, 1, 'gamma has 1 edge in')
+    t.equal(deltaNode!.edgesIn.size, 1, 'delta has 1 edge in')
+  })
+
+  t.test('should work with empty graph', async t => {
+    const emptyGraph = new Graph({
+      ...configData,
+      mainManifest: { name: 'empty', version: '1.0.0' },
+      projectRoot,
+    })
+
+    // Verify initial empty state
+    t.equal(
+      emptyGraph.nodes.size,
+      1,
+      'empty graph has only main importer',
+    )
+    t.equal(emptyGraph.edges.size, 0, 'empty graph has no edges')
+
+    // Reset should not throw
+    t.doesNotThrow(
+      () => emptyGraph.resetEdges(),
+      'resetEdges works on empty graph',
+    )
+
+    // Verify still empty
+    t.equal(emptyGraph.edges.size, 0, 'edges still empty after reset')
+    t.equal(
+      emptyGraph.nodes.size,
+      1,
+      'node count unchanged after reset',
+    )
+  })
+
+  t.test('should work with nodes having modifiers', async t => {
+    // Create node with modifier
+    const epsilonNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('epsilon@^1.0.0', configData),
+      {
+        name: 'epsilon',
+        version: '1.0.0',
+      },
+      undefined,
+      ':root > #epsilon',
+    )
+
+    // Verify modifier before reset
+    t.equal(
+      epsilonNode?.modifier,
+      ':root > #epsilon',
+      'node has modifier',
+    )
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify node and modifier preserved
+    t.ok(graph.nodes.has(epsilonNode!.id), 'node preserved')
+    t.equal(
+      epsilonNode?.modifier,
+      ':root > #epsilon',
+      'modifier preserved',
+    )
+
+    // Verify resolution falls back to the detached node after reset
+    const found = graph.findResolution(
+      Spec.parse('epsilon@^1.0.0', configData),
+      graph.mainImporter,
+      ':root > #epsilon',
+    )
+    t.equal(
+      found,
+      epsilonNode,
+      'a detached node is the fallback candidate after reset',
+    )
+  })
+
+  t.test('should work with nodes having peerSetHash', async t => {
+    // Create node with peerSetHash
+    const zetaNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('zeta@^1.0.0', configData),
+      {
+        name: 'zeta',
+        version: '1.0.0',
+      },
+      undefined,
+      'peer.peer123',
+    )
+
+    // Verify peerSetHash before reset
+    t.equal(
+      zetaNode?.peerSetHash,
+      'peer.peer123',
+      'node has peerSetHash',
+    )
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify node and peerSetHash preserved
+    t.ok(graph.nodes.has(zetaNode!.id), 'node preserved')
+    t.equal(
+      zetaNode?.peerSetHash,
+      'peer.peer123',
+      'peerSetHash preserved',
+    )
+
+    // Verify resolution falls back to the detached node after reset
+    const found = graph.findResolution(
+      Spec.parse('zeta@^1.0.0', configData),
+      graph.mainImporter,
+      'peer.peer123',
+    )
+    t.equal(
+      found,
+      zetaNode,
+      'a detached node is the fallback candidate after reset',
+    )
+  })
+
+  t.test('should preserve manifest inventory', async t => {
+    // Create nodes
+    const etaNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('eta@^1.0.0', configData),
+      {
+        name: 'eta',
+        version: '1.0.0',
+      },
+    )
+
+    // Verify manifest before reset
+    const manifestBefore = graph.manifests.get(etaNode!.id)
+    t.ok(manifestBefore, 'manifest exists before reset')
+    t.equal(manifestBefore?.name, 'eta', 'manifest has correct name')
+
+    // Reset edges
+    graph.resetEdges()
+
+    // Verify manifest preserved
+    const manifestAfter = graph.manifests.get(etaNode!.id)
+    t.ok(manifestAfter, 'manifest exists after reset')
+    t.equal(manifestAfter?.name, 'eta', 'manifest name preserved')
+    t.equal(
+      manifestAfter,
+      manifestBefore,
+      'same manifest instance preserved',
+    )
+  })
+
+  t.test(
+    'findResolution skips detached nodes in favor of live ones',
+    async t => {
+      const v1 = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.0.0' },
+      )!
+      const v2 = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.1.0' },
+      )!
+      const cached = graph.findResolution(
+        Spec.parse('theta@^1.0.0', configData),
+        graph.mainImporter,
+      )
+      t.equal(cached, v2, 'the cache points at the last placed node')
+      // detach the cached node so the lookup has to rescan by name
+      v2.detached = true
+      const found = graph.findResolution(
+        Spec.parse('theta@^1.0.0', configData),
+        graph.mainImporter,
+      )
+      t.equal(
+        found,
+        v1,
+        'should skip a cached detached node and return a live candidate',
+      )
+    },
+  )
+})
+
+t.test('findResolution detached fallback', async t => {
+  const mainManifest = { name: 'my-project', version: '1.0.0' }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const newGraph = () =>
+    new Graph({ ...configData, mainManifest, projectRoot })
+
+  t.test(
+    'returns a detached node when no live one exists',
+    async t => {
+      const graph = newGraph()
+      const theta = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.0.0' },
+      )!
+      graph.resetEdges()
+      t.equal(
+        graph.findResolution(
+          Spec.parse('theta@^1.0.0', configData),
+          graph.mainImporter,
+        ),
+        theta,
+        'a detached node is the fallback candidate after reset',
+      )
+    },
+  )
+
+  t.test('does not cache a detached hit', async t => {
+    const graph = newGraph()
+    const node = graph.addNode(
+      joinDepIDTuple(['registry', '', 'theta@1.0.0']),
+      undefined,
+      undefined,
+      'theta',
+      '1.0.0',
+    )
+    node.detached = true
+    t.equal(
+      graph.findResolution(
+        Spec.parse('theta@^1.0.0', configData),
+        graph.mainImporter,
+      ),
+      node,
+      'the detached node is returned',
+    )
+    t.equal(graph.resolutions.size, 0, 'nothing was cached')
+  })
+
+  t.test(
+    'prefers a live cached node over an earlier detached id',
+    async t => {
+      const graph = newGraph()
+      const live = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.2.0' },
+      )!
+      // sorts before the live node in nodesByName, and would be the
+      // fallback if the scan ran
+      const earlier = graph.addNode(
+        joinDepIDTuple(['registry', '', 'theta@1.0.0']),
+        undefined,
+        undefined,
+        'theta',
+        '1.0.0',
+      )
+      earlier.detached = true
+      t.equal(
+        graph.findResolution(
+          Spec.parse('theta@^1.0.0', configData),
+          graph.mainImporter,
+        ),
+        live,
+        'the live cached entry is returned without a scan',
+      )
+    },
+  )
+
+  t.test(
+    'prefers the detached cached entry over an earlier id',
+    async t => {
+      const graph = newGraph()
+      graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.0.0' },
+      )
+      const v12 = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse('theta@^1.0.0', configData),
+        { name: 'theta', version: '1.2.0' },
+      )!
+      graph.resetEdges()
+      t.equal(
+        graph.findResolution(
+          Spec.parse('theta@^1.0.0', configData),
+          graph.mainImporter,
+        ),
+        v12,
+        'the last resolution wins over id order',
+      )
+    },
+  )
+})
+
+t.test('removeNode with keepEdges parameter', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+      bar: '^1.0.0',
+    },
+  }
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest,
+    projectRoot,
+  })
+
+  t.test('default behavior (keepEdges=false)', async t => {
+    // Create nodes and edges
+    const fooNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo@^1.0.0', configData),
+      {
+        name: 'foo',
+        version: '1.0.0',
+        dependencies: { baz: '^1.0.0' },
+      },
+    )
+
+    const bazNode = graph.placePackage(
+      fooNode!,
+      'prod',
+      Spec.parse('baz@^1.0.0', configData),
+      {
+        name: 'baz',
+        version: '1.0.0',
+      },
+    )
+
+    if (!fooNode || !bazNode) {
+      throw new Error('Failed to create test nodes')
+    }
+
+    // Verify initial state
+    const fooEdge = graph.mainImporter.edgesOut.get('foo')
+    const bazEdge = fooNode.edgesOut.get('baz')
+
+    t.ok(fooEdge, 'foo edge exists')
+    t.ok(bazEdge, 'baz edge exists')
+    t.equal(fooEdge?.to, fooNode, 'foo edge points to foo node')
+    t.equal(bazEdge?.to, bazNode, 'baz edge points to baz node')
+    t.ok(
+      fooNode.edgesIn.has(fooEdge!),
+      'foo node has edge in edgesIn',
+    )
+    t.ok(
+      bazNode.edgesIn.has(bazEdge!),
+      'baz node has edge in edgesIn',
+    )
+    t.ok(graph.edges.has(fooEdge!), 'graph has foo edge')
+    t.ok(graph.edges.has(bazEdge!), 'graph has baz edge')
+
+    // Remove foo node with default keepEdges=false
+    graph.removeNode(fooNode)
+
+    // Verify edges are completely removed
+    t.notOk(
+      graph.mainImporter.edgesOut.has('foo'),
+      'foo edge removed from main importer edgesOut',
+    )
+    t.notOk(
+      graph.edges.has(fooEdge!),
+      'foo edge removed from graph edges',
+    )
+    t.notOk(
+      graph.nodes.has(fooNode.id),
+      'foo node removed from graph nodes',
+    )
+    t.notOk(
+      graph.nodesByName.has('foo'),
+      'foo removed from nodesByName',
+    )
+
+    // Verify baz edge (from removed foo node) is also removed
+    t.notOk(
+      graph.edges.has(bazEdge!),
+      'baz edge removed from graph edges',
+    )
+  })
+
+  t.test('keepEdges=true behavior', async t => {
+    // Create fresh nodes and edges for this test
+    const barNode = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('bar@^1.0.0', configData),
+      {
+        name: 'bar',
+        version: '1.0.0',
+        dependencies: { qux: '^1.0.0' },
+      },
+    )
+
+    const quxNode = graph.placePackage(
+      barNode!,
+      'prod',
+      Spec.parse('qux@^1.0.0', configData),
+      {
+        name: 'qux',
+        version: '1.0.0',
+      },
+    )
+
+    if (!barNode || !quxNode) {
+      throw new Error('Failed to create test nodes')
+    }
+
+    // Verify initial state
+    const barEdge = graph.mainImporter.edgesOut.get('bar')
+    const quxEdge = barNode.edgesOut.get('qux')
+
+    t.ok(barEdge, 'bar edge exists')
+    t.ok(quxEdge, 'qux edge exists')
+    t.equal(barEdge?.to, barNode, 'bar edge points to bar node')
+    t.equal(quxEdge?.to, quxNode, 'qux edge points to qux node')
+    t.ok(
+      barNode.edgesIn.has(barEdge!),
+      'bar node has edge in edgesIn',
+    )
+    t.ok(
+      quxNode.edgesIn.has(quxEdge!),
+      'qux node has edge in edgesIn',
+    )
+    t.ok(graph.edges.has(barEdge!), 'graph has bar edge')
+    t.ok(graph.edges.has(quxEdge!), 'graph has qux edge')
+
+    // Remove bar node with keepEdges=true
+    graph.removeNode(barNode, undefined, true)
+
+    // Verify the edge from main importer is kept but unresolved
+    const keptBarEdge = graph.mainImporter.edgesOut.get('bar')
+    t.ok(
+      keptBarEdge,
+      'bar edge still exists in main importer edgesOut',
+    )
+    t.equal(
+      keptBarEdge?.to,
+      undefined,
+      'bar edge.to is now undefined',
+    )
+    t.ok(
+      graph.edges.has(keptBarEdge!),
+      'bar edge still in graph edges',
+    )
+
+    // Verify the node itself is removed
+    t.notOk(
+      graph.nodes.has(barNode.id),
+      'bar node removed from graph nodes',
+    )
+    t.notOk(
+      graph.nodesByName.has('bar'),
+      'bar removed from nodesByName',
+    )
+
+    // Verify edges from the removed node (qux edge) are still removed
+    t.notOk(
+      graph.edges.has(quxEdge!),
+      'qux edge removed from graph edges',
+    )
+  })
+
+  t.test('keepEdges=true with replacement node', async t => {
+    // Create test scenario with replacement
+    const alphaNode = graph.addNode(
+      joinDepIDTuple(['registry', '', 'alpha@1.0.0']),
+      {
+        name: 'alpha',
+        version: '1.0.0',
+      },
+      Spec.parse('alpha@1.0.0', configData),
+    )
+
+    const replacementNode = graph.addNode(
+      joinDepIDTuple(['registry', '', 'alpha@1.1.0']),
+      {
+        name: 'alpha',
+        version: '1.1.0',
+      },
+      Spec.parse('alpha@1.1.0', configData),
+    )
+
+    // Create edge to alpha node
+    const alphaEdge = graph.addEdge(
+      'prod',
+      Spec.parse('alpha@^1.0.0', configData),
+      graph.mainImporter,
+      alphaNode,
+    )
+
+    // Verify initial setup
+    t.equal(
+      alphaEdge.to,
+      alphaNode,
+      'edge initially points to alpha node',
+    )
+    t.ok(
+      alphaNode.edgesIn.has(alphaEdge),
+      'alpha node has edge in edgesIn',
+    )
+
+    // Remove alpha node with replacement and keepEdges=true
+    graph.removeNode(alphaNode, replacementNode, true)
+
+    // Since replacement satisfies the edge spec, it should be used
+    t.equal(
+      alphaEdge.to,
+      replacementNode,
+      'edge now points to replacement node',
+    )
+    // Note: Current implementation doesn't update edgesIn sets when using replacement
+    // This is the actual behavior of the current code
+    t.notOk(
+      replacementNode.edgesIn.has(alphaEdge),
+      'replacement node does not have edge in edgesIn (current implementation limitation)',
+    )
+    t.ok(
+      alphaNode.edgesIn.has(alphaEdge),
+      'original node still has edge in edgesIn (current implementation behavior)',
+    )
+
+    // Verify original node is removed
+    t.notOk(
+      graph.nodes.has(alphaNode.id),
+      'original alpha node removed from graph',
+    )
+  })
+})
+
+t.test(
+  'placePackage hydrates manifest and integrity on existing nodes',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+
+    const depId = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+
+    // Simulate a node loaded from lockfile without manifest or integrity
+    // (this is what happens when loadNodes processes nodes from the
+    // normal lockfile which doesn't store manifest data)
+    const existingNode = graph.addNode(
+      depId,
+      undefined,
+      undefined,
+      'foo',
+      '1.0.0',
+    )
+    t.equal(
+      existingNode.manifest,
+      undefined,
+      'node starts without manifest',
+    )
+    t.equal(
+      existingNode.integrity,
+      undefined,
+      'node starts without integrity',
+    )
+
+    const integrity =
+      'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ=='
+    const manifest = normalizeManifest({
+      name: 'foo',
+      version: '1.0.0',
+      dist: {
+        integrity,
+        tarball: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+      },
+    })
+
+    // Place the same package again with manifest data
+    // (this is what happens during ideal graph building when the
+    // manifest is fetched from the registry)
+    const placed = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0', configData),
+      manifest,
+    )
+
+    t.equal(placed, existingNode, 'should return the existing node')
+    t.equal(placed?.manifest, manifest, 'manifest should be hydrated')
+    t.equal(
+      placed?.integrity,
+      integrity,
+      'integrity should be hydrated from manifest',
+    )
+    t.ok(
+      graph.manifests.has(depId),
+      'manifest should be stored in graph.manifests',
+    )
+  },
+)
+
+t.test(
+  'placePackage does not clobber existing manifest or integrity',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+
+    const existingIntegrity = 'sha512-EXISTING=='
+    const existingManifest = normalizeManifest({
+      name: 'bar',
+      version: '2.0.0',
+      dist: {
+        integrity: existingIntegrity,
+        tarball: 'https://registry.npmjs.org/bar/-/bar-2.0.0.tgz',
+      },
+    })
+
+    // Create a node WITH manifest and integrity already set
+    const depId = joinDepIDTuple(['registry', '', 'bar@2.0.0'])
+    const existingNode = graph.addNode(depId, existingManifest)
+    existingNode.integrity = existingIntegrity
+
+    const newIntegrity = 'sha512-NEW=='
+    const newManifest = normalizeManifest({
+      name: 'bar',
+      version: '2.0.0',
+      dist: {
+        integrity: newIntegrity,
+        tarball: 'https://registry.npmjs.org/bar/-/bar-2.0.0.tgz',
+      },
+    })
+
+    // Place the same package again with different manifest data
+    const placed = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('bar', '^2.0.0', configData),
+      newManifest,
+    )
+
+    t.equal(placed, existingNode, 'should return the existing node')
+    t.equal(
+      placed?.manifest,
+      existingManifest,
+      'should NOT clobber existing manifest',
+    )
+    t.equal(
+      placed?.integrity,
+      existingIntegrity,
+      'should NOT clobber existing integrity',
+    )
+  },
+)
+
+t.test(
+  'placePackage copies integrity from same-package lockfile sibling',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+
+    const integrity = 'sha512-LOCKFILE-SIBLING=='
+    const resolved =
+      'https://registry.npmjs.org/oxlint/-/oxlint-1.77.0.tgz'
+
+    // same-name node with a different base id: iterated first and skipped
+    const otherBase = graph.addNode(
+      joinDepIDTuple(['registry', '', 'oxlint@1.0.0']),
+      undefined,
+      undefined,
+      'oxlint',
+      '1.0.0',
+    )
+    otherBase.integrity = 'sha512-OTHER-BASE=='
+
+    // same-base sibling with no metadata at all: skipped
+    const bareSibling = graph.addNode(
+      joinDepIDTuple([
+        'registry',
+        '',
+        'oxlint@1.77.0',
+        'peer.000000000000000a',
+      ]),
+      undefined,
+      undefined,
+      'oxlint',
+      '1.77.0',
+    )
+    bareSibling.peerSetHash = 'peer.000000000000000a'
+
+    // same-base sibling carrying only a resolved value: remembered as a
+    // candidate but scanning continues looking for one with integrity
+    const resolvedOnly = graph.addNode(
+      joinDepIDTuple([
+        'registry',
+        '',
+        'oxlint@1.77.0',
+        'peer.0123456789abcdef',
+      ]),
+      undefined,
+      undefined,
+      'oxlint',
+      '1.77.0',
+    )
+    resolvedOnly.resolved = resolved
+    resolvedOnly.peerSetHash = 'peer.0123456789abcdef'
+
+    const lockfileId = joinDepIDTuple([
+      'registry',
+      '',
+      'oxlint@1.77.0',
+      'peer.05a16166f9c1f9ef',
+    ])
+    const lockfileNode = graph.addNode(
+      lockfileId,
+      undefined,
+      undefined,
+      'oxlint',
+      '1.77.0',
+    )
+    lockfileNode.integrity = integrity
+    lockfileNode.resolved = resolved
+    lockfileNode.resolvedFromLockfile = true
+    lockfileNode.peerSetHash = 'peer.05a16166f9c1f9ef'
+
+    const placed = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('oxlint', '^1.77.0', configData),
+      normalizeManifest({
+        name: 'oxlint',
+        version: '1.77.0',
+        peerDependencies: { vitest: '*' },
+      }),
+      undefined,
+      'peer.0',
+    )
+
+    t.not(placed, lockfileNode, 'new node for provisional peer extra')
+    t.equal(
+      placed?.integrity,
+      integrity,
+      'integrity copied from lockfile sibling',
+    )
+    t.equal(
+      placed?.resolved,
+      resolved,
+      'resolved copied from lockfile sibling',
+    )
+    t.equal(
+      placed?.resolvedFromLockfile,
+      true,
+      'lockfile verification flag preserved',
+    )
+
+    // id-only placement (no manifest) falls back to the spec name for
+    // the same-package lookup
+    const idOnly = graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('no-mani', '^1.0.0', configData),
+      undefined,
+      joinDepIDTuple(['registry', '', 'no-mani@1.0.0']),
+    )
+    t.equal(idOnly?.name, 'no-mani', 'node placed from id alone')
+  },
+)
+
+t.test('workspace with no name in its manifest', async t => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({ name: 'root' }),
+    'nrz.json': JSON.stringify({ workspaces: 'packages/*' }),
+    packages: {
+      a: { 'package.json': JSON.stringify({ version: '1.0.0' }) },
+    },
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    ...configData,
+    mainManifest: { name: 'root' },
+    monorepo: Monorepo.maybeLoad(projectRoot),
+  })
+  const edge = graph.mainImporter.workspaces?.get('a')
+  t.equal(
+    String(edge?.spec),
+    'a@workspace:*',
+    'uses the workspace directory name',
+  )
+})
+
+t.test('addEdge rejects a traversing node name', async t => {
+  const graph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest: { name: 'root' },
+  })
+  // a broken node name becomes the symlink segment
+  const to = graph.addNode(
+    joinDepIDTuple(['registry', '', 'x@1.0.0']),
+    undefined,
+    undefined,
+    '../../forbidden',
+  )
+  t.throws(
+    () =>
+      graph.addEdge(
+        'prod',
+        Spec.parse('(unknown)', '^1.0.0', configData),
+        graph.mainImporter,
+        to,
+      ),
+    { cause: { code: 'EINVALIDNAME' } },
+  )
+})
+
+t.test('sortNodes puts importers first then DepID order', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+    projectRoot,
+  })
+  const zed = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('zed@1.0.0', configData),
+    { name: 'zed', version: '1.0.0' },
+  )
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('foo@1.0.0', configData),
+    { name: 'foo', version: '1.0.0' },
+  )
+  const bar = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar@1.0.0', configData),
+    { name: 'bar', version: '1.0.0' },
+  )
+  if (!zed || !foo || !bar) throw new Error('failed to place')
+
+  const expected = [
+    joinDepIDTuple(['file', '.']),
+    joinDepIDTuple(['registry', '', 'bar@1.0.0']),
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    joinDepIDTuple(['registry', '', 'zed@1.0.0']),
+  ]
+  graph.sortNodes()
+  t.strictSame([...graph.nodes.keys()], expected)
+  graph.sortNodes()
+  t.strictSame([...graph.nodes.keys()], expected, 'idempotent')
+
+  const before = graph.nodes
+  graph.sortNodes()
+  t.equal(graph.nodes, before, 'already sorted: same map instance')
+
+  // an importer after a non-importer forces the rebuild
+  graph.nodes = new Map([
+    [foo.id, foo],
+    [graph.mainImporter.id, graph.mainImporter],
+    [bar.id, bar],
+    [zed.id, zed],
+  ])
+  graph.sortNodes()
+  t.strictSame([...graph.nodes.keys()], expected, 'importers first')
+
+  // a missing importer is re-registered
+  graph.nodes.delete(graph.mainImporter.id)
+  graph.sortNodes()
+  t.strictSame([...graph.nodes.keys()], expected, 'importer restored')
+
+  // gc keeps an intact map
+  const intact = graph.nodes
+  const collected = graph.gc()
+  t.equal(collected.size, 0, 'nothing collected')
+  t.equal(graph.nodes, intact, 'gc keeps an intact map')
+  t.equal(graph.edges.size, 3, 'edges still rebuilt')
+
+  // a reachable node missing from the map forces the rebuild, even
+  // when an unreachable one keeps the size the same
+  graph.addNode(joinDepIDTuple(['registry', '', 'orphan@1.0.0']), {
+    name: 'orphan',
+    version: '1.0.0',
+  })
+  graph.nodes.delete(foo.id)
+  t.equal(graph.gc().size, 1, 'the orphan is collected')
+  t.strictSame(
+    [...graph.nodes.keys()],
+    expected,
+    'gc re-registers a reachable node',
+  )
+
+  graph.addNode(joinDepIDTuple(['registry', '', 'orphan@1.0.0']), {
+    name: 'orphan',
+    version: '1.0.0',
+  })
+  graph.gc()
+  t.strictSame(
+    [...graph.nodes.keys()],
+    expected,
+    'gc leaves a sorted map',
+  )
+})
+
+t.test('sortNodes restores importer-set order', async t => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+    }),
+    'nrz.json': JSON.stringify({ workspaces: 'packages/*' }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.0.0',
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+    projectRoot,
+    monorepo: Monorepo.maybeLoad(projectRoot),
+  })
+  const expected = [...graph.nodes.keys()]
+  t.equal(expected.length, 3, 'main importer and two workspaces')
+  const [main, a, b] = [...graph.importers]
+  graph.nodes = new Map([
+    [main!.id, main!],
+    [b!.id, b!],
+    [a!.id, a!],
+  ])
+  graph.sortNodes()
+  t.strictSame(
+    [...graph.nodes.keys()],
+    expected,
+    'set order restored',
+  )
+})
+
+t.test('mutations counts structural writes', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+    projectRoot,
+  })
+  const at = () => graph.mutations
+  const bumped = (name: string, fn: () => unknown) => {
+    const before = at()
+    fn()
+    t.ok(at() > before, name)
+  }
+  const quiet = (name: string, fn: () => unknown) => {
+    const before = at()
+    fn()
+    t.equal(at() - before, 0, name)
+  }
+
+  const fooSpec = Spec.parse('foo@1.0.0', configData)
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    fooSpec,
+    {
+      name: 'foo',
+      version: '1.0.0',
+    },
+  )
+  if (!foo) throw new Error('failed to place')
+  const bar = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar@1.0.0', configData),
+    { name: 'bar', version: '1.0.0' },
+  )
+  if (!bar) throw new Error('failed to place')
+
+  quiet('re-adding the same edge is not a mutation', () =>
+    graph.addEdge('prod', fooSpec, graph.mainImporter, foo),
+  )
+  bumped('re-pointing an edge', () =>
+    graph.addEdge('prod', fooSpec, graph.mainImporter, bar),
+  )
+  bumped('a new edge', () =>
+    graph.addEdge(
+      'prod',
+      Spec.parse('bar@1.0.0', configData),
+      foo,
+      bar,
+    ),
+  )
+  bumped('placing an existing node', () =>
+    graph.placePackage(
+      bar,
+      'prod',
+      Spec.parse('foo@1.0.0', configData),
+      { name: 'foo', version: '1.0.0' },
+    ),
+  )
+  bumped('a dangling placement', () =>
+    graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('missing@1.0.0', configData),
+    ),
+  )
+  quiet('gc with nothing unreachable', () => graph.gc())
+  bumped('removeNode', () => graph.removeNode(bar))
+  bumped('resetEdges', () => graph.resetEdges())
+})
+
+t.test('recomputeFlags', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    ...configData,
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+    projectRoot,
+  })
+  const place = (
+    from: Node,
+    type: 'prod' | 'dev' | 'optional',
+    name: string,
+  ) => {
+    const node = graph.placePackage(
+      from,
+      type,
+      Spec.parse(`${name}@^1.0.0`, configData),
+      { name, version: '1.0.0' },
+    )
+    if (!node) throw new Error(`failed to place ${name}`)
+    return node
+  }
+  const root = graph.mainImporter
+  const a = place(root, 'dev', 'a')
+  const b = place(root, 'prod', 'b')
+  const o = place(root, 'optional', 'o')
+  const c = place(a, 'prod', 'c')
+  const d = place(b, 'prod', 'd')
+  // reusing c via a prod path leaves its dev flag behind
+  graph.addEdge('prod', Spec.parse('c@^1.0.0', configData), d, c)
+  const p = place(o, 'prod', 'p')
+  const x = place(root, 'dev', 'x')
+  const y = place(x, 'optional', 'y')
+  y.optional = false
+  graph.addEdge(
+    'prod',
+    Spec.parse('missing@^1.0.0', configData),
+    root,
+  )
+  t.equal(c.dev, true, 'c starts stale')
+
+  const { mutations } = graph
+  graph.recomputeFlags()
+  const flags = (n: Node) => ({ dev: n.dev, optional: n.optional })
+  t.strictSame(flags(root), { dev: false, optional: false })
+  t.strictSame(flags(a), { dev: true, optional: false })
+  t.strictSame(flags(b), { dev: false, optional: false })
+  t.strictSame(flags(d), { dev: false, optional: false })
+  t.strictSame(flags(c), { dev: false, optional: false }, 'c healed')
+  t.strictSame(flags(o), { dev: false, optional: true })
+  t.strictSame(flags(p), { dev: false, optional: true })
+  t.strictSame(flags(y), { dev: true, optional: true }, 'y healed')
+  t.equal(graph.lockfileStale, true, 'lockfile marked stale')
+  t.equal(graph.mutations, mutations, 'not a structural write')
+
+  graph.lockfileStale = false
+  graph.recomputeFlags()
+  t.equal(graph.lockfileStale, false, 'no change, not stale')
 })

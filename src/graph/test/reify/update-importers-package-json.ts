@@ -1,21 +1,39 @@
 import t from 'tap'
 import { PackageJson } from '@nrz/package-json'
-import { type DepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
 import { Graph } from '../../src/graph.ts'
-import {
-  type Dependency,
-  asDependency,
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
+import { asDependency } from '../../src/dependencies.ts'
+import type {
+  Dependency,
+  AddImportersDependenciesMap,
+  RemoveImportersDependenciesMap,
 } from '../../src/dependencies.ts'
 import { updatePackageJson } from '../../src/reify/update-importers-package-json.ts'
+
+const specOptions = {
+  registry: 'https://registry.npmjs.org',
+  registries: {
+    // the `npm` alias is no longer built in; configure it so `npm:`
+    // aliased specs resolve
+    npm: 'https://registry.npmjs.org/',
+    custom: 'http://example.com',
+  },
+}
 
 t.test('updatePackageJson', async t => {
   const rootMani = {
     name: 'root',
     version: '1.0.0',
+    peerDependencies: {
+      pdep: '1.2.3',
+      becomeprod: '1.2.3',
+    },
+    peerDependenciesMeta: {
+      becomeprod: { optional: true },
+    },
   }
+
   const graph = new Graph({
     mainManifest: rootMani,
     projectRoot: t.testdirName,
@@ -32,7 +50,42 @@ t.test('updatePackageJson', async t => {
     fooMani.name,
     fooMani.version,
   )
+
+  const newPeerOptionalSpec = Spec.parse('newpeeroptional@1.0.0')
+  const newPeerOptionalMani = {
+    name: 'newpeeroptional',
+    version: '1.0.0',
+  }
+  const newPeerOptional = graph.addNode(
+    undefined,
+    newPeerOptionalMani,
+    newPeerOptionalSpec,
+    newPeerOptionalMani.name,
+    newPeerOptionalMani.version,
+  )
+
+  const becomeProdSpec = Spec.parse('becomeprod@1.0.0')
+  const becomeProdMani = {
+    name: 'newpeeroptional',
+    version: '1.0.0',
+  }
+  const becomeProd = graph.addNode(
+    undefined,
+    becomeProdMani,
+    becomeProdSpec,
+    becomeProdMani.name,
+    becomeProdMani.version,
+  )
+
   graph.addEdge('prod', fooSpec, root, foo)
+  graph.addEdge(
+    'peerOptional',
+    newPeerOptionalSpec,
+    root,
+    newPeerOptional,
+  )
+  graph.addEdge('prod', becomeProdSpec, root, becomeProd)
+
   const add = new Map<DepID, Map<string, Dependency>>([
     [
       rootID,
@@ -41,6 +94,20 @@ t.test('updatePackageJson', async t => {
           'foo',
           asDependency({
             spec: fooSpec,
+            type: 'prod',
+          }),
+        ],
+        [
+          'newpeeroptional',
+          asDependency({
+            spec: newPeerOptionalSpec,
+            type: 'peerOptional',
+          }),
+        ],
+        [
+          'becomeprod',
+          asDependency({
+            spec: becomeProdSpec,
             type: 'prod',
           }),
         ],
@@ -74,7 +141,7 @@ t.test('updatePackageJson', async t => {
           graph: borkedGraph,
           add,
         })(),
-      /Failed to retrieve importer node/,
+      /Failed to retrieve node/,
       'should throw a importer node retrieval error',
     )
   })
@@ -260,12 +327,74 @@ t.test('updatePackageJson', async t => {
     )
   })
 
+  await t.test(
+    'bare spec uses dependency version not importer version',
+    async t => {
+      // This test validates the fix for the bug where package.json
+      // was saved with the importer's version instead of the
+      // dependency's version when installing with a bare spec
+      // (e.g., `nrz i abbrev` resolving to abbrev@4.0.0)
+      const testRootMani = {
+        name: 'test-project',
+        version: '1.0.0', // root is at version 1.0.0
+      }
+
+      const testGraph = new Graph({
+        mainManifest: testRootMani,
+        projectRoot: t.testdirName,
+      })
+      const testRoot = testGraph.mainImporter
+
+      // Dependency resolves to version 4.0.0, different from root's 1.0.0
+      const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+      // Bare spec with no version (like running `nrz i abbrev`)
+      const abbrevSpec = Spec.parse('abbrev')
+      const abbrev = testGraph.addNode(
+        undefined,
+        abbrevMani,
+        abbrevSpec,
+        abbrevMani.name,
+        abbrevMani.version,
+      )
+      testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+      updatePackageJson({
+        packageJson,
+        graph: testGraph,
+        add: new Map([
+          [
+            testRoot.id,
+            new Map([
+              [
+                'abbrev',
+                asDependency({
+                  spec: abbrevSpec,
+                  type: 'prod',
+                }),
+              ],
+            ]),
+          ],
+        ]) as AddImportersDependenciesMap,
+      })()
+
+      const res = retrieveManifestResult()
+      t.strictSame(res.length, 1, 'should have been called once')
+      // The key assertion: should be ^4.0.0 (dependency version),
+      // NOT ^1.0.0 (importer version)
+      t.strictSame(
+        res[0]?.[0]?.dependencies?.abbrev,
+        '^4.0.0',
+        'should use dependency version (4.0.0) not importer version (1.0.0)',
+      )
+    },
+  )
+
   await t.test('remove dependencies', async t => {
     updatePackageJson({
       packageJson,
       graph,
       remove: new Map([
-        [rootID, new Set(['foo'])],
+        [rootID, new Set(['foo', 'newpeeroptional'])],
       ]) as RemoveImportersDependenciesMap,
     })()
 
@@ -336,5 +465,614 @@ t.test('updatePackageJson', async t => {
       mani,
       'should use provided range in package json save',
     )
+  })
+
+  await t.test('aliased install', async t => {
+    const aliasedMani = { name: 'a', version: '1.0.0' }
+    const aliasedSpec = Spec.parse('b', 'npm:a@1.0.0')
+    const aliased = graph.addNode(
+      undefined,
+      aliasedMani,
+      aliasedSpec,
+      aliasedMani.name,
+      aliasedMani.version,
+    )
+    graph.addEdge('prod', aliasedSpec, root, aliased)
+
+    updatePackageJson({
+      packageJson,
+      graph,
+      add: new Map([
+        [
+          rootID,
+          new Map([
+            [
+              'b',
+              asDependency({
+                spec: aliasedSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    const [mani] = res
+    t.strictSame(res.length, 1, 'should have been called once')
+    t.matchSnapshot(
+      mani,
+      'should use provided aliased in package json save',
+    )
+  })
+
+  await t.test('aliased install from dist-tag', async t => {
+    const aliasedMani = { name: 'a', version: '1.0.0' }
+    const aliasedSpec = Spec.parse('b', 'npm:a@latest', specOptions)
+    const aliased = graph.addNode(
+      undefined,
+      aliasedMani,
+      aliasedSpec,
+      aliasedMani.name,
+      aliasedMani.version,
+    )
+    graph.addEdge('prod', aliasedSpec, root, aliased)
+
+    updatePackageJson({
+      packageJson,
+      graph,
+      add: new Map([
+        [
+          rootID,
+          new Map([
+            [
+              'b',
+              asDependency({
+                spec: aliasedSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    const [mani] = res
+    t.strictSame(res.length, 1, 'should have been called once')
+    t.matchSnapshot(
+      mani,
+      'should use resolved version in package json save',
+    )
+    t.equal(
+      root.edgesOut.get('b')?.spec.bareSpec,
+      'npm:a@^1.0.0',
+      'edge carries the saved alias',
+    )
+  })
+
+  await t.test('custom aliased install', async t => {
+    const aliasedMani = { name: 'a', version: '1.0.0' }
+    const aliasedSpec = Spec.parse(
+      'b',
+      'custom:a@latest',
+      specOptions,
+    )
+    const aliased = graph.addNode(
+      undefined,
+      aliasedMani,
+      aliasedSpec,
+      aliasedMani.name,
+      aliasedMani.version,
+    )
+    graph.addEdge('prod', aliasedSpec, root, aliased)
+
+    updatePackageJson({
+      packageJson,
+      graph,
+      add: new Map([
+        [
+          rootID,
+          new Map([
+            [
+              'b',
+              asDependency({
+                spec: aliasedSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    const [mani] = res
+    t.strictSame(res.length, 1, 'should have been called once')
+    t.matchSnapshot(
+      mani,
+      'should use custom aliased registry in package json save',
+    )
+    t.equal(
+      root.edgesOut.get('b')?.spec.bareSpec,
+      'custom:a@^1.0.0',
+      'edge carries the saved alias',
+    )
+  })
+
+  await t.test(
+    'multiple dependencies with mixed changes',
+    async t => {
+      // Create a manifest that already has some dependencies
+      const rootManifestWithDeps = {
+        name: 'root-with-deps',
+        version: '1.0.0',
+        dependencies: {
+          'last-dep': '^2.0.0', // This will remain unchanged
+        },
+      }
+
+      const testGraph = new Graph({
+        mainManifest: rootManifestWithDeps,
+        projectRoot: t.testdirName,
+      })
+      const testRoot = testGraph.mainImporter
+
+      // Create nodes for testing
+      const newDepMani = { name: 'new-dep', version: '1.5.0' }
+      const newSpec = Spec.parse('new-dep@^1.0.0')
+      const newDep = testGraph.addNode(
+        undefined,
+        newDepMani,
+        newSpec,
+        newDepMani.name,
+        newDepMani.version,
+      )
+
+      // the already existing dep needs to come after in order to
+      // make sure we don't override the `manifestChanged` state
+      const existingDepMani = { name: 'last-dep', version: '2.0.0' }
+      const existingSpec = Spec.parse('last-dep@^2.0.0')
+      const existingDep = testGraph.addNode(
+        undefined,
+        existingDepMani,
+        existingSpec,
+        existingDepMani.name,
+        existingDepMani.version,
+      )
+
+      // Add edges
+      testGraph.addEdge('prod', newSpec, testRoot, newDep)
+      testGraph.addEdge('prod', existingSpec, testRoot, existingDep)
+
+      // Test adding multiple dependencies:
+      // - 'new-dep' is new (change required)
+      // - 'last-dep' already has '^2.0.0' and we add '^2.0.0' (no change)
+      const multiAdd = new Map<DepID, Map<string, Dependency>>([
+        [
+          testRoot.id,
+          new Map<string, Dependency>([
+            [
+              'new-dep',
+              asDependency({
+                spec: newSpec,
+                type: 'prod',
+              }),
+            ],
+            [
+              'last-dep',
+              asDependency({
+                spec: existingSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap
+
+      updatePackageJson({
+        add: multiAdd,
+        packageJson,
+        graph: testGraph,
+      })()
+
+      const res = retrieveManifestResult()
+
+      // The key test: Should still call save even though one dependency didn't change
+      // because the other dependency (new-dep) did cause a change.
+      // This validates that manifestChanged accumulates across multiple dependencies.
+      t.strictSame(
+        res.length,
+        1,
+        'should have been called once even with mixed changes',
+      )
+
+      const [mani] = res
+      t.matchSnapshot(
+        mani,
+        'should save manifest with mixed dependency changes',
+      )
+    },
+  )
+
+  await t.test('save-prefix ~ saves tilde versions', async t => {
+    const testRootMani = {
+      name: 'tilde-root',
+      version: '1.0.0',
+    }
+
+    const testGraph = new Graph({
+      mainManifest: testRootMani,
+      projectRoot: t.testdirName,
+    })
+    const testRoot = testGraph.mainImporter
+
+    const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+    const abbrevSpec = Spec.parse('abbrev')
+    const abbrev = testGraph.addNode(
+      undefined,
+      abbrevMani,
+      abbrevSpec,
+      abbrevMani.name,
+      abbrevMani.version,
+    )
+    testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+    updatePackageJson({
+      packageJson,
+      graph: testGraph,
+      savePrefix: '~',
+      add: new Map([
+        [
+          testRoot.id,
+          new Map([
+            [
+              'abbrev',
+              asDependency({
+                spec: abbrevSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    t.strictSame(res.length, 1, 'should have been called once')
+    t.strictSame(
+      res[0]?.[0]?.dependencies?.abbrev,
+      '~4.0.0',
+      'should save version with tilde prefix',
+    )
+  })
+
+  await t.test('save-prefix >= saves gte versions', async t => {
+    const testRootMani = {
+      name: 'gte-root',
+      version: '1.0.0',
+    }
+
+    const testGraph = new Graph({
+      mainManifest: testRootMani,
+      projectRoot: t.testdirName,
+    })
+    const testRoot = testGraph.mainImporter
+
+    const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+    const abbrevSpec = Spec.parse('abbrev')
+    const abbrev = testGraph.addNode(
+      undefined,
+      abbrevMani,
+      abbrevSpec,
+      abbrevMani.name,
+      abbrevMani.version,
+    )
+    testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+    updatePackageJson({
+      packageJson,
+      graph: testGraph,
+      savePrefix: '>=',
+      add: new Map([
+        [
+          testRoot.id,
+          new Map([
+            [
+              'abbrev',
+              asDependency({
+                spec: abbrevSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    t.strictSame(res.length, 1, 'should have been called once')
+    t.strictSame(
+      res[0]?.[0]?.dependencies?.abbrev,
+      '>=4.0.0',
+      'should save version with >= prefix',
+    )
+  })
+
+  await t.test(
+    'save-prefix empty string saves exact versions',
+    async t => {
+      const testRootMani = {
+        name: 'empty-prefix-root',
+        version: '1.0.0',
+      }
+
+      const testGraph = new Graph({
+        mainManifest: testRootMani,
+        projectRoot: t.testdirName,
+      })
+      const testRoot = testGraph.mainImporter
+
+      const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+      const abbrevSpec = Spec.parse('abbrev')
+      const abbrev = testGraph.addNode(
+        undefined,
+        abbrevMani,
+        abbrevSpec,
+        abbrevMani.name,
+        abbrevMani.version,
+      )
+      testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+      updatePackageJson({
+        packageJson,
+        graph: testGraph,
+        savePrefix: '',
+        add: new Map([
+          [
+            testRoot.id,
+            new Map([
+              [
+                'abbrev',
+                asDependency({
+                  spec: abbrevSpec,
+                  type: 'prod',
+                }),
+              ],
+            ]),
+          ],
+        ]) as AddImportersDependenciesMap,
+      })()
+
+      const res = retrieveManifestResult()
+      t.strictSame(res.length, 1, 'should have been called once')
+      t.strictSame(
+        res[0]?.[0]?.dependencies?.abbrev,
+        '4.0.0',
+        'should save exact version with empty prefix',
+      )
+    },
+  )
+
+  await t.test(
+    'save-exact takes precedence over save-prefix',
+    async t => {
+      const testRootMani = {
+        name: 'precedence-root',
+        version: '1.0.0',
+      }
+
+      const testGraph = new Graph({
+        mainManifest: testRootMani,
+        projectRoot: t.testdirName,
+      })
+      const testRoot = testGraph.mainImporter
+
+      const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+      const abbrevSpec = Spec.parse('abbrev')
+      const abbrev = testGraph.addNode(
+        undefined,
+        abbrevMani,
+        abbrevSpec,
+        abbrevMani.name,
+        abbrevMani.version,
+      )
+      testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+      updatePackageJson({
+        packageJson,
+        graph: testGraph,
+        saveExact: true,
+        savePrefix: '~',
+        add: new Map([
+          [
+            testRoot.id,
+            new Map([
+              [
+                'abbrev',
+                asDependency({
+                  spec: abbrevSpec,
+                  type: 'prod',
+                }),
+              ],
+            ]),
+          ],
+        ]) as AddImportersDependenciesMap,
+      })()
+
+      const res = retrieveManifestResult()
+      t.strictSame(res.length, 1, 'should have been called once')
+      t.strictSame(
+        res[0]?.[0]?.dependencies?.abbrev,
+        '4.0.0',
+        'save-exact takes precedence over save-prefix ~',
+      )
+    },
+  )
+
+  await t.test('save-exact saves exact versions', async t => {
+    const testRootMani = {
+      name: 'exact-root',
+      version: '1.0.0',
+    }
+
+    const testGraph = new Graph({
+      mainManifest: testRootMani,
+      projectRoot: t.testdirName,
+    })
+    const testRoot = testGraph.mainImporter
+
+    // Dependency resolves to version 4.0.0
+    const abbrevMani = { name: 'abbrev', version: '4.0.0' }
+    // Bare spec with no version (like running `nrz i abbrev`)
+    const abbrevSpec = Spec.parse('abbrev')
+    const abbrev = testGraph.addNode(
+      undefined,
+      abbrevMani,
+      abbrevSpec,
+      abbrevMani.name,
+      abbrevMani.version,
+    )
+    testGraph.addEdge('prod', abbrevSpec, testRoot, abbrev)
+
+    updatePackageJson({
+      packageJson,
+      graph: testGraph,
+      saveExact: true,
+      add: new Map([
+        [
+          testRoot.id,
+          new Map([
+            [
+              'abbrev',
+              asDependency({
+                spec: abbrevSpec,
+                type: 'prod',
+              }),
+            ],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+    })()
+
+    const res = retrieveManifestResult()
+    t.strictSame(res.length, 1, 'should have been called once')
+    // The key assertion: should be 4.0.0 (exact), NOT ^4.0.0 (caret)
+    t.strictSame(
+      res[0]?.[0]?.dependencies?.abbrev,
+      '4.0.0',
+      'should save exact version without caret prefix',
+    )
+  })
+})
+
+t.test('stores the saved value on importer edges', async t => {
+  /**
+   * Root with a single `foo` edge placed with `edgeSpec`, updated from
+   * an add of `depSpec`. Returns the edge so the saved value can be read.
+   */
+  const run = (
+    edgeSpec: Spec,
+    depSpec: Spec,
+    rootDeps?: Record<string, string>,
+    opts?: { saveExact?: boolean; savePrefix?: string },
+  ) => {
+    const rootMani = {
+      name: 'root',
+      version: '1.0.0',
+      ...(rootDeps ? { dependencies: rootDeps } : null),
+    }
+    const graph = new Graph({
+      mainManifest: rootMani,
+      projectRoot: t.testdirName,
+      ...specOptions,
+    })
+    const root = graph.mainImporter
+    const fooMani = { name: 'foo', version: '1.0.0' }
+    const foo = graph.addNode(
+      undefined,
+      fooMani,
+      edgeSpec,
+      fooMani.name,
+      fooMani.version,
+    )
+    graph.addEdge('prod', edgeSpec, root, foo)
+    const edge = root.edgesOut.get('foo')!
+    updatePackageJson({
+      packageJson: new PackageJson(),
+      graph,
+      add: new Map([
+        [
+          root.id,
+          new Map([
+            ['foo', asDependency({ spec: depSpec, type: 'prod' })],
+          ]),
+        ],
+      ]) as AddImportersDependenciesMap,
+      ...opts,
+    })
+    return { graph, edge, manifest: root.manifest }
+  }
+
+  await t.test('dist-tag add', async t => {
+    const spec = Spec.parse('foo', 'latest', specOptions)
+    const { graph, edge, manifest } = run(spec, spec)
+    t.equal(edge.spec.bareSpec, '^1.0.0')
+    t.equal(String(edge.spec), 'foo@^1.0.0')
+    t.equal(manifest?.dependencies?.foo, '^1.0.0')
+    t.equal(graph.lockfileStale, true)
+  })
+
+  await t.test('--save-exact reaches the edge', async t => {
+    const spec = Spec.parse('foo', 'latest', specOptions)
+    const { edge } = run(spec, spec, undefined, { saveExact: true })
+    t.equal(edge.spec.bareSpec, '1.0.0')
+  })
+
+  await t.test('--save-prefix reaches the edge', async t => {
+    const spec = Spec.parse('foo', 'latest', specOptions)
+    const { edge } = run(spec, spec, undefined, { savePrefix: '~' })
+    t.equal(edge.spec.bareSpec, '~1.0.0')
+  })
+
+  await t.test(
+    'existing single version keeps the exact edge',
+    async t => {
+      const { edge, graph } = run(
+        Spec.parse('foo', '^1', specOptions),
+        Spec.parse('foo', '^1', specOptions),
+        { foo: '1.0.0' },
+      )
+      t.equal(edge.spec.bareSpec, '1.0.0')
+      t.equal(graph.lockfileStale, true)
+    },
+  )
+
+  await t.test('matching spec leaves the edge alone', async t => {
+    const spec = Spec.parse('foo', '^1.0.0', specOptions)
+    const { edge, graph } = run(spec, spec, { foo: '^1.0.0' })
+    t.equal(edge.spec, spec, 'same Spec instance')
+    t.equal(graph.lockfileStale, false)
+  })
+
+  await t.test('catalog and git edges are untouched', async t => {
+    const catalogOptions = {
+      ...specOptions,
+      catalog: { foo: '^1.0.0' },
+    }
+    const catalogSpec = Spec.parse('foo', 'catalog:', catalogOptions)
+    const catalog = run(catalogSpec, catalogSpec)
+    t.equal(catalog.edge.spec, catalogSpec)
+    t.equal(catalog.graph.lockfileStale, false)
+
+    const gitSpec = Spec.parse(
+      'foo',
+      'github:a/b#semver:^1.0.0',
+      specOptions,
+    )
+    const git = run(gitSpec, gitSpec)
+    t.equal(git.edge.spec, gitSpec)
+    t.equal(git.graph.lockfileStale, false)
   })
 })

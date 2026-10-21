@@ -1,7 +1,10 @@
+import { asAttributeNode } from '@nrz/dss-parser'
 import { error } from '@nrz/error-cause'
-import { type NodeLike } from '@nrz/graph'
-import { type JSONField, type Manifest } from '@nrz/types'
-import { asAttributeNode, type ParserState } from './types.ts'
+import { queryError } from './error.ts'
+import { removeDanglingEdges } from './pseudo/helpers.ts'
+import type { AttributeOperatorName } from '@nrz/dss-parser'
+import type { NodeLike, JSONField, Manifest } from '@nrz/types'
+import type { ParserState } from './types.ts'
 
 export type ComparatorFn = (attr: string, value?: string) => boolean
 
@@ -21,7 +24,7 @@ export const getManifestPropertyValues = (
 ): string[] | undefined => {
   if (!node.manifest) return
 
-  const traverse = new Set<JSONField>([node.manifest as JSONField])
+  const traverse = new Set<JSONField>([node.manifest])
   const props = new Set<JSONField>()
   for (const key of properties) {
     for (const prop of traverse) {
@@ -128,22 +131,12 @@ export const filterAttributes = (
     }
   }
 
-  for (const edge of state.partial.edges) {
-    // edge.name is a special case in order
-    // to be able to match missing nodes by name
-    if (propertyName === 'name' && check(edge.name)) {
-      continue
-    }
-    // remove any remaining dangling edge
-    if (!edge.to) {
-      state.partial.edges.delete(edge)
-    }
-  }
+  removeDanglingEdges(state)
   return state
 }
 
 // ref: https://developer.mozilla.org/en-US/docs/Web/CSS/Attribute_selectors
-const attributeSelectors: Record<string, ComparatorFn> = {
+const attributeSelectors = {
   '=': (attr: string, value = '') => attr === value,
   '^=': (attr: string, value = '') => attr.startsWith(value),
   '$=': (attr: string, value = '') => attr.endsWith(value),
@@ -153,7 +146,7 @@ const attributeSelectors: Record<string, ComparatorFn> = {
   '|=': (attr: string, value = '') =>
     attr === value || attr.startsWith(`${value}-`),
   undefined: (attr: string) => !!attr,
-}
+} satisfies Record<AttributeOperatorName | 'undefined', ComparatorFn>
 export const attributeSelectorsMap = new Map<string, ComparatorFn>(
   Object.entries(attributeSelectors),
 )
@@ -173,14 +166,20 @@ export const attribute = async (
       return state
     }
 
-    throw new Error(
+    throw queryError(
       `Unsupported attribute operator: ${curr.operator}`,
+      state.current,
+      { validOptions: [...attributeSelectorsMap.keys()] },
     )
   }
 
   const value = curr.value || ''
   const propertyName = curr.attribute
   const insensitive = !!curr.insensitive
+
+  // Increment the commonCounter for specificity
+  state.specificity.commonCounter += 1
+
   return filterAttributes(
     state,
     operatorFn,

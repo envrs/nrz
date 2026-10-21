@@ -19,17 +19,37 @@
 // From there, the body can be of any indeterminate length, and is the rest
 // of the file.
 
+import type { ErrorCauseOptions } from '@nrz/error-cause'
 import { error } from '@nrz/error-cause'
-import { type Integrity, type JSONField } from '@nrz/types'
+import type { Integrity, JSONField } from '@nrz/types'
 import ccp from 'cache-control-parser'
-import { createHash } from 'crypto'
-import { inspect, type InspectOptions } from 'util'
-import { gunzipSync } from 'zlib'
+import { createHash } from 'node:crypto'
+import type { InspectOptions } from 'node:util'
+import { inspect } from 'node:util'
+import { gunzipSync } from 'node:zlib'
 import { getRawHeader, setRawHeader } from './raw-header.ts'
+import {
+  getDecodedValue,
+  getEncondedValue,
+} from './string-encoding.ts'
 
 export type JSONObj = Record<string, JSONField>
 
-const readSize = (buf: Buffer, offset: number) => {
+// same bound as @nrz/tar unpack: reject decompression bombs
+// rather than committing unbounded memory to gunzipSync.
+const MAX_DECOMPRESSION_RATIO = 1000
+const defaultMaxUnpackedBytes = 2 * 1024 * 1024 * 1024
+const parseMaxUnpackedBytes = (raw: string | undefined): number => {
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 1 ?
+      Math.floor(n)
+    : defaultMaxUnpackedBytes
+}
+const maxUnpackedBytes = parseMaxUnpackedBytes(
+  process.env.NRZ_TAR_MAX_UNPACKED_BYTES,
+)
+
+const readSize = (buf: Uint8Array, offset: number) => {
   const a = buf[offset]
   const b = buf[offset + 1]
   const c = buf[offset + 2]
@@ -54,167 +74,565 @@ const readSize = (buf: Buffer, offset: number) => {
 
 const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
 
+export type CacheEntryOptions = {
+  /**
+   * An optional body to use.
+   *
+   * Adopted as-is (no copy). The caller must not mutate or reuse it.
+   * Used when decoding a cache entry from a buffer. Do not call
+   * `addBody` after providing this. Worker-thread transfers must
+   * copy or structuredClone first so the cache ArrayBuffer is not
+   * detached.
+   */
+  body?: Uint8Array
+
+  /**
+   * An optional content length of the body to use, if undefined the
+   * content-length header will be used.
+   */
+  contentLength?: number
+
+  /**
+   * The expected integrity value for this response body
+   */
+  integrity?: Integrity
+  /**
+   * Whether to trust the integrity, or calculate the actual value.
+   *
+   * This indicates that we just accept whatever the integrity is as the actual
+   * integrity for saving back to the cache, because it's coming directly from
+   * the registry that we fetched a packument from, and is an initial gzipped
+   * artifact request.
+   */
+  trustIntegrity?: boolean
+
+  /**
+   * If the server does not serve a `stale-while-revalidate` value in the
+   * `cache-control` header, then this multiplier is applied to the `max-age`
+   * or `s-maxage` values.
+   *
+   * By default, this is `60`, so for example a response that is cacheable for
+   * 5 minutes will allow a stale response while revalidating for up to 5
+   * hours.
+   *
+   * If the server *does* provide a `stale-while-revalidate` value, then that
+   * is always used.
+   *
+   * Set to 0 to prevent any `stale-while-revalidate` behavior unless
+   * explicitly allowed by the server's `cache-control` header.
+   */
+  'stale-while-revalidate-factor'?: number
+}
+
 export class CacheEntry {
   #statusCode: number
-  #headers: Buffer[]
-  #body: Buffer[] = []
+  /** The raw headers as an array of buffers */
+  #headers: Uint8Array[]
+  /** The body buffer, used if the content length is known. */
+  #body?: Uint8Array
+  /**
+   * If the content length is unknown we save the body in multiple parts
+   * in order to only concatenate once at the end and save extra memory copies.
+   */
+  #bodyParts: Uint8Array[] = []
+  /** Used to track the length of the body while reading chunks */
   #bodyLength = 0
+  /** The total length of the body, if known */
+  #contentLength?: number
   #integrity?: Integrity
   #integrityActual?: Integrity
   #json?: JSONObj
+  #trustIntegrity
+  #staleWhileRevalidateFactor
+  #fromCache = false
+  #headSize?: number
 
   constructor(
     statusCode: number,
-    headers: Buffer[],
-    integrity?: Integrity,
+    headers: Uint8Array[],
+    {
+      body,
+      integrity,
+      trustIntegrity = false,
+      'stale-while-revalidate-factor':
+        staleWhileRevalidateFactor = 60,
+      contentLength,
+    }: CacheEntryOptions = {},
   ) {
-    this.#integrity = integrity
-    this.#statusCode = statusCode
     this.#headers = headers
+    this.#statusCode = statusCode
+    this.#trustIntegrity = trustIntegrity
+    this.#staleWhileRevalidateFactor = staleWhileRevalidateFactor
+    if (integrity) this.integrity = integrity
+
+    // if content-legnth is known then we'll only allocate that much memory
+    // and we'll avoid copying memory around when adding new chunks.
+    if (contentLength != null && typeof contentLength === 'number') {
+      this.#contentLength = contentLength
+    }
+
+    // if a body is provided then adopt it; `addBody` must not be used.
+    if (body) {
+      this.#body = body
+      this.#bodyLength = body.byteLength
+      /* c8 ignore start */
+    } else if (this.#contentLength) {
+      const buffer = new ArrayBuffer(this.#contentLength)
+      this.#body = new Uint8Array(buffer, 0, this.#contentLength)
+      this.#bodyLength = 0
+    }
+    /* c8 ignore stop */
   }
 
   get #headersAsObject(): [string, string][] {
     const ret: [string, string][] = []
     for (let i = 0; i < this.#headers.length - 1; i += 2) {
-      const key = String(this.#headers[i])
-      const val = String(this.#headers[i + 1])
+      const key = getDecodedValue(this.#headers[i])
+      const val = getDecodedValue(this.#headers[i + 1])
       ret.push([key, val])
     }
     return ret
   }
 
-  [kCustomInspect](depth: number, options: InspectOptions): string {
-    const str = inspect(
-      {
-        statusCode: this.statusCode,
+  toJSON() {
+    const {
+      statusCode,
+      valid,
+      staleWhileRevalidate,
+      cacheControl,
+      date,
+      contentType,
+      integrity,
+      maxAge,
+      isGzip,
+      isJSON,
+    } = this
+    /* c8 ignore start */
+    const age =
+      date ?
+        Math.floor((Date.now() - date.getTime()) / 1000)
+      : undefined
+    const expires =
+      date ? new Date(date.getTime() + this.maxAge * 1000) : undefined
+    /* c8 ignore end */
+    return Object.fromEntries(
+      Object.entries({
+        statusCode,
         headers: this.#headersAsObject,
-        text: this.text(),
-      },
-      {
-        depth,
-        ...options,
-      },
+        contentType,
+        integrity,
+        date,
+        expires,
+        cacheControl,
+        valid,
+        staleWhileRevalidate,
+        age,
+        maxAge,
+        isGzip,
+        isJSON,
+      }).filter(([_, v]) => v !== undefined),
     )
+  }
+
+  [kCustomInspect](depth: number, options: InspectOptions): string {
+    const str = inspect(this.toJSON(), {
+      depth,
+      ...options,
+    })
     return `@nrz/registry-client.CacheEntry ${str}`
+  }
+
+  #date?: Date
+  get date(): Date | undefined {
+    if (this.#date) return this.#date
+    const dh = this.getHeaderString('date')
+    if (dh) this.#date = new Date(dh)
+    return this.#date
+  }
+
+  #maxAge?: number
+  get maxAge(): number {
+    if (this.#maxAge !== undefined) return this.#maxAge
+    // see if the max-age has not yet been crossed
+    // default to 5m if maxage is not set, as some registries
+    // do not set a cache control header at all.
+    const cc = this.cacheControl
+    this.#maxAge = cc['max-age'] || cc['s-maxage'] || 300
+    return this.#maxAge
+  }
+
+  #cacheControl?: ccp.CacheControl
+  get cacheControl(): ccp.CacheControl {
+    if (this.#cacheControl) return this.#cacheControl
+    const cc = this.getHeaderString('cache-control')
+    this.#cacheControl = cc ? ccp.parse(cc) : {}
+    return this.#cacheControl
+  }
+
+  #staleUntil?: number
+  get staleWhileRevalidate(): boolean {
+    // memoize the deadline, not the answer, so an entry held for a
+    // long time (decoded-entry memo, long-lived process) still expires
+    if (this.#staleUntil !== undefined)
+      return Date.now() < this.#staleUntil
+    if (this.valid || !this.date) return true
+    const swv =
+      this.cacheControl['stale-while-revalidate'] ??
+      this.maxAge * this.#staleWhileRevalidateFactor
+
+    this.#staleUntil = this.date.getTime() + swv * 1000
+    return Date.now() < this.#staleUntil
+  }
+
+  #contentType?: string
+  get contentType() {
+    if (this.#contentType !== undefined) return this.#contentType
+    this.#contentType = this.getHeaderString('content-type') ?? ''
+    return this.#contentType
   }
 
   /**
    * `true` if the entry represents a cached response that is still
    * valid to use.
    */
+  #valid?: boolean
+  #validUntil?: number
   get valid(): boolean {
-    const cc_ = this.getHeader('cache-control')?.toString()
-    const cc = cc_ ? ccp.parse(cc_) : {}
-    const ct = this.getHeader('content-type')?.toString() ?? ''
-    const dh = this.getHeader('date')?.toString()
+    if (this.#valid !== undefined) return this.#valid
+    // time-based validity memoizes the deadline, not the answer, so
+    // an entry held for a long time (decoded-entry memo, long-lived
+    // process) still expires and gets revalidated
+    if (this.#validUntil !== undefined)
+      return Date.now() < this.#validUntil
 
     // immutable = never changes
-    if (cc.immutable) return true
+    if (this.cacheControl.immutable) return (this.#valid = true)
 
     // some registries do text/json, some do application/json,
     // some do application/vnd.npm.install-v1+json
     // If it's NOT json, it's an immutable tarball
-    if (ct !== '' && !/\bjson\b/.test(ct)) return true
+    const ct = this.contentType
+    if (ct && !/\bjson\b/.test(ct)) return (this.#valid = true)
 
     // see if the max-age has not yet been crossed
     // default to 5m if maxage is not set, as some registries
     // do not set a cache control header at all.
-    const ma = cc['max-age'] || cc['s-maxage'] || 300
-    if (ma && dh) {
-      return Date.parse(dh) + ma * 1000 > Date.now()
-    }
-    return false
+    if (!this.date) return (this.#valid = false)
+    this.#validUntil = this.date.getTime() + this.maxAge * 1000
+    return Date.now() < this.#validUntil
   }
 
-  addBody(b: Buffer) {
-    this.#body.push(b)
-    this.#bodyLength += b.byteLength
+  /**
+   * Add contents to the entry body.
+   */
+  addBody(b: Uint8Array) {
+    // when the content length is uknown we store each chunk in an array that
+    // later on is concatenate into a single buffer, otherwise we just append
+    // the new chunk of bytes to the already allocated buffer keeping track
+    // of the current offset in the `this.#bodyLength` property.
+    if (!this.#body) {
+      this.#bodyParts.push(b)
+      this.#bodyLength += b.byteLength
+    } else {
+      this.#body.set(b, this.#bodyLength)
+      this.#bodyLength += b.byteLength
+    }
+  }
+
+  /** True when this entry was decoded from the on-disk cache. */
+  get fromCache(): boolean {
+    return this.#fromCache
+  }
+
+  /**
+   * Byte length of the encoded head (4-byte length prefix + status +
+   * headers). Set when decoded from cache or after `encodeHead()`.
+   */
+  get headSize(): number | undefined {
+    return this.#headSize
   }
 
   get statusCode() {
     return this.#statusCode
   }
-  get headers() {
+
+  /**
+   * True when the registry answered with a 2xx.
+   *
+   * `RegistryClient.request()` resolves for every status, so this is how
+   * code holding a real CacheEntry asks "did it work?".
+   *
+   * Note this is the strict form. Use it only where a genuine CacheEntry
+   * is guaranteed; `assertOk` uses the loose range check because it is
+   * also handed duck-typed responses.
+   */
+  get ok(): boolean {
+    return this.#statusCode >= 200 && this.#statusCode < 300
+  }
+  get headers(): Uint8Array[] {
     return this.#headers
   }
 
   /**
-   * check that the sri integrity string that was provided to the ctor
+   * Returns the body as a single Uint8Array, concatenating parts if needed.
+   */
+  get _body(): Uint8Array {
+    // if the body is known we'll just use that
+    if (this.#body) return this.#body
+    // otherwise we concatenate the body parts into a single buffer
+    const buffer = new ArrayBuffer(this.#bodyLength)
+    const b = new Uint8Array(buffer, 0, this.#bodyLength)
+    let off = 0
+    for (const part of this.#bodyParts) {
+      b.set(part, off)
+      off += part.byteLength
+    }
+    return b
+  }
+
+  /**
+   * Check that the sri integrity string that was provided to the ctor
    * matches the body that we actually received. This should only be called
    * AFTER the entire body has been completely downloaded.
    *
+   * This method **will throw** if the integrity values do not match.
+   *
    * Note that this will *usually* not be true if the value is coming out of
-   * the cache, because the cache entries are un-gzipped in place. It should
-   * _only_ be called for artifacts that come from an actual http response.
+   * the cache, because cache entries not exploded into the global store are
+   * un-gzipped in place. It should _only_ be called for artifacts that come
+   * from an actual http response, whatever its encoding: an identity body
+   * is hashed as it came, a gzipped one before anything un-gzips it in
+   * memory.
+   *
+   * Returns true if anything was actually verified.
    */
-  checkIntegrity(): boolean {
+  checkIntegrity(
+    context: ErrorCauseOptions = {},
+  ): this is CacheEntry & { integrity: Integrity } {
     if (!this.#integrity) return false
-    return this.integrityActual === this.#integrity
+    if (this.integrityActual !== this.#integrity) {
+      throw error('Integrity check failure', {
+        code: 'EINTEGRITY',
+        response: this,
+        wanted: this.#integrity,
+        found: this.integrityActual,
+        ...context,
+      })
+    }
+    return true
   }
+
+  /**
+   * Check the body against the RFC 9530 digest the server sent with it,
+   * for a response that had no expected integrity. A registry that omits
+   * `dist.integrity` labels every tarball, so a missing digest fails when
+   * `required`. Like {@link checkIntegrity}, only for an actual http
+   * response: cached bodies are un-gzipped in place.
+   *
+   * **Will throw** on a mismatch. Returns the hash of the body.
+   */
+  checkDigest(
+    required: boolean,
+    context: ErrorCauseOptions = {},
+  ): Integrity {
+    const computed = this.integrityActual
+    const { digest } = this
+    if (digest ? digest !== computed : required) {
+      throw error('Integrity check failure', {
+        code: 'EINTEGRITY',
+        response: this,
+        wanted: digest,
+        found: computed,
+        ...context,
+      })
+    }
+    return computed
+  }
+
+  #hash(body: Uint8Array = this._body): Integrity {
+    const hash = createHash('sha512')
+    hash.update(body)
+    return `sha512-${hash.digest('base64')}`
+  }
+
+  /**
+   * The hash of the body un-gzipped, or of the body itself if it is not
+   * gzipped, without un-gzipping the entry. Bounded like {@link unzip},
+   * and throws like it on a body that will not un-gzip.
+   *
+   * Never the hash to record for an artifact, which is the hash of its
+   * bytes as served. It pins the same content, though, and is what a
+   * body hashed after something un-gzipped it was pinned with.
+   */
+  unzippedIntegrity(): Integrity {
+    return this.#hash(this.isGzip ? this.#gunzip() : this._body)
+  }
+
   get integrityActual(): Integrity {
     if (this.#integrityActual) return this.#integrityActual
-    const hash = createHash('sha512')
-    for (const buf of this.#body) hash.update(buf)
-    this.#integrityActual = `sha512-${hash.digest('base64')}`
-    return this.#integrityActual
+    const i = this.#hash()
+    this.integrityActual = i
+    return i
+  }
+
+  set integrityActual(i: Integrity) {
+    this.#integrityActual = i
+    this.setHeader('integrity', i)
+  }
+
+  set integrity(i: Integrity | undefined) {
+    if (!this.#integrity && i) {
+      this.#integrity = i
+      if (this.#trustIntegrity) this.integrityActual = i
+    }
   }
   get integrity() {
     return this.#integrity
   }
 
   /**
+   * The sha-512 member of an RFC 9530 `Repr-Digest` (or `Content-Digest`)
+   * response header, as an SRI string. A registry that serves packuments
+   * without `dist.integrity` labels each tarball this way instead.
+   */
+  get digest(): Integrity | undefined {
+    const value =
+      this.getHeaderString('repr-digest') ??
+      this.getHeaderString('content-digest')
+    const m =
+      value && /(?:^|,)\s*sha-512=:([A-Za-z0-9+/]{86}==):/.exec(value)
+    return m ? `sha512-${m[1]}` : undefined
+  }
+
+  /**
    * Give it a key, and it'll return the buffer of that header value
    */
-  getHeader(h: string) {
+  getHeader(h: string): Uint8Array | undefined {
     return getRawHeader(this.#headers, h)
+  }
+
+  /**
+   * Give it a key, and it'll return the decoded string of that header value
+   */
+  getHeaderString(h: string): string | undefined {
+    const value = getRawHeader(this.#headers, h)
+    if (value) {
+      return getDecodedValue(value)
+    }
   }
 
   /**
    * Set a header to a specific value
    */
-  setHeader(h: string, value: Buffer | string) {
+  setHeader(h: string, value: Uint8Array | string) {
     this.#headers = setRawHeader(this.#headers, h, value)
+    // validity is memoized off the date header
+    if (h.toLowerCase() === 'date') {
+      this.#date = undefined
+      this.#valid = undefined
+      this.#validUntil = undefined
+      this.#staleUntil = undefined
+    }
+  }
+
+  /**
+   * Remove a header, if present
+   */
+  deleteHeader(h: string) {
+    const key = h.toLowerCase()
+    for (let i = 0; i < this.#headers.length; i += 2) {
+      const k = this.#headers[i]
+      if (k && getDecodedValue(k).toLowerCase() === key) {
+        this.#headers.splice(i, 2)
+        return
+      }
+    }
   }
 
   /**
    * Return the body of the entry as a Buffer
    */
   buffer(): Buffer {
-    const b = this.#body[0]
-    if (!b) return Buffer.allocUnsafe(0)
-    if (this.#body.length === 1) return b
-    const cat = Buffer.concat(this.#body, this.#bodyLength)
-    this.#body = [cat]
-    return cat
+    return Buffer.from(
+      this._body.buffer,
+      this._body.byteOffset,
+      this._body.byteLength,
+    )
   }
 
   // return the buffer if it's a tarball, or the parsed
   // JSON if it's not.
-  get body(): Buffer | Record<string, any> {
+  get body(): Uint8Array | Record<string, any> {
     return this.isJSON ? this.json() : this.buffer()
   }
 
   #isJSON?: boolean
   get isJSON(): boolean {
     if (this.#isJSON !== undefined) return this.#isJSON
-    const ct = this.getHeader('content-type')?.toString()
+    const ct = this.getHeaderString('content-type')
     // if it says it's json, assume json
     if (ct) return (this.#isJSON = /\bjson\b/.test(ct))
-    const text = this.text()
     // don't cache, because we might just not have it yet.
-    if (!text) return false
+    if (!this._body.length) return false
+    // the sniff un-gzips the body in place. hash a gzipped network body
+    // first, so a tarball served without a content-type is recorded
+    // under the hash of the bytes every other fetch of it gets, not of
+    // the un-gzipped copy only this cache holds. an identity body is
+    // left as it is, and the cache write hashes it as it came; a body
+    // already un-gzipped in memory is not the wire bytes any more, so
+    // no hash of it is ever recorded.
+    const wire =
+      !this.#fromCache && !this.#integrityActual && this.isGzip ?
+        this.#hash()
+      : undefined
+    this.unzip()
+    const buf = this._body
+    if (!buf.length) return false
     // all registry json starts with {, and no tarball ever can.
-    this.#isJSON = text.startsWith('{')
+    this.#isJSON = buf[0] === 0x7b
     if (this.#isJSON) this.setHeader('content-type', 'text/json')
+    else if (wire) this.integrityActual = wire
     return this.#isJSON
+  }
+
+  /**
+   * Label a 200 network body that is not json and came with no
+   * content-type `application/octet-stream`, the way the json sniff
+   * labels json `text/json`.
+   *
+   * The label says the hash the entry is stored under is the hash of
+   * its bytes as served, checked or recorded by
+   * `RegistryClient.request()`. So it is applied only where that is
+   * known, right before such an entry is stored, and never by the
+   * sniff: an entry with no content-type read back from the cache is
+   * not known to be one.
+   *
+   * A decoded entry, an error body, an empty body, json, and a body
+   * served with a content-type are left as they are. Not an error body
+   * or an empty one: a content-type that is not json makes an entry
+   * immutable (see {@link valid}), which neither was when served with
+   * none, and no artifact is empty. The length is checked after the
+   * sniff, which un-gzips a body with no content-type.
+   */
+  labelArtifact() {
+    if (
+      this.#fromCache ||
+      this.#statusCode !== 200 ||
+      this.isJSON ||
+      this.getHeaderString('content-type') ||
+      !this.#bodyLength
+    ) {
+      return
+    }
+    this.setHeader('content-type', 'application/octet-stream')
   }
 
   #isGzip?: boolean
   get isGzip(): boolean {
     if (this.#isGzip !== undefined) return this.#isGzip
-    const ce = this.getHeader('content-encoding')?.toString()
+    const ce = this.getHeaderString('content-encoding')
     if (ce && !/\bgzip\b/.test(ce)) return (this.#isGzip = false)
-    const buf = this.buffer()
+    const buf = this._body
     if (buf.length < 2) return false
     this.#isGzip = buf[0] === 0x1f && buf[1] === 0x8b
     if (this.#isGzip) {
@@ -226,6 +644,34 @@ export class CacheEntry {
     return this.#isGzip
   }
 
+  // the body un-gzipped, for a body known to be gzipped
+  #gunzip(): Buffer {
+    // we know that if we know it's gzip, that the body has been
+    // flattened to a single buffer, so save the extra call.
+    /* c8 ignore start */
+    if (this._body.length === 0)
+      throw error('Invalid buffer, cant unzip')
+    /* c8 ignore stop */
+    const max = Math.min(
+      maxUnpackedBytes,
+      this._body.length * MAX_DECOMPRESSION_RATIO,
+    )
+    try {
+      return gunzipSync(this._body, { maxOutputLength: max })
+    } catch (er) {
+      throw (
+          (er as NodeJS.ErrnoException).code ===
+            'ERR_BUFFER_TOO_LARGE'
+        ) ?
+          error('cache entry exceeds maximum unpacked size', {
+            found: this._body.length,
+            max,
+            cause: er,
+          })
+        : er
+    }
+  }
+
   /**
    * Un-gzip encode the body.
    * Returns true if it was previously gzip (so something was done), otherwise
@@ -233,17 +679,13 @@ export class CacheEntry {
    */
   unzip() {
     if (this.isGzip) {
-      // we know that if we know it's gzip, that the body has been
-      // flattened to a single buffer, so save the extra call.
-      /* c8 ignore start */
-      if (this.#body[0] == null)
-        throw error('Invalid buffer, cant unzip')
-      /* c8 ignore stop */
-      const b = gunzipSync(this.#body[0])
+      const b = this.#gunzip()
       this.setHeader('content-encoding', 'identity')
-      this.#body = [b]
-      this.#bodyLength = b.byteLength
-      this.setHeader('content-length', String(this.#bodyLength))
+      const u8 = new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
+      this.#body = u8
+      this.#bodyLength = u8.byteLength
+      this.#contentLength = u8.byteLength
+      this.setHeader('content-length', String(this.#contentLength))
       this.#isGzip = false
       return true
     }
@@ -256,7 +698,7 @@ export class CacheEntry {
    */
   text() {
     this.unzip()
-    return this.buffer().toString()
+    return getDecodedValue(this._body)
   }
 
   /**
@@ -264,9 +706,60 @@ export class CacheEntry {
    */
   json(): JSONObj {
     if (this.#json !== undefined) return this.#json
-    const obj = JSON.parse(this.text()) as JSONObj
+    const text = this.text()
+    const obj = JSON.parse(text || '{}') as JSONObj
     this.#json = obj
     return obj
+  }
+
+  static #parseHead(buffer: Uint8Array):
+    | {
+        statusCode: number
+        headers: Uint8Array[]
+        integrity?: Integrity
+        headSize: number
+      }
+    | undefined {
+    if (buffer.length < 4) return undefined
+    const headSize = readSize(buffer, 0)
+    if (buffer.length < headSize) return undefined
+    const statusCode = Number(getDecodedValue(buffer.subarray(4, 7)))
+    const headersBuffer = buffer.subarray(7, headSize)
+    const headers: Uint8Array[] = []
+    let i = 0
+    let integrity: Integrity | undefined = undefined
+    while (i < headersBuffer.length - 4) {
+      const size = readSize(headersBuffer, i)
+      const val = headersBuffer.subarray(i + 4, i + size)
+      if (headers.length % 2 === 1) {
+        const k = getDecodedValue(
+          headers[headers.length - 1],
+        ).toLowerCase()
+        if (k === 'integrity')
+          integrity = getDecodedValue(val) as Integrity
+      }
+      headers.push(val)
+      i += size
+    }
+    return { statusCode, headers, integrity, headSize }
+  }
+
+  /**
+   * Decode only the status/headers from an encoded cache buffer.
+   * The body is not read; `headSize` records how many bytes the head
+   * occupies so a later `encodeHead()` can be patched in place.
+   */
+  static decodeHead(buffer: Uint8Array): CacheEntry {
+    const parsed = CacheEntry.#parseHead(buffer)
+    if (!parsed) return emptyCacheEntry
+    const c = new CacheEntry(parsed.statusCode, parsed.headers, {
+      body: new Uint8Array(0),
+      integrity: parsed.integrity,
+      trustIntegrity: true,
+    })
+    c.#fromCache = true
+    c.#headSize = parsed.headSize
+    return c
   }
 
   /**
@@ -274,78 +767,162 @@ export class CacheEntry {
    * and this static method will decode it into a CacheEntry representing
    * the cached response.
    */
-  static decode(buffer: Buffer): CacheEntry {
-    if (buffer.length < 4) {
-      return new CacheEntry(0, [])
-    }
-    const headSize = readSize(buffer, 0)
-    if (buffer.length < headSize) {
-      return new CacheEntry(0, [])
-    }
-    const statusCode = Number(buffer.subarray(4, 7).toString())
-    const headersBuffer = buffer.subarray(7, headSize)
-    // walk through the headers array, building up the rawHeaders Buffer[]
-    const headers: Buffer[] = []
-    let i = 0
-    while (i < headersBuffer.length - 4) {
-      const size = readSize(headersBuffer, i)
-      headers.push(headersBuffer.subarray(i + 4, i + size))
-      i += size
-    }
-    const c = new CacheEntry(statusCode, headers)
-    const body = buffer.subarray(headSize)
-    c.#body = [body]
-    c.#bodyLength = body.byteLength
-    c.setHeader('content-length', String(c.#bodyLength))
-    if (c.isJSON) {
-      try {
-        c.json()
-      } catch {
-        return new CacheEntry(0, [])
+  static decode(
+    buffer: Uint8Array,
+    options: CacheEntryOptions = {},
+  ): CacheEntry {
+    const parsed = CacheEntry.#parseHead(buffer)
+    if (!parsed) return emptyCacheEntry
+    const body = buffer.subarray(parsed.headSize)
+
+    const c = new CacheEntry(
+      parsed.statusCode,
+      setRawHeader(
+        parsed.headers,
+        'content-length',
+        String(body.byteLength),
+      ),
+      {
+        body,
+        integrity: parsed.integrity,
+        trustIntegrity: true,
+        contentLength: body.byteLength,
+        ...options,
+      },
+    )
+    c.#fromCache = true
+    c.#headSize = parsed.headSize
+
+    try {
+      if (c.isJSON) {
+        c.unzip()
+        if (!looksLikeJson(c._body)) return emptyCacheEntry
       }
+    } catch {
+      return emptyCacheEntry
     }
     return c
+  }
+
+  static isGzipEntry(buffer: Uint8Array): boolean {
+    if (buffer.length < 4) return false
+    const headSize = readSize(buffer, 0)
+    const gzipBytes = buffer.subarray(headSize, headSize + 2)
+    return gzipBytes[0] === 0x1f && gzipBytes[1] === 0x8b
+  }
+
+  /**
+   * Head-only check for a 200 non-JSON body with an integrity header,
+   * i.e. a tarball the global store can be built from.
+   */
+  static isTarballEntry(buffer: Uint8Array): boolean {
+    return !!CacheEntry.tarballIntegrity(buffer)
+  }
+
+  /**
+   * The hash recorded on such an entry, or undefined if this is not one.
+   * {@link isTarballEntry} is built on this, and both only need the head.
+   */
+  static tarballIntegrity(buffer: Uint8Array): Integrity | undefined {
+    const parsed = CacheEntry.#parseHead(buffer)
+    if (parsed?.statusCode !== 200 || !parsed.integrity) {
+      return undefined
+    }
+    const ct = getRawHeader(parsed.headers, 'content-type')
+    return !ct || !/\bjson\b/.test(getDecodedValue(ct)) ?
+        parsed.integrity
+      : undefined
+  }
+
+  /**
+   * Encode status + headers (no body) as they appear at the start of
+   * an on-disk cache file.
+   */
+  encodeHead(): Buffer {
+    const statusStr = String(this.#statusCode)
+    const statusBytes = getEncondedValue(statusStr)
+
+    let headLength = 4 + statusBytes.byteLength
+    for (const h of this.#headers) headLength += 4 + h.byteLength
+
+    const out = Buffer.from(
+      new ArrayBuffer(headLength),
+      0,
+      headLength,
+    )
+    let off = 0
+    out[off++] = (headLength >> 24) & 0xff
+    out[off++] = (headLength >> 16) & 0xff
+    out[off++] = (headLength >> 8) & 0xff
+    out[off++] = headLength & 0xff
+    out.set(statusBytes, off)
+    off += statusBytes.byteLength
+    for (const h of this.#headers) {
+      const l = 4 + h.byteLength
+      out[off++] = (l >> 24) & 0xff
+      out[off++] = (l >> 16) & 0xff
+      out[off++] = (l >> 8) & 0xff
+      out[off++] = l & 0xff
+      out.set(h, off)
+      off += h.byteLength
+    }
+    this.#headSize = headLength
+    return out
   }
 
   /**
    * Encode the entry as a single Buffer for writing to the cache
    */
-  // TODO: should this maybe not concat, and just return Buffer[]?
-  // Then we can writev it to the cache file and save the memory copy
   encode(): Buffer {
-    // store json results as a serialized object.
     if (this.isJSON) this.json()
-    const sb = Buffer.from(String(this.#statusCode))
-    const chunks: Buffer[] = [sb]
-    let headLength = sb.byteLength + 4
-    for (const h of this.#headers) {
-      const hlBuf = Buffer.allocUnsafe(4)
-      const hl = h.byteLength + 4
-      headLength += hl
-      hlBuf.set(
-        [
-          (hl >> 24) & 0xff,
-          (hl >> 16) & 0xff,
-          (hl >> 8) & 0xff,
-          hl & 0xff,
-        ],
-        0,
-      )
-      chunks.push(hlBuf, h)
-    }
-
-    const hlBuf = Buffer.allocUnsafe(4)
-    hlBuf.set(
-      [
-        (headLength >> 24) & 0xff,
-        (headLength >> 16) & 0xff,
-        (headLength >> 8) & 0xff,
-        headLength & 0xff,
-      ],
-      0,
-    )
-    chunks.unshift(hlBuf)
-    chunks.push(...this.#body)
-    return Buffer.concat(chunks, headLength + this.#bodyLength)
+    const head = this.encodeHead()
+    const body = this._body
+    const total = head.byteLength + body.byteLength
+    const out = Buffer.from(new ArrayBuffer(total), 0, total)
+    out.set(head, 0)
+    out.set(body, head.byteLength)
+    return out
   }
 }
+
+const isJsonWs = (c: number) =>
+  c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d
+
+const looksLikeJson = (buf: Uint8Array): boolean => {
+  // skip a UTF-8 BOM; TextDecoder strips it when the body is parsed
+  const bom =
+    buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0
+  // an empty body is parsed as '{}' by json()
+  if (buf.byteLength === bom) return true
+  let first: number | undefined
+  let start = bom
+  for (let i = bom; i < buf.byteLength; i++) {
+    const c = buf[i]
+    /* c8 ignore start */
+    if (c === undefined) break
+    /* c8 ignore stop */
+    if (!isJsonWs(c)) {
+      first = c
+      break
+    }
+    start++
+  }
+  if (first === undefined) return false
+  let last = first
+  for (let j = buf.byteLength - 1; j > start; j--) {
+    const c = buf[j]
+    /* c8 ignore start */
+    if (c === undefined) break
+    /* c8 ignore stop */
+    if (!isJsonWs(c)) {
+      last = c
+      break
+    }
+  }
+  return (
+    (first === 0x7b && last === 0x7d) ||
+    (first === 0x5b && last === 0x5d)
+  )
+}
+
+const emptyCacheEntry = new CacheEntry(0, [], { contentLength: 0 })

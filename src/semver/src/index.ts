@@ -1,5 +1,7 @@
 import { Range } from './range.ts'
-import { type IncrementType, Version } from './version.ts'
+import { Version } from './version.ts'
+import type { Comparator, OVTuple } from './comparator.ts'
+import type { IncrementType } from './version.ts'
 import { syntaxError } from '@nrz/error-cause'
 
 export * from './comparator.ts'
@@ -8,13 +10,28 @@ export * from './version.ts'
 
 /** Return the parsed version string, or `undefined` if invalid */
 export const parse = (version: Version | string) => {
-  if (version instanceof Version) return version
+  if (!(typeof version === 'string')) return version
   try {
-    return Version.parse(String(version))
+    return Version.parse(version)
   } catch {
     return undefined
   }
 }
+
+/**
+ * Bounded cache for {@link parseRange}, keyed on `(includePrerelease, raw)`.
+ * `Range` is effectively immutable after construction, so parsed results
+ * (including `undefined` for invalid input, tracked via `has()`) are safe
+ * to share across callers. Cleared wholesale once it hits the cap rather
+ * than tracking LRU order, since real workloads only see a few hundred to
+ * a few thousand distinct range strings per install.
+ *
+ * Sharing instances also means textually identical ranges are identical
+ * objects, which is what makes the identity-keyed `intersectsCache` below
+ * effective.
+ */
+const rangeCache = new Map<string, Range | undefined>()
+const MAX_RANGE_CACHE = 4096
 
 /** Return the parsed version range, or `undefined` if invalid */
 export const parseRange = (
@@ -25,11 +42,20 @@ export const parseRange = (
     if (range.includePrerelease === includePrerelease) return range
     range = range.raw
   }
+  const key = `${+includePrerelease}\0${range}`
+  // single map lookup on the common hit path; the extra has() check only
+  // runs for ranges cached as invalid (undefined) and for misses
+  const cached = rangeCache.get(key)
+  if (cached !== undefined || rangeCache.has(key)) return cached
+  let parsed: Range | undefined
   try {
-    return new Range(range, includePrerelease)
+    parsed = new Range(range, includePrerelease)
   } catch {
-    return undefined
+    parsed = undefined
   }
+  if (rangeCache.size >= MAX_RANGE_CACHE) rangeCache.clear()
+  rangeCache.set(key, parsed)
+  return parsed
 }
 
 /**
@@ -427,3 +453,354 @@ export const stable = <T extends Version | string = Version | string>(
     if (!p) return false
     return !p.prerelease?.length
   })
+
+/**
+ * Identity-keyed cache for {@link intersects}. Keying on the `Range`
+ * instances themselves (rather than a string of their raw sources) keeps
+ * the hit path free of string building, and needs no size cap or clear
+ * policy: entries are dropped by GC together with their ranges. It relies
+ * on `rangeCache` deduping instances, so string inputs and `spec.range`
+ * objects for the same source share entries; callers constructing a fresh
+ * `Range` per call simply recompute, as they did before memoization.
+ */
+const intersectsCache = new WeakMap<Range, WeakMap<Range, boolean>>()
+
+/**
+ * Return true if the range r1 intersects any of the ranges r2
+ * r1 and r2 are either Range objects or range strings.
+ * Returns true if any version would satisfy both ranges.
+ */
+export const intersects = (
+  r1: Range | string,
+  r2: Range | string,
+  includePrerelease?: boolean,
+) => {
+  const range1 =
+    typeof r1 === 'string' ? parseRange(r1, includePrerelease) : r1
+  const range2 =
+    typeof r2 === 'string' ? parseRange(r2, includePrerelease) : r2
+
+  if (!range1 || !range2) return false
+
+  // If either range is 'any', they intersect
+  if (range1.isAny || range2.isAny) return true
+
+  let inner = intersectsCache.get(range1)
+  const cached = inner?.get(range2)
+  if (cached !== undefined) return cached
+
+  // Check if any set from range1 intersects with any set from range2
+  const result = range1.set.some(set1 =>
+    range2.set.some(set2 => intersectComparators(set1, set2)),
+  )
+  if (!inner) {
+    inner = new WeakMap()
+    intersectsCache.set(range1, inner)
+  }
+  inner.set(range2, result)
+  return result
+}
+
+/**
+ * Check if range r1 is a subset of range r2.
+ * Returns true if every version that satisfies r1 also satisfies r2.
+ */
+export const subset = (
+  r1: Range | string,
+  r2: Range | string,
+  includePrerelease?: boolean,
+): boolean => {
+  const range1 =
+    typeof r1 === 'string' ? parseRange(r1, includePrerelease) : r1
+  const range2 =
+    typeof r2 === 'string' ? parseRange(r2, includePrerelease) : r2
+
+  if (!range1 || !range2) return false
+
+  // Any range is only a subset of another 'any' range
+  if (range2.isAny) return true
+  if (range1.isAny) return false
+
+  // Every comparator set in r1 must be a subset of at least one
+  // comparator set in r2
+  return range1.set.every(set1 =>
+    range2.set.some(set2 => comparatorSubset(set1, set2)),
+  )
+}
+
+/**
+ * Check if comparator comp1 is a subset of comparator comp2.
+ * Every version satisfying comp1 must also satisfy comp2.
+ */
+const comparatorSubset = (
+  comp1: Comparator,
+  comp2: Comparator,
+): boolean => {
+  const tuples1 = comp1.tuples.filter((t): t is OVTuple =>
+    Array.isArray(t),
+  )
+  const tuples2 = comp2.tuples.filter((t): t is OVTuple =>
+    Array.isArray(t),
+  )
+
+  // comp1 must be satisfiable
+  if (!satisfiableRange(tuples1)) return true
+
+  const bounds1 = getBounds(tuples1)
+  const bounds2 = getBounds(tuples2)
+
+  // If comp2 has an exact match, comp1 must only match that exact version
+  if (bounds2.hasExact) {
+    if (bounds1.hasExact) {
+      return eq(bounds1.hasExact, bounds2.hasExact)
+    }
+    // bounds1 must collapse to exactly that version
+    if (
+      !bounds1.lowerBound ||
+      !bounds1.upperBound ||
+      !eq(bounds1.lowerBound, bounds2.hasExact) ||
+      !eq(bounds1.upperBound, bounds2.hasExact) ||
+      !bounds1.lowerInclusive ||
+      !bounds1.upperInclusive
+    ) {
+      return false
+    }
+    return true
+  }
+
+  // If comp1 has an exact match, check it satisfies comp2's bounds
+  if (bounds1.hasExact) {
+    if (bounds2.lowerBound) {
+      if (
+        bounds2.lowerInclusive ?
+          lt(bounds1.hasExact, bounds2.lowerBound)
+        : lte(bounds1.hasExact, bounds2.lowerBound)
+      ) {
+        return false
+      }
+    }
+    if (bounds2.upperBound) {
+      if (
+        bounds2.upperInclusive ?
+          gt(bounds1.hasExact, bounds2.upperBound)
+        : gte(bounds1.hasExact, bounds2.upperBound)
+      ) {
+        return false
+      }
+    }
+    return true
+  }
+
+  // comp1's lower bound must be >= comp2's lower bound
+  if (bounds2.lowerBound) {
+    if (!bounds1.lowerBound) return false
+    const cmp = compare(bounds1.lowerBound, bounds2.lowerBound)
+    if (cmp < 0) return false
+    if (
+      cmp === 0 &&
+      !bounds2.lowerInclusive &&
+      bounds1.lowerInclusive
+    )
+      return false
+  }
+
+  // comp1's upper bound must be <= comp2's upper bound
+  if (bounds2.upperBound) {
+    if (!bounds1.upperBound) return false
+    const cmp = compare(bounds1.upperBound, bounds2.upperBound)
+    if (cmp > 0) return false
+    if (
+      cmp === 0 &&
+      !bounds2.upperInclusive &&
+      bounds1.upperInclusive
+    )
+      return false
+  }
+
+  return true
+}
+
+type Bounds = {
+  lowerBound: Version | null
+  lowerInclusive: boolean
+  upperBound: Version | null
+  upperInclusive: boolean
+  hasExact: Version | null
+}
+
+const getBounds = (tuples: OVTuple[]): Bounds => {
+  let lowerBound: Version | null = null
+  let lowerInclusive = false
+  let upperBound: Version | null = null
+  let upperInclusive = false
+  let hasExact: Version | null = null
+
+  for (const [op, ver] of tuples) {
+    switch (op) {
+      case '':
+        hasExact = ver
+        break
+      case '>=':
+        /* c8 ignore start */
+        if (
+          !lowerBound ||
+          gt(ver, lowerBound) ||
+          (eq(ver, lowerBound) && !lowerInclusive)
+        ) {
+          lowerBound = ver
+          lowerInclusive = true
+        }
+        /* c8 ignore stop */
+        break
+      case '>':
+        if (!lowerBound || gt(ver, lowerBound)) {
+          lowerBound = ver
+          lowerInclusive = false
+        }
+        break
+      case '<=':
+        /* c8 ignore start */
+        if (
+          !upperBound ||
+          lt(ver, upperBound) ||
+          (eq(ver, upperBound) && !upperInclusive)
+        ) {
+          upperBound = ver
+          upperInclusive = true
+        }
+        /* c8 ignore stop */
+        break
+      case '<':
+        if (!upperBound || lt(ver, upperBound)) {
+          upperBound = ver
+          upperInclusive = false
+        }
+        break
+    }
+  }
+
+  return {
+    lowerBound,
+    lowerInclusive,
+    upperBound,
+    upperInclusive,
+    hasExact,
+  }
+}
+
+/**
+ * Check if two comparators can be satisfied simultaneously
+ */
+const intersectComparators = (
+  comp1: Comparator,
+  comp2: Comparator,
+): boolean => {
+  // Collect all tuples from both comparators
+  const tuples1 = comp1.tuples.filter((t): t is OVTuple =>
+    Array.isArray(t),
+  )
+  const tuples2 = comp2.tuples.filter((t): t is OVTuple =>
+    Array.isArray(t),
+  )
+
+  // Check if there's a satisfiable combination
+  return satisfiableRange(tuples1.concat(tuples2))
+}
+
+/**
+ * Check if a set of operator-version tuples represents a satisfiable range
+ * This is a simplified implementation that handles the most common cases
+ */
+const satisfiableRange = (tuples: OVTuple[]): boolean => {
+  // Find bounds
+  let lowerBound: Version | null = null
+  let lowerInclusive = false
+  let upperBound: Version | null = null
+  let upperInclusive = false
+  let hasExact: Version | null = null
+
+  for (const [op, ver] of tuples) {
+    switch (op) {
+      case '':
+        // Exact match - if we already have a different exact match, no intersection
+        if (hasExact && !eq(hasExact, ver)) return false
+        hasExact = ver
+        break
+
+      case '>=':
+        /* c8 ignore start */
+        if (
+          !lowerBound ||
+          gt(ver, lowerBound) ||
+          (eq(ver, lowerBound) && !lowerInclusive)
+        ) {
+          lowerBound = ver
+          lowerInclusive = true
+        }
+        /* c8 ignore stop */
+        break
+
+      case '>':
+        if (!lowerBound || gt(ver, lowerBound)) {
+          lowerBound = ver
+          lowerInclusive = false
+        }
+        break
+
+      case '<=':
+        if (!upperBound || lt(ver, upperBound)) {
+          upperBound = ver
+          upperInclusive = true
+        }
+        break
+
+      case '<':
+        /* c8 ignore start */
+        if (
+          !upperBound ||
+          lt(ver, upperBound) ||
+          eq(ver, upperBound)
+        ) {
+          upperBound = ver
+          upperInclusive = false
+        }
+        /* c8 ignore stop */
+        break
+    }
+  }
+
+  // If we have an exact match, check if it's within bounds
+  if (hasExact) {
+    if (lowerBound) {
+      if (
+        lowerInclusive ?
+          lt(hasExact, lowerBound)
+        : lte(hasExact, lowerBound)
+      ) {
+        return false
+      }
+    }
+    if (upperBound) {
+      if (
+        upperInclusive ?
+          gt(hasExact, upperBound)
+        : gte(hasExact, upperBound)
+      ) {
+        return false
+      }
+    }
+    return true
+  }
+
+  // Check if lower bound is less than or equal to upper bound
+  if (lowerBound && upperBound) {
+    if (gt(lowerBound, upperBound)) return false
+    if (
+      eq(lowerBound, upperBound) &&
+      !(lowerInclusive && upperInclusive)
+    )
+      return false
+  }
+
+  return true
+}

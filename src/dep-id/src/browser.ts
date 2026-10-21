@@ -1,30 +1,37 @@
 import { error } from '@nrz/error-cause'
-import { Spec, type SpecOptions } from '@nrz/spec/browser'
+import {
+  currentDefaultRegistryName,
+  defaultRegistryName,
+  Spec,
+} from '@nrz/spec/browser'
+import type { SpecOptions } from '@nrz/spec/browser'
+import type { Manifest } from '@nrz/types'
 
-export const delimiter: Delimiter = '·'
-export type Delimiter = '·'
+export const delimiter: Delimiter = '~'
+export type Delimiter = '~'
+const EXTRA_PEER_SET_DELIMITER = 'peer.'
 
 /**
  * Dependency IDs are a URI-encoded set of strings, separated
- * by the {@link Delimiter} character (`'·'`).
+ * by the {@link Delimiter} character (`'~'`).
  *
  * The first entry is always the specifier type. The rest depend on the
  * type. `git`, `registry`, and `workspace` entries have 3 fields, the rest
  * have 2.
  *
- * - `registry`: `'registry·<registry>·name@specifier'`
+ * - `registry`: `'registry~<registry>~name@specifier'`
  *   The `<registry>` portion can be a known named registry name, or a
  *   url to a registry. If empty, it is the default registry. Examples:
- *   - `··some-package@2.0.1`
- *   - `·npm·whatever@1.2.3`
- *   - `·http%3A%2F%2Fkhulnasoft.com%2F·x@1.2.3`
- * - `git`: `'git·<git remote>·<git selector>'`. For example:
- *   - `git·github:user/project·branchname`
- *   - `git·git%2Bssh%3A%2F%2Fuser%40host%3Aproject.git·semver:1.x`
- * - `workspace`: `'workspace·<path>'`. For example:
- *   - `workspace·src/mything`
- * - `remote`: `'remote·<url>'`
- * - `file`: `'file·<path>'`
+ *   - `~~some-package@2.0.1`
+ *   - `~npm~whatever@1.2.3`
+ *   - `~http%3A%2F%2Fnrz.khulnasoft.com%2F~x@1.2.3`
+ * - `git`: `'git~<git remote>~<git selector>'`. For example:
+ *   - `git~github:user/project~branchname`
+ *   - `git~git%2Bssh%3A%2F%2Fuser%40host%3Aproject.git~semver:1.x`
+ * - `workspace`: `'workspace~<path>'`. For example:
+ *   - `workspace~src/mything`
+ * - `remote`: `'remote~<url>'`
+ * - `file`: `'file~<path>'`
  *
  * Lastly, the final portion can contain arbitrary string data, and is
  * used to store peer dep resolutions to maintain the peerDep contract.
@@ -65,12 +72,21 @@ const depIDRegExp = new RegExp(
     }]*)(${delimiter}[^${delimiter}]*)?$`,
 )
 
+/** Parsed dependency IDs must be safe store directory names. */
+const pathUnsafeDepID = (str: string): boolean =>
+  /[/\\\x00-\x1f\x7f]/.test(str) ||
+  /^[A-Za-z]:/.test(str) ||
+  str.split(delimiter).some(p => p === '.' || p === '..')
+
 export const isDepID = (str: unknown): str is DepID =>
-  typeof str === 'string' && depIDRegExp.test(str)
+  typeof str === 'string' &&
+  depIDRegExp.test(str) &&
+  !pathUnsafeDepID(str)
 
 export const asDepID = (str: string): DepID => {
   if (!isDepID(str)) {
-    throw error('Expected dep id', {
+    throw error(`Expected dep id.`, {
+      code: 'EINVALIDNAME',
       found: str,
     })
   }
@@ -85,7 +101,7 @@ export const joinDepIDTuple = (list: DepIDTuple): DepID => {
   const f = encode(first)
   switch (type) {
     case 'registry':
-      return `${delimiter}${f}${delimiter}${encode(second)}${extra ? `${delimiter}${encode(extra)}` : ''}`
+      return `${delimiter}${f || defaultRegistryName}${delimiter}${encode(second)}${extra ? `${delimiter}${encode(extra)}` : ''}`
     case 'git':
       return `${type}${delimiter}${f}${delimiter}${encode(second)}${extra ? `${delimiter}${encode(extra)}` : ''}`
     default:
@@ -93,41 +109,207 @@ export const joinDepIDTuple = (list: DepIDTuple): DepID => {
   }
 }
 
-// allow @, but otherwise, escape everything urls do
-const encode = (s: string): string =>
-  encodeURIComponent(s)
-    .replaceAll('%40', '@')
-    .replaceAll('%2f', '§')
-    .replaceAll('%2F', '§')
+// Escape chars unsafe for filesystems or reserved for DepID syntax
+const ESCAPE: Record<string, string> = {
+  _: '__',
+  '+': '_p',
+  '\\': '_b',
+  ':': '_c',
+  '~': '_t',
+  '<': '_l',
+  '>': '_g',
+  '"': '_q',
+  '|': '_i',
+  '?': '_m',
+  '*': '_a',
+  ' ': '_s',
+}
 
+// Unescape map (includes trailing dot/space escapes)
+const UNESCAPE: Record<string, string> = {
+  __: '_',
+  _p: '+',
+  _b: '\\',
+  _c: ':',
+  _t: '~',
+  _l: '<',
+  _g: '>',
+  _q: '"',
+  _i: '|',
+  _m: '?',
+  _a: '*',
+  _d: '.',
+  _s: ' ',
+}
+
+/**
+ * Checks if a character code represents a control character (0x00-0x1F).
+ * Control characters are non-printable ASCII characters that need special encoding.
+ */
+const isControl = (code: number) => code >= 0x00 && code <= 0x1f
+
+/**
+ * Converts a character code to a 2-digit uppercase hexadecimal string.
+ * Used to encode control characters as _XX format (e.g., 0x0A becomes "0A").
+ */
+const toHex2Upper = (code: number) =>
+  code.toString(16).toUpperCase().padStart(2, '0')
+
+/**
+ * Checks if a character is a valid hexadecimal digit (0-9, A-F, a-f).
+ * Used during decoding to identify hex-encoded control characters (e.g., _0A, _1F).
+ */
+const isHexDigit = (c: string) =>
+  (c >= '0' && c <= '9') ||
+  (c >= 'A' && c <= 'F') ||
+  (c >= 'a' && c <= 'f')
+
+/**
+ * Encodes a string into a DepID format.
+ * Handles special characters, control characters, and trailing dots.
+ */
+const encode = (s?: string) => {
+  if (!s) return s
+
+  let out = ''
+  // Loop through each character in the string
+  for (const ch of s) {
+    /* c8 ignore next */
+    if (!ch) continue
+
+    // '/' becomes '+', and that '+' is NOT escaped
+    if (ch === '/') {
+      out += '+'
+      continue
+    }
+
+    // Escape special characters with predefined mappings
+    const mapped = ESCAPE[ch]
+    if (mapped) {
+      // Found a special character that needs escaping, append the escaped version
+      out += mapped
+      continue
+    }
+
+    // Check if the character is a control character and encode it as _XX
+    const code = ch.charCodeAt(0)
+    if (isControl(code)) {
+      // Found a control character, encode it as _XX
+      out += '_' + toHex2Upper(code) // _00, _0A, _1F, etc.
+      continue
+    }
+
+    // If no special characters or control characters were found, append the character as-is
+    out += ch
+  }
+
+  // Escape trailing dot (Windows strips these)
+  if (out.endsWith('.')) out = out.slice(0, -1) + '_d'
+
+  return out
+}
+
+/**
+ * Decodes a DepID string back into its original form.
+ * Handles special characters, control characters, and trailing dots.
+ */
+const decode = (s?: string) => {
+  if (!s) return s
+
+  let out = ''
+
+  // Loop through each character in the string
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    /* c8 ignore next */
+    if (!ch) continue
+
+    if (ch === '+') {
+      out += '/'
+      continue
+    }
+
+    if (ch !== '_') {
+      out += ch
+      continue
+    }
+
+    // Try to parse an escape sequence starting at '_'
+    const next = s[i + 1]
+    if (next === undefined) {
+      out += '_'
+      continue
+    }
+
+    // "__" -> "_"
+    if (next === '_') {
+      out += '_'
+      i += 1
+      continue
+    }
+
+    // "_X" single-letter escapes
+    const two = s.slice(i, i + 2) // "_p", "_d", etc.
+    const mapped = UNESCAPE[two]
+    if (mapped) {
+      out += mapped
+      i += 1
+      continue
+    }
+
+    // "_XX" hex escape for control chars, where first hex digit is 0 or 1
+    const h1 = s[i + 1]
+    const h2 = s[i + 2]
+    if (
+      (h1 === '0' || h1 === '1') &&
+      h2 !== undefined &&
+      isHexDigit(h2)
+    ) {
+      const hex = s.slice(i + 1, i + 3) // "0A", "1F", etc.
+      out += String.fromCharCode(parseInt(hex, 16))
+      i += 2
+      continue
+    }
+
+    // Not a recognized escape; leave '_' as-is
+    out += '_'
+  }
+
+  return out
+}
+
+const seenSplitDepIDs = new Map<string, DepIDTuple>()
 /**
  * turn a {@link DepID} into a {@link DepIDTuple}
  */
 export const splitDepID = (id: string): DepIDTuple => {
-  const [type, first = '', second, extra] = id
-    .replaceAll('§', '/')
-    .split(delimiter, 4)
-  const f = decodeURIComponent(first)
+  // memoized entries return early
+  const seen = seenSplitDepIDs.get(id)
+  if (seen) return seen
+
+  let res: DepIDTuple
+  const [type, first = '', second, extra] = id.split(delimiter, 4)
+  const f = decode(first) || '' // decode handles + -> / internally
   switch (type) {
     case 'git':
     case '': {
       if (second === undefined) {
         throw error(`invalid ${type} id`, { found: id })
       }
-      const t: DepIDTuple = [
+      const decodedSecond = decode(second) || ''
+      res = [
         type || 'registry',
-        f,
-        decodeURIComponent(second),
+        f || defaultRegistryName,
+        decodedSecond,
+        decode(extra),
       ]
-      if (extra) t.push(decodeURIComponent(extra))
-      return t
+      break
     }
     case 'file':
     case 'remote':
     case 'workspace': {
-      const t: DepIDTuple = [type, f]
-      if (second) t.push(decodeURIComponent(second))
-      return t
+      res = [type, f, decode(second)]
+      break
     }
     default: {
       throw error('invalid DepID type', {
@@ -136,8 +318,28 @@ export const splitDepID = (id: string): DepIDTuple => {
       })
     }
   }
+  seenSplitDepIDs.set(id, res)
+  return res
 }
 
+const seenBaseDepIDs = new Map<string, DepID>()
+/**
+ * Retrieves the base {@link DepID} for a given depID,
+ * ignoring any extra information that may be present.
+ */
+export const baseDepID = (id: string): DepID => {
+  const seen = seenBaseDepIDs.get(id)
+  if (seen) return seen
+  const [type, first, second] = splitDepID(id)
+  const res: DepID =
+    type === 'git' || type === 'registry' ?
+      joinDepIDTuple([type, first, second])
+    : joinDepIDTuple([type, first])
+  seenBaseDepIDs.set(id, res)
+  return res
+}
+
+const seenHydrated = new Map<string, Spec>()
 /**
  * Turn a {@link DepID} into a {@link Spec} object
  */
@@ -145,8 +347,18 @@ export const hydrate = (
   id: DepID,
   name?: string,
   options: SpecOptions = {},
-): Spec => hydrateTuple(splitDepID(id), name, options)
+): Spec => {
+  // memozied entries return early
+  const cacheKey = (name ?? '') + id
+  const seen = seenHydrated.get(cacheKey)
+  if (seen) return seen
 
+  const res = hydrateTuple(splitDepID(id), name, options)
+  seenHydrated.set(cacheKey, res)
+  return res
+}
+
+const seenHydratedTuples = new Map<string, Spec>()
 /**
  * Turn a {@link DepIDTuple} into a {@link Spec} object
  */
@@ -154,15 +366,24 @@ export const hydrateTuple = (
   tuple: DepIDTuple,
   name?: string,
   options: SpecOptions = {},
-) => {
+): Spec => {
   const [type, first, second] = tuple
+
+  // memoized entries return early
+  const cacheKey =
+    (name ?? '') + ',' + type + ',' + first + ',' + (second ?? '')
+  const seen = seenHydratedTuples.get(cacheKey)
+  if (seen) return seen
+
+  let res: Spec
   switch (type) {
     case 'remote': {
       if (!first)
         throw error('no remoteURL found on remote id', {
           found: tuple,
         })
-      return Spec.parse(name ?? '(unknown)', first)
+      res = Spec.parse(name ?? '(unknown)', first, options)
+      break
     }
     case 'file': {
       if (!first) {
@@ -170,7 +391,8 @@ export const hydrateTuple = (
           found: tuple,
         })
       }
-      return Spec.parse(name ?? '(unknown)', `file:${first}`, options)
+      res = Spec.parse(name ?? '(unknown)', `file:${first}`, options)
+      break
     }
     case 'registry': {
       if (typeof first !== 'string') {
@@ -183,37 +405,55 @@ export const hydrateTuple = (
           found: tuple,
         })
       }
-      if (!first) {
-        // just a normal name@version on the default registry
-        const s = Spec.parse(second)
-        if (name && s.name !== name) {
-          return Spec.parse(`${name}@npm:${second}`)
-        } else {
-          return s
-        }
+      const defaultName =
+        options.registry &&
+        currentDefaultRegistryName(options.registry, options)
+      const defaultRegistryURL =
+        options.registry ?
+          options.registry.endsWith('/') ?
+            options.registry
+          : options.registry + '/'
+        : undefined
+      const firstURL = first.endsWith('/') ? first : first + '/'
+      const hasScope = second.startsWith('@')
+      const hasAtVersion = second.includes('@', hasScope ? 1 : 0)
+      const name_ =
+        (hasAtVersion && hasScope ?
+          `@${second.split('@')[1]}`
+        : second.split('@')[0]) /* c8 ignore next */ || '(unknown)'
+      const usesDefaultRegistry =
+        !first ||
+        first === defaultName ||
+        firstURL === defaultRegistryURL
+      const noAliasedNameUsed = !name || name === name_
+      if (usesDefaultRegistry && noAliasedNameUsed) {
+        const version =
+          (hasAtVersion &&
+            second.split('@')[
+              hasScope ? 2 : 1
+            ]) /* c8 ignore next */ ||
+          second
+        res = Spec.parse(name || name_, version, options)
+        break
       }
       if (!/^https?:\/\//.test(first)) {
         const reg = options.registries?.[first]
-        if (first !== 'npm' && !reg) {
+        const jsrReg = options['jsr-registries']?.[first]
+        if (first !== defaultRegistryName && !reg && !jsrReg) {
           throw error('named registry not found in options', {
             name: first,
             found: tuple,
           })
         }
-        return Spec.parse(
-          name ?? '(unknown)',
-          `${first}:${second}`,
-          options,
-        )
+        res = Spec.parse(name || name_, `${first}:${second}`, options)
+        break
       }
-      const s = Spec.parse(
-        name ?? '(unknown)',
+      res = Spec.parse(
+        name || name_,
         `registry:${first}#${second}`,
         options,
       )
-      return name && s.final.name !== name ?
-          Spec.parse(s.final.name + '@' + s.bareSpec)
-        : s
+      break
     }
     case 'git': {
       if (!first) {
@@ -221,19 +461,225 @@ export const hydrateTuple = (
           found: tuple,
         })
       }
-      return Spec.parse(
+      res = Spec.parse(
         name ?? '(unknown)',
         first + '#' + second,
         options,
       )
+      break
     }
     case 'workspace': {
       if (!first) {
         throw error('no name/path on workspace id', { found: tuple })
       }
-      return name && name !== first ?
-          Spec.parse(name, `workspace:${first}@*`, options)
-        : Spec.parse(first, `workspace:*`, options)
+      const workspaceName =
+        name ?? first.slice(first.lastIndexOf('/') + 1)
+      res =
+        workspaceName !== first ?
+          Spec.parse(workspaceName, `workspace:${first}@*`, options)
+        : Spec.parse(first, 'workspace:*', options)
+      break
     }
   }
+  seenHydratedTuples.set(cacheKey, res)
+  return res
+}
+
+const matchRegistryURL = (
+  registry: string,
+  registries: Record<string, string>,
+): string | undefined => {
+  // iterate on known registries to check if any known value
+  // matches the current default registry of this Spec value
+  for (const [alias, url] of Object.entries(registries)) {
+    // normalize trailing slash for comparison
+    const specRegURL =
+      registry.endsWith('/') ? registry : registry + '/'
+    const knownRegURL = url.endsWith('/') ? url : url + '/'
+    if (specRegURL === knownRegURL) {
+      return alias
+    }
+  }
+}
+
+/**
+ * Convert a Spec's registry URL to a known short registry name, if possible.
+ */
+const convertToKnownShortRegistryName = (
+  s: Spec,
+  registry?: string,
+): string | undefined => {
+  if (!s.registry) return
+  const reg = registry ?? s.registry
+  const namedRegistry = matchRegistryURL(reg, s.options.registries)
+  if (namedRegistry) return namedRegistry
+
+  const namedJSRRegistry = matchRegistryURL(
+    reg,
+    s.options['jsr-registries'],
+  )
+  if (namedJSRRegistry) return namedJSRRegistry
+}
+
+const seenTuples = new Map<string, DepIDTuple>()
+/**
+ * Get the {@link DepIDTuple} for a given {@link Spec} and {@link Manifest}.
+ * The Manifest is used to get the name and version, if possible. If not found
+ * in the manifest, registry ID types will use the name or bareSpec from the
+ * specifier, so at least there's something to use later.
+ */
+export const getTuple = (
+  spec: Spec,
+  mani: Pick<Manifest, 'name' | 'version'>,
+  extra?: string,
+): DepIDTuple => {
+  // memoized entries return early
+  const cacheKey =
+    String(spec) +
+    (spec.registry ?? '') +
+    (mani.name ?? '') +
+    (mani.version ?? '') +
+    (extra ?? '')
+  const seen = seenTuples.get(cacheKey)
+  if (seen) return seen
+
+  let res: DepIDTuple
+  const f = spec.final
+  switch (f.type) {
+    case 'registry': {
+      const version =
+        mani.version ?
+          mani.version.startsWith('v') ?
+            mani.version.slice(1)
+          : mani.version
+        : f.bareSpec
+      res = [
+        f.type,
+        f.namedRegistry ||
+          convertToKnownShortRegistryName(f, f.scopeRegistry) ||
+          f.scopeRegistry ||
+          f.registry ||
+          defaultRegistryName,
+        `${isPackageNameConfused(spec, mani.name) ? spec.name : (mani.name ?? f.name)}@${version}`,
+        extra,
+      ]
+      break
+    }
+    case 'git': {
+      const {
+        namedGitHost,
+        namedGitHostPath,
+        gitRemote,
+        gitSelector = '',
+      } = f
+      if (!gitRemote)
+        throw error('no host on git specifier', { spec })
+      if (namedGitHost) {
+        if (!namedGitHostPath) {
+          throw error('named git host without path portion', {
+            spec,
+          })
+        }
+        res = [
+          f.type,
+          `${namedGitHost}:${namedGitHostPath}`,
+          gitSelector,
+          extra,
+        ]
+        break
+      } else {
+        res = [f.type, gitRemote, gitSelector, extra]
+      }
+      break
+    }
+    case 'remote': {
+      const { remoteURL } = f
+      if (!remoteURL)
+        throw error('no URL on remote specifier', { spec })
+      res = [f.type, remoteURL, extra]
+      break
+    }
+    case 'file':
+    case 'workspace':
+      throw error('Path-based dep ids are not supported', { spec })
+  }
+  seenTuples.set(cacheKey, res)
+  return res
+}
+
+/**
+ * Checks for a potentially manifest-confused package name.
+ * Returns `true` if the package name is confused, `false` otherwise.
+ */
+export const isPackageNameConfused = (spec?: Spec, name?: string) =>
+  !!spec?.name && // a nameless spec can't be checked
+  !spec.subspec && // it's not an aliased package or using a custom protocol
+  spec.type === 'registry' && // the defined spec is of type registry
+  spec.name !== name // its name is not the same as the defined spec name
+
+/**
+ * Get the {@link DepID} for a given {@link Spec} and {@link Manifest}. The
+ * Manifest is used to get the name and version, if possible. If not found in
+ * the manifest, registry ID types will use the name or bareSpec from the
+ * specifier, so at least there's something to use later.
+ */
+export const getId = (
+  spec: Spec,
+  mani: Pick<Manifest, 'name' | 'version'>,
+  extra?: string,
+): DepID => joinDepIDTuple(getTuple(spec, mani, extra))
+
+/**
+ * Join a modifier and a peer set hash into a single "extra" string.
+ */
+export function joinExtra({
+  modifier,
+  peerSetHash,
+}: {
+  modifier?: string
+  peerSetHash?: string
+}): string | undefined {
+  if (!modifier && !peerSetHash) return
+  if (modifier && peerSetHash) return `${modifier}${peerSetHash}`
+  if (modifier) return modifier
+  return peerSetHash
+}
+
+/**
+ * Split an "extra" string into a modifier and a peerSetHash.
+ */
+export function splitExtra(extra: string): {
+  modifier?: string
+  peerSetHash?: string
+} {
+  if (!extra) return {}
+
+  // only peerSetHash is present, return it
+  if (extra.startsWith(EXTRA_PEER_SET_DELIMITER)) {
+    return { peerSetHash: extra }
+  }
+
+  // only modifier is present, return its value
+  const idx = extra.indexOf(EXTRA_PEER_SET_DELIMITER)
+  if (idx === -1) {
+    return { modifier: extra }
+  }
+
+  // Both modifier and peerSetHash are present
+  return {
+    modifier: extra.slice(0, idx),
+    peerSetHash: extra.slice(idx),
+  }
+}
+
+/**
+ * Reset internal caches. This should be used when options change since
+ * they're not take into account in the memoization keys.
+ */
+export const resetCaches = () => {
+  seenHydrated.clear()
+  seenHydratedTuples.clear()
+  seenSplitDepIDs.clear()
+  seenTuples.clear()
+  seenBaseDepIDs.clear()
 }

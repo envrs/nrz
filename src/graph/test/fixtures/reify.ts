@@ -8,13 +8,16 @@
 
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-
-import {
-  PackageInfoClient,
+import { PackageInfoClient } from '@nrz/package-info'
+import type {
   PackageInfoClientRequestOptions,
   Resolution,
 } from '@nrz/package-info'
-import { Manifest } from '@nrz/types'
+import {
+  asNormalizedManifest,
+  normalizeManifest,
+} from '@nrz/types'
+import type { Manifest } from '@nrz/types'
 import {
   existsSync,
   lstatSync,
@@ -22,12 +25,21 @@ import {
   readFileSync,
   symlinkSync,
   writeFileSync,
-} from 'fs'
-import { statSync } from 'node:fs'
-import { basename, resolve } from 'path'
+  statSync,
+} from 'node:fs'
+import { basename, resolve } from 'node:path'
 import { extract } from 'tar'
+import { clientCache } from './client-cache.ts'
 
-const realPackageInfo = new PackageInfoClient({})
+// the `npm` alias is no longer a built-in default, so it must be
+// configured explicitly for `npm:` aliased specs to collapse to their
+// resolved target (which is how the fixture maps are keyed).
+const specOptions = {
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
+
+const clientOptions = { ...specOptions, cache: clientCache }
+const realPackageInfo = new PackageInfoClient(clientOptions)
 export const fixtureDir = resolve(import.meta.dirname, 'reify')
 
 const fixtureMapFile = resolve(fixtureDir, 'map.json')
@@ -50,19 +62,24 @@ const fixtureName = async (spec: Spec) =>
 let fixtureMapChanged = false
 let resolutionsMapChanged = false
 
-export const fixtureManifest = (name: string): Manifest =>
-  JSON.parse(
-    readFileSync(resolve(fixtureDir, name) + '.json', 'utf8'),
+export const fixtureManifest = (name: string) =>
+  asNormalizedManifest(
+    normalizeManifest(
+      JSON.parse(
+        readFileSync(resolve(fixtureDir, name) + '.json', 'utf8'),
+      ),
+    ),
   )
 
-const actualPackageInfo = new PackageInfoClient()
+const actualPackageInfo = new PackageInfoClient(clientOptions)
 
 export const mockPackageInfo = {
   resolve: async (
     spec: string | Spec,
     options: PackageInfoClientRequestOptions = {},
   ): Promise<Resolution> => {
-    spec = typeof spec === 'string' ? Spec.parse(spec) : spec
+    spec =
+      typeof spec === 'string' ? Spec.parse(spec, specOptions) : spec
     if (spec.type === 'file') {
       return actualPackageInfo.resolve(spec, options)
     }
@@ -81,7 +98,7 @@ export const mockPackageInfo = {
     spec: string | Spec,
     options: PackageInfoClientRequestOptions = {},
   ) => {
-    spec = Spec.parse(String(spec)).final
+    spec = Spec.parse(String(spec), specOptions).final
     if (spec.type === 'file') {
       return actualPackageInfo.manifest(spec, options)
     }
@@ -100,8 +117,8 @@ export const mockPackageInfo = {
     spec: string | Spec,
     target: string,
     options: PackageInfoClientRequestOptions = {},
-  ) => {
-    spec = Spec.parse(String(spec)).final
+  ): Promise<Resolution> => {
+    spec = Spec.parse(String(spec), specOptions).final
     if (spec.type === 'file') {
       return actualPackageInfo.extract(spec, target, options)
     }
@@ -116,8 +133,14 @@ export const mockPackageInfo = {
       mkdirSync(target, { recursive: true })
       extract({ sync: true, file: artifact, strip: 1, cwd: target })
     }
+    // Return Resolution object to match PackageInfoClient.extract signature
+    const res = await mockPackageInfo.resolve(spec, options)
+    return res
   },
-} as unknown as PackageInfoClient
+
+  // the fixtures answer every manifest() directly, nothing to prefetch
+  prefetchResolve: () => () => {},
+}
 
 const addFixture = async (spec: Spec) => {
   const fixture = await fixtureName(spec)

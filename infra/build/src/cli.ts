@@ -1,0 +1,51 @@
+#!/usr/bin/env -S node --experimental-strip-types --no-warnings
+
+import { parseArgs } from 'node:util'
+import { mkdirSync, rmSync } from 'node:fs'
+import assert from 'node:assert'
+import { resolve } from 'node:path'
+import { bundle } from './bundle.ts'
+import { isBin } from './bins.ts'
+
+const parseOptions = () => {
+  const {
+    values: { outdir, bins, ...values },
+    positionals: [action = 'bundle'],
+  } = parseArgs({
+    allowPositionals: true,
+    allowNegative: true,
+    options: {
+      outdir: { type: 'string' },
+      bins: { type: 'string', multiple: true },
+      quiet: { type: 'boolean' },
+      splitting: { type: 'boolean', default: true },
+      minify: { type: 'boolean', default: false },
+      sourcemap: { type: 'boolean', default: true },
+    },
+  })
+
+  assert(outdir, 'outdir is required')
+  assert(!bins || bins.every(isBin), 'invalid bins')
+
+  return [
+    action,
+    { outdir: resolve(outdir), bins, ...values },
+  ] as const
+}
+
+const main = async () => {
+  const [action, opts] = parseOptions()
+
+  rmSync(opts.outdir, { recursive: true, force: true })
+  mkdirSync(opts.outdir, { recursive: true })
+
+  switch (action) {
+    case 'bundle':
+      return bundle(opts)
+    /* c8 ignore next 2 */
+    default:
+      throw new Error(`Unknown action: ${action}`)
+  }
+}
+
+console.log(await main())

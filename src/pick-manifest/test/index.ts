@@ -1,8 +1,17 @@
-import { Range } from '@nrz/semver'
+import { Range, isRange } from '@nrz/semver'
 import { Spec } from '@nrz/spec'
+import { isSpec } from '@nrz/spec/browser'
 import t from 'tap'
-import { type Manifest, type Packument } from '@nrz/types'
-import { pickManifest, platformCheck } from '../src/index.ts'
+import type { Manifest, Packument } from '@nrz/types'
+import {
+  pickManifest,
+  platformCheck,
+  detectLibc,
+  LDD_PATH,
+  resetLibcCache,
+} from '../src/index.ts'
+
+type PickManifestModule = typeof import('../src/index.ts')
 
 // don't need to run, just for typechecking
 const typechecks = () => {
@@ -24,6 +33,7 @@ void typechecks
 
 t.test('basic carat range selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -40,9 +50,100 @@ t.test('basic carat range selection', t => {
   t.end()
 })
 
+t.test('correctly handles Range vs Spec objects', t => {
+  const metadata = {
+    'dist-tags': {},
+    versions: {
+      '1.0.0': { version: '1.0.0' },
+      '1.0.1': { version: '1.0.1' },
+      '1.0.2': { version: '1.0.2' },
+      '2.0.0': { version: '2.0.0' },
+    },
+  } as unknown as Packument
+
+  // Create objects that look similar but are different types
+  const rangeObj = new Range('^1.0.0')
+  const specObj = Spec.parse('foo@^1.0.0')
+
+  // Verify type guards work correctly
+  t.equal(
+    isRange(rangeObj),
+    true,
+    'correctly identifies Range object',
+  )
+  t.equal(isSpec(specObj), true, 'correctly identifies Spec object')
+  t.equal(isRange(specObj), false, 'correctly rejects Spec as Range')
+  t.equal(isSpec(rangeObj), false, 'correctly rejects Range as Spec')
+
+  // Verify pickManifest handles both correctly
+  const manifestFromRange = pickManifest(metadata, rangeObj)
+  const manifestFromSpec = pickManifest(metadata, specObj)
+
+  t.equal(
+    manifestFromRange?.version,
+    '1.0.2',
+    'picked correct version from Range object',
+  )
+
+  t.equal(
+    manifestFromSpec?.version,
+    '1.0.2',
+    'picked correct version from Spec object',
+  )
+
+  t.end()
+})
+
+t.test('handles edge cases with similar objects', t => {
+  const metadata = {
+    name: 'test-package',
+    'dist-tags': {},
+    versions: {
+      '1.0.0': { version: '1.0.0' },
+      '1.0.1': { version: '1.0.1' },
+      '1.0.2': { version: '1.0.2' },
+      '2.0.0': { version: '2.0.0' },
+    },
+  } as unknown as Packument
+
+  // Create a mock object with some properties but not enough to be recognized as Range or Spec
+  const mockObj = {
+    spec: 'test@^1.0.0',
+    name: 'test',
+    // Intentionally missing required Range properties (e.g., set with Comparator instances)
+  }
+
+  // Verify type guards correctly reject this
+  t.equal(
+    isRange(mockObj),
+    false,
+    'rejects object with incomplete Range properties',
+  )
+  t.equal(
+    isSpec(mockObj),
+    false,
+    'rejects object with incomplete Spec properties',
+  )
+
+  // Test with an invalid object type
+  try {
+    pickManifest(metadata, mockObj as any)
+    t.fail('should have thrown an error')
+  } catch (err: any) {
+    t.match(
+      err.message,
+      /is not a function|Only dist-tag or semver range specs are supported/,
+      'rejects invalid object with appropriate error',
+    )
+  }
+
+  t.end()
+})
+
 t.test('do not be confused by subspecs', t => {
   const metadata = {
     name: 'bar',
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -52,7 +153,9 @@ t.test('do not be confused by subspecs', t => {
   } as unknown as Packument
   const manifest = pickManifest(
     metadata,
-    Spec.parse('foo@npm:bar@^1.0.0'),
+    Spec.parse('foo@npm:bar@^1.0.0', {
+      registries: { npm: 'https://registry.npmjs.org/' },
+    }),
   )
   t.equal(
     manifest?.version,
@@ -64,6 +167,7 @@ t.test('do not be confused by subspecs', t => {
 
 t.test('caret range object selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -82,6 +186,7 @@ t.test('caret range object selection', t => {
 
 t.test('caret spec object selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -100,6 +205,7 @@ t.test('caret spec object selection', t => {
 
 t.test('basic tilde range selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -118,6 +224,7 @@ t.test('basic tilde range selection', t => {
 
 t.test('basic mathematical range selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -142,6 +249,7 @@ t.test('basic mathematical range selection', t => {
 
 t.test('basic version selection', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -210,6 +318,7 @@ t.test('skips any invalid version keys', t => {
   // Various third-party registries are prone to having trash as
   // keys. npm simply skips them. Yay robustness.
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       'lol ok': { version: '1.0.1' },
@@ -223,6 +332,7 @@ t.test('skips any invalid version keys', t => {
 
 t.test('ETARGET if range does not match anything', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '2.0.0': { version: '2.0.0' },
@@ -318,15 +428,25 @@ t.test('explicit dist-tag must match that version', t => {
 
 t.test('not found if metadata has no versions', t => {
   t.equal(
-    pickManifest({ versions: {} } as unknown as Packument, '*'),
+    pickManifest(
+      { 'dist-tags': {}, versions: {} } as unknown as Packument,
+      '*',
+    ),
     undefined,
   )
-  t.equal(pickManifest({} as unknown as Packument, '*'), undefined)
+  t.equal(
+    pickManifest(
+      { 'dist-tags': {}, versions: {} } as unknown as Packument,
+      '*',
+    ),
+    undefined,
+  )
   t.end()
 })
 
 t.test('matches even if requested version has spaces', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -345,6 +465,7 @@ t.test('matches even if requested version has spaces', t => {
 
 t.test('matches skip deprecated versions', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -359,6 +480,7 @@ t.test('matches skip deprecated versions', t => {
 
 t.test('matches deprecated versions if we have to', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -375,6 +497,7 @@ t.test(
   'prefer non-deprecated versions if all platform mismatch',
   t => {
     const metadata = {
+      'dist-tags': {},
       versions: {
         '1.0.0': { version: '1.0.0' },
         '1.0.1': { version: '1.0.1' },
@@ -424,6 +547,7 @@ t.test('prefer valid platform matches if all deprecated', t => {
 
 t.test('prefer non-prerelease versions', t => {
   const metadata = {
+    'dist-tags': {},
     versions: {
       '1.0.0': { version: '1.0.0' },
       '1.0.1': { version: '1.0.1' },
@@ -445,6 +569,7 @@ t.test(
   'prefer non-prerelease versions when prerelease comes first',
   t => {
     const metadata = {
+      'dist-tags': {},
       versions: {
         '1.0.0': { version: '1.0.0' },
         '2.0.999-pre': { version: '2.0.999-pre' },
@@ -470,6 +595,7 @@ t.test(
   'will use deprecated version if no other suitable match',
   t => {
     const metadata = {
+      'dist-tags': {},
       versions: {
         '1.0.0': { version: '1.0.0' },
         '1.0.1': { version: '1.0.1' },
@@ -687,6 +813,544 @@ t.test('prefers versions that satisfy the os/arch requirement', t => {
       ?.version,
     '1.5.0',
     'if no engine-match exists, just use whatever',
+  )
+  t.end()
+})
+
+t.test('handles complex Spec objects with subspecs correctly', t => {
+  const metadata = {
+    name: 'baz',
+    'dist-tags': {},
+    versions: {
+      '1.0.0': { version: '1.0.0' },
+      '1.0.1': { version: '1.0.1' },
+      '1.0.2': { version: '1.0.2' },
+      '2.0.0': { version: '2.0.0' },
+    },
+  } as unknown as Packument
+
+  // Create a nested spec: foo@npm:bar@npm:baz@^1.0.0
+  const nestedSpec = Spec.parse('foo@npm:bar@npm:baz@^1.0.0', {
+    registries: { npm: 'https://registry.npmjs.org/' },
+  })
+
+  // Verify it's recognized correctly
+  t.equal(
+    isSpec(nestedSpec),
+    true,
+    'correctly identifies nested Spec object',
+  )
+  t.equal(
+    isRange(nestedSpec),
+    false,
+    'correctly rejects nested Spec as Range',
+  )
+
+  // Verify pickManifest extracts the correct range from nested specs
+  const manifestFromNestedSpec = pickManifest(metadata, nestedSpec)
+
+  t.equal(
+    manifestFromNestedSpec?.version,
+    '1.0.2',
+    'picked correct version from nested Spec object',
+  )
+
+  // Create a more deeply nested spec
+  const deeplyNestedSpec = Spec.parse(
+    'pkg1@npm:pkg2@npm:pkg3@npm:baz@^1.0.0',
+    { registries: { npm: 'https://registry.npmjs.org/' } },
+  )
+  const manifestFromDeeplyNestedSpec = pickManifest(
+    metadata,
+    deeplyNestedSpec,
+  )
+
+  t.equal(
+    manifestFromDeeplyNestedSpec?.version,
+    '1.0.2',
+    'picked correct version from deeply nested Spec object',
+  )
+
+  t.end()
+})
+
+t.test('detectLibc returns string or undefined', t => {
+  const result = detectLibc()
+  // Should return 'glibc', 'musl', or undefined depending on platform
+  if (process.platform === 'linux') {
+    t.ok(
+      result === 'glibc' || result === 'musl' || result === undefined,
+      'on linux, returns glibc, musl, or undefined',
+    )
+    const cached = detectLibc()
+    t.equal(result, cached, 'should return cached result')
+  } else {
+    t.equal(result, undefined, 'on non-linux, returns undefined')
+  }
+  t.end()
+})
+
+t.test('platformCheck handles libc field', t => {
+  // Test that packages without libc field always pass
+  t.equal(
+    platformCheck({}, '20.0.0', 'linux', 'x64', 'glibc'),
+    true,
+    'no libc field always passes',
+  )
+
+  // Test that packages with libc field check against provided libc
+  t.equal(
+    platformCheck(
+      { libc: ['glibc'] },
+      '20.0.0',
+      'linux',
+      'x64',
+      'glibc',
+    ),
+    true,
+    'matching libc passes',
+  )
+  t.equal(
+    platformCheck(
+      { libc: ['musl'] },
+      '20.0.0',
+      'linux',
+      'x64',
+      'glibc',
+    ),
+    false,
+    'non-matching libc fails',
+  )
+
+  // Test negation
+  t.equal(
+    platformCheck(
+      { libc: ['!musl'] },
+      '20.0.0',
+      'linux',
+      'x64',
+      'glibc',
+    ),
+    true,
+    'negated libc that does not match passes',
+  )
+  t.equal(
+    platformCheck(
+      { libc: ['!glibc'] },
+      '20.0.0',
+      'linux',
+      'x64',
+      'glibc',
+    ),
+    false,
+    'negated libc that matches fails',
+  )
+
+  // Test libc as string (not array)
+  t.equal(
+    platformCheck(
+      { libc: 'glibc' },
+      '20.0.0',
+      'linux',
+      'x64',
+      'glibc',
+    ),
+    true,
+    'libc as string works',
+  )
+
+  // Test that libc requires a known libc family
+  t.equal(
+    platformCheck({ libc: ['glibc'] }, '20.0.0', 'linux', 'x64', ''),
+    false,
+    'libc field with undefined libc fails',
+  )
+
+  t.end()
+})
+
+t.test('prefers versions that satisfy the libc requirement', t => {
+  // Test with packages that all have libc restrictions
+  const packWithRestrictions = {
+    'dist-tags': {
+      latest: '1.3.0',
+    },
+    versions: {
+      '1.0.0': { version: '1.0.0', libc: ['glibc'] },
+      '1.1.0': { version: '1.1.0', libc: ['musl'] },
+      '1.2.0': { version: '1.2.0', libc: ['glibc', 'musl'] },
+      '1.3.0': { version: '1.3.0', libc: ['musl'] },
+    },
+  } as unknown as Packument
+
+  t.equal(
+    pickManifest(packWithRestrictions, '1.x', { libc: 'glibc' })
+      ?.version,
+    '1.2.0',
+    'picks highest glibc-compatible version',
+  )
+  t.equal(
+    pickManifest(packWithRestrictions, '1.x', { libc: 'musl' })
+      ?.version,
+    '1.3.0',
+    'picks latest musl-compatible version (dist-tag)',
+  )
+
+  // Test that packages without libc restrictions are preferred
+  // when libc cannot be determined
+  const packWithUnrestricted = {
+    'dist-tags': {
+      latest: '1.3.0',
+    },
+    versions: {
+      '1.0.0': { version: '1.0.0', libc: ['glibc'] },
+      '1.4.0': { version: '1.4.0' }, // no libc restriction
+    },
+  } as unknown as Packument
+
+  t.equal(
+    pickManifest(packWithUnrestricted, '1.x', { libc: undefined })
+      ?.version,
+    '1.4.0',
+    'picks version without libc restriction when libc unknown',
+  )
+  t.end()
+})
+
+t.test('libc platform check with negation patterns', t => {
+  const pack = {
+    'dist-tags': {
+      latest: '1.2.0',
+    },
+    versions: {
+      '1.0.0': { version: '1.0.0', libc: ['!musl'] },
+      '1.1.0': { version: '1.1.0', libc: ['!glibc'] },
+      '1.2.0': { version: '1.2.0', libc: ['!musl'] },
+    },
+  } as unknown as Packument
+
+  t.equal(
+    pickManifest(pack, '1.x', { libc: 'glibc' })?.version,
+    '1.2.0',
+    'picks version that does not exclude glibc',
+  )
+  t.equal(
+    pickManifest(pack, '1.x', { libc: 'musl' })?.version,
+    '1.1.0',
+    'picks version that does not exclude musl',
+  )
+  t.end()
+})
+
+t.test('LDD_PATH constant is exported', t => {
+  t.equal(LDD_PATH, '/usr/bin/ldd', 'LDD_PATH has correct value')
+  t.end()
+})
+
+t.test('getFamilyFromFilesystem (mocked)', async t => {
+  // Test glibc detection from filesystem
+  t.test('detects glibc from ldd file content', async t => {
+    const { getFamilyFromFilesystem } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': {
+          readFileSync: () => 'GNU C Library (glibc) 2.31',
+        },
+      })
+    t.equal(getFamilyFromFilesystem(), 'glibc')
+  })
+
+  // Test musl detection from filesystem
+  t.test('detects musl from ldd file content', async t => {
+    const { getFamilyFromFilesystem } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': {
+          readFileSync: () => 'musl libc (x86_64)',
+        },
+      })
+    t.equal(getFamilyFromFilesystem(), 'musl')
+  })
+
+  // Test unknown libc in ldd file
+  t.test('returns null for unrecognized ldd content', async t => {
+    const { getFamilyFromFilesystem } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': {
+          readFileSync: () => 'some other libc implementation',
+        },
+      })
+    t.equal(getFamilyFromFilesystem(), null)
+  })
+
+  // Test file read error
+  t.test('returns undefined when file cannot be read', async t => {
+    const { getFamilyFromFilesystem } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': {
+          readFileSync: () => {
+            throw new Error('ENOENT')
+          },
+        },
+      })
+    t.equal(getFamilyFromFilesystem(), undefined)
+  })
+
+  t.end()
+})
+
+t.test('getFamilyFromReport (mocked)', async t => {
+  // Test glibc detection from report
+  t.test('detects glibc from process.report', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    t.intercept(process, 'report', {
+      value: {
+        excludeNetwork: false,
+        getReport: () => ({
+          header: { glibcRuntimeVersion: '2.31' },
+        }),
+      },
+    })
+    const { getFamilyFromReport } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(getFamilyFromReport(), 'glibc')
+  })
+
+  // Test musl detection from report (via sharedObjects)
+  t.test('detects musl from sharedObjects (ld-musl-)', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    t.intercept(process, 'report', {
+      value: {
+        excludeNetwork: false,
+        getReport: () => ({
+          sharedObjects: ['/lib/ld-musl-x86_64.so.1'],
+        }),
+      },
+    })
+    const { getFamilyFromReport } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(getFamilyFromReport(), 'musl')
+  })
+
+  // Test musl detection from report (via libc.musl-)
+  t.test('detects musl from sharedObjects (libc.musl-)', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    t.intercept(process, 'report', {
+      value: {
+        excludeNetwork: false,
+        getReport: () => ({
+          sharedObjects: ['/lib/libc.musl-x86_64.so.1'],
+        }),
+      },
+    })
+    const { getFamilyFromReport } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(getFamilyFromReport(), 'musl')
+  })
+
+  // Test unknown libc from report
+  t.test('returns null for unrecognized report', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    t.intercept(process, 'report', {
+      value: {
+        excludeNetwork: false,
+        getReport: () => ({
+          header: {},
+          sharedObjects: ['/lib/libc.so.6'],
+        }),
+      },
+    })
+    const { getFamilyFromReport } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(getFamilyFromReport(), null)
+  })
+
+  // Test report error
+  t.test('returns null when report throws', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    t.intercept(process, 'report', {
+      value: {
+        excludeNetwork: false,
+        getReport: () => {
+          throw new Error('report failed')
+        },
+      },
+    })
+    const { getFamilyFromReport } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(getFamilyFromReport(), null)
+  })
+
+  t.end()
+})
+
+t.test('detectLibc integration (mocked)', async t => {
+  // Test non-linux platform
+  t.test('returns undefined on non-linux', async t => {
+    t.intercept(process, 'platform', { value: 'darwin' })
+    const { detectLibc: detectLibcMocked } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': { readFileSync: () => '' },
+      })
+    t.equal(detectLibcMocked(), undefined)
+  })
+
+  // Test filesystem detection takes precedence
+  t.test(
+    'filesystem detection takes precedence over report',
+    async t => {
+      t.intercept(process, 'platform', { value: 'linux' })
+      t.intercept(process, 'report', {
+        value: {
+          excludeNetwork: false,
+          getReport: () => ({
+            sharedObjects: ['/lib/ld-musl-x86_64.so.1'],
+          }),
+        },
+      })
+      const { detectLibc: detectLibcMocked } =
+        await t.mockImport<PickManifestModule>('../src/index.ts', {
+          'node:fs': {
+            readFileSync: () => 'GNU C Library (glibc) 2.31',
+          },
+        })
+      t.equal(detectLibcMocked(), 'glibc')
+    },
+  )
+
+  // Test fallback to report when filesystem fails
+  t.test(
+    'falls back to report when filesystem detection fails',
+    async t => {
+      t.intercept(process, 'platform', { value: 'linux' })
+      t.intercept(process, 'report', {
+        value: {
+          excludeNetwork: false,
+          getReport: () => ({
+            header: { glibcRuntimeVersion: '2.31' },
+          }),
+        },
+      })
+      const { detectLibc: detectLibcMocked } =
+        await t.mockImport<PickManifestModule>('../src/index.ts', {
+          'node:fs': {
+            readFileSync: () => {
+              throw new Error('ENOENT')
+            },
+          },
+        })
+      t.equal(detectLibcMocked(), 'glibc')
+    },
+  )
+
+  // Test caching behavior
+  t.test('returns cached result on subsequent calls', async t => {
+    t.intercept(process, 'platform', { value: 'linux' })
+    const { detectLibc: detectLibcMocked } =
+      await t.mockImport<PickManifestModule>('../src/index.ts', {
+        'node:fs': {
+          readFileSync: () => 'GNU C Library (glibc) 2.31',
+        },
+      })
+    const first = detectLibcMocked()
+    const second = detectLibcMocked()
+    t.equal(first, second)
+    t.equal(first, 'glibc')
+  })
+
+  // Test resetLibcCache
+  resetLibcCache()
+  t.pass('resetLibcCache does not throw')
+
+  t.end()
+})
+
+t.test('parsed versions are shared between picks', t => {
+  // the same packument picked twice parses its versions once; the second
+  // pick ranks over the cached instances and lands on the same answer
+  const versions = Object.fromEntries(
+    Array.from({ length: 40 }, (_, i) => [
+      `1.${i}.0`,
+      { name: 'x', version: `1.${i}.0` },
+    ]),
+  )
+  const paku = {
+    name: 'x',
+    'dist-tags': { latest: '1.39.0' },
+    versions,
+  } as unknown as Packument
+  const first = pickManifest(paku, '>=1.2.0 <1.10.0')
+  const second = pickManifest(paku, '>=1.2.0 <1.10.0')
+  t.equal(first?.version, '1.9.0')
+  t.equal(second, first, 'same answer from the cached parses')
+
+  // an invalid version string is remembered as invalid, and skipped again
+  const odd = {
+    name: 'y',
+    'dist-tags': { latest: '2.0.0' },
+    versions: {
+      'not-a-version': { name: 'y', version: 'not-a-version' },
+      '2.0.0': { name: 'y', version: '2.0.0' },
+    },
+  } as unknown as Packument
+  t.equal(pickManifest(odd, '^2')?.version, '2.0.0')
+  t.equal(
+    pickManifest(odd, '^1'),
+    undefined,
+    'the invalid key is skipped',
+  )
+
+  // past the cap the cache is cleared and keeps answering correctly
+  const many = Object.fromEntries(
+    Array.from({ length: 33_000 }, (_, i) => [
+      `0.0.${i}`,
+      { name: 'z', version: `0.0.${i}` },
+    ]),
+  )
+  const big = {
+    name: 'z',
+    'dist-tags': { latest: '0.0.0' },
+    versions: many,
+  } as unknown as Packument
+  t.equal(pickManifest(big, '>=0.0.32990')?.version, '0.0.32999')
+  t.equal(
+    pickManifest(paku, '>=1.2.0 <1.10.0')?.version,
+    '1.9.0',
+    'still right after the clear',
+  )
+  t.end()
+})
+
+t.test('a version the time map does not list is never chosen', t => {
+  // without a cutoff the times themselves are not read, but a time map
+  // that leaves a version out still rules it out
+  const paku = {
+    name: 'x',
+    'dist-tags': { latest: '1.0.0' },
+    versions: {
+      '1.0.0': { name: 'x', version: '1.0.0' },
+      '1.1.0': { name: 'x', version: '1.1.0' },
+      '1.2.0': { name: 'x', version: '1.2.0' },
+    },
+    time: {
+      '1.0.0': '2020-01-01T00:00:00.000Z',
+      '1.1.0': '2020-02-01T00:00:00.000Z',
+    },
+  } as unknown as Packument
+  t.equal(pickManifest(paku, '^1.1.0')?.version, '1.1.0')
+  t.equal(
+    pickManifest(paku, '^1.1.0', { before: new Date('2020-03-01') })
+      ?.version,
+    '1.1.0',
+    'the same with a cutoff the listed times fall before',
   )
   t.end()
 })

@@ -1,14 +1,14 @@
-import fs from 'fs'
+import fs from 'node:fs'
 import pathModule, {
   basename,
   delimiter,
   join,
   relative,
   sep,
-} from 'path'
-import t, { type Test } from 'tap'
-import { type WhichOptions } from '../src/index.ts'
-
+} from 'node:path'
+import t from 'tap'
+import type { Test } from 'tap'
+import type { WhichOptions } from '../src/index.ts'
 import { posix as isexePosix, win32 as isexeWin } from 'isexe'
 
 const isWindows = process.platform === 'win32'
@@ -30,18 +30,21 @@ const runTest = async (
       const opt = Object.keys(_opt).length ? { ..._opt } : undefined
       if (!isWindows)
         t.intercept(process, 'platform', { value: platform })
-      const { which, whichSync } = await t.mockImport(
-        '../src/index.ts',
-        {
-          isexe: isWindows ? isexeWin : isexePosix,
-        },
-      )
+      const { which, whichSync } = await t.mockImport<
+        typeof import('../src/index.ts')
+      >('../src/index.ts', {
+        isexe: isWindows ? isexeWin : isexePosix,
+      })
       const er = expect as { code: string } | null
       if (er?.code) {
-        await t.rejects(() => which(exec, opt), er, 'async rejects')
+        await t.rejects(
+          () => which(exec, opt ?? {}),
+          er,
+          'async rejects',
+        )
         t.throws(() => whichSync(exec, opt), er, 'sync throws')
       } else {
-        t.strictSame(await which(exec, opt), expect, 'async')
+        t.strictSame(await which(exec, opt ?? {}), expect, 'async')
         t.strictSame(whichSync(exec, opt), expect, 'sync')
       }
     })
@@ -67,9 +70,13 @@ t.test('windows style', async t => {
     'foo.txt': 'bare file',
   })
   t.intercept(process, 'platform', { value: 'win32' })
-  const { which, whichSync } = await t.mockImport('../src/index.ts', {
-    isexe: isexeWin,
-    path: { ...pathModule, delimiter: pathModule.win32.delimiter },
+  const { which, whichSync } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    'node:path': {
+      ...pathModule,
+      delimiter: pathModule.win32.delimiter,
+    },
   })
   t.match(await which('foo', { path, pathExt: '.CMD' }), /foo\.cmd$/i)
   t.match(await which('foo', { path, pathExt: '.SH' }), /foo\.sh$/i)

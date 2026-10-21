@@ -1,0 +1,509 @@
+---
+title: Migrating from pnpm to nrz
+sidebar:
+  label: From pnpm
+  order: 3
+---
+
+## Quick Start
+
+<Code
+  code={`# Install nrz globally
+$ npm install -g nrz
+
+# Configure a registry -- nrz has no default
+
+$ nrz config set registry=https://registry.npmjs.org/
+
+# In your existing project, run:
+
+$ nrz install $ nrz build`} title="Terminal" lang="bash" />
+
+Unlike pnpm, **nrz has no default registry** — commands that resolve
+or fetch packages fail with a config error until one is set. The
+snippet above points it at the public npm registry; if you have a
+nrz.io account, run
+[`nrz setup`](/client/registries#getting-started-with-nrz-setup)
+instead to configure your account's registry aliases. See
+[Registries](/client/registries).
+
+nrz reads your existing `package.json` files and resolves
+dependencies. The `pnpm-lock.yaml` file is not migrated — nrz performs
+a fresh resolution and creates `nrz-lock.json`.
+
+---
+
+## Command Mapping
+
+| pnpm                             | nrz                             | Notes                                                                 |
+| -------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| `pnpm install`                   | `nrz install`                   | Does **not** run lifecycle scripts                                    |
+| `pnpm add <pkg>`                 | `nrz install <pkg>`             |                                                                       |
+| `pnpm add -D <pkg>`              | `nrz install -D <pkg>`          |                                                                       |
+| `pnpm remove <pkg>`              | `nrz uninstall <pkg>`           |                                                                       |
+| `pnpm run <script>`              | `nrz run <script>`              |                                                                       |
+| `pnpm <script>`                  | `nrz run <script>`              | See [fallback-command](/client/configuring#--fallback-commandcommand) |
+| `pnpm dlx <pkg>`                 | `nrx <pkg>`                     | Run remote packages                                                   |
+| `pnpm exec <cmd>`                | `nrz exec <cmd>`                |                                                                       |
+| `pnpm init`                      | `nrz init`                      |                                                                       |
+| `pnpm pack`                      | `nrz pack`                      |                                                                       |
+| `pnpm publish`                   | `nrz publish`                   |                                                                       |
+| `pnpm login`                     | `nrz login`                     |                                                                       |
+| `pnpm whoami`                    | `nrz whoami`                    |                                                                       |
+| `pnpm list`                      | `nrz list`                      |                                                                       |
+| `pnpm why <pkg>`                 | `nrz query '#<pkg>'`            | DSS query; see [Selectors](/client/selectors)                         |
+| `pnpm install --frozen-lockfile` | `nrz install --frozen-lockfile` |                                                                       |
+| `pnpm audit`                     | `nrz query ':malware'`          | More powerful; see [Security](/client/security)                       |
+| `pnpm config set <key> <val>`    | `nrz config set <key>=<val>`    |                                                                       |
+
+### Shorthand Script Execution
+
+pnpm lets you run scripts without `run` (e.g., `pnpm build`). nrz
+supports this via the `fallback-command` config:
+
+<Code
+  code="$ nrz config set fallback-command=run-exec"
+  title="Terminal"
+  lang="bash"
+/>
+
+After setting this, `nrz build` will first check for a nrz command
+named `build`, and if none matches, look for a `package.json` script.
+
+---
+
+## Configuration
+
+### .npmrc + pnpm-workspace.yaml → nrz.json
+
+pnpm reads registry config from `.npmrc` and workspace config from
+`pnpm-workspace.yaml`. nrz consolidates everything into `nrz.json`.
+nrz also reads the `packages` list of `pnpm-workspace.yaml`, and
+`nrz install` copies it to `nrz.json`.
+
+**pnpm configuration:**
+
+<Code
+  code={`# .npmrc (pnpm)
+registry=https://registry.internal.company.com/
+@mycompany:registry=https://npm.mycompany.com/
+auto-install-peers=true`}
+  title=".npmrc"
+  lang="ini"
+/>
+
+<Code
+  code={`# pnpm-workspace.yaml
+packages:
+  - "packages/*"
+  - "apps/*"`}
+  title="pnpm-workspace.yaml"
+  lang="yaml"
+/>
+
+**nrz equivalent (single file):**
+
+<Code
+  code={JSON.stringify(
+    {
+      registry: 'https://registry.internal.company.com/',
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+      workspaces: ['packages/*', 'apps/*'],
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+---
+
+## Registry Configuration
+
+### Scoped Registries
+
+pnpm's scoped registries (from `.npmrc`) map directly to nrz's
+`scoped-registries`:
+
+<Code
+  code={JSON.stringify(
+    {
+      'scoped-registries': {
+        '@mycompany': 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+### Named Registry Aliases
+
+nrz also supports [named registry aliases](/client/registries) which
+remove the ambiguity of scope-based mapping:
+
+<Code
+  code={JSON.stringify(
+    {
+      registries: {
+        internal: 'https://npm.mycompany.com/',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Then reference packages explicitly in `package.json`:
+
+<Code
+  code={JSON.stringify(
+    {
+      dependencies: {
+        '@mycompany/utils': 'internal:@mycompany/utils@^2.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json"
+  lang="json"
+/>
+
+---
+
+## Authentication
+
+pnpm stores auth tokens in `.npmrc`, same as npm. nrz stores them in
+an XDG-compliant keychain file, keeping secrets out of project config
+files.
+
+<Code
+  code={`# Log in to default registry
+$ nrz login
+
+# Log in to custom registry
+
+$ nrz login --registry=https://npm.mycompany.com/`} title="Terminal"
+lang="bash" />
+
+### CI Environments
+
+<Code
+  code={`# pnpm
+NPM_TOKEN=abc123 pnpm install
+
+# nrz
+
+NRZ_TOKEN=abc123 nrz install`} title="Terminal" lang="bash" />
+
+See [Authentication](/client/auth) for full details.
+
+---
+
+## Lockfile
+
+pnpm uses `pnpm-lock.yaml`. nrz uses `nrz-lock.json`.
+
+When you first run `nrz install`, nrz creates `nrz-lock.json` from a
+fresh resolution of your `package.json` files. The `pnpm-lock.yaml` is
+not read.
+
+**What to do:**
+
+1. Run `nrz install` to generate `nrz-lock.json`
+2. Commit `nrz-lock.json`
+3. Optionally remove `pnpm-lock.yaml` once you've fully switched
+
+---
+
+## Install Script Protection
+
+pnpm runs lifecycle scripts by default during install (same as npm).
+pnpm v9+ added `onlyBuiltDependencies` in `package.json` as an
+allowlist, but scripts still run by default for listed packages.
+
+**nrz** takes a different approach: `nrz install` runs **no scripts at
+all** by default. Building is a separate, explicit step:
+
+<Code
+  code={`# Phase 1: Install (no code executes)
+$ nrz install
+
+# Phase 2: Build (runs scripts, skipping known malware)
+
+$ nrz build`} title="Terminal" lang="bash" />
+
+By default, `nrz build` uses the target
+`:scripts:not(:built):not(:malware)` — it automatically skips packages
+flagged as malware by [Socket](https://socket.dev/).
+
+### pnpm onlyBuiltDependencies vs nrz build --target
+
+<Code
+  code={JSON.stringify(
+    {
+      pnpm: {
+        onlyBuiltDependencies: ['esbuild', 'node-gyp'],
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json (pnpm)"
+  lang="json"
+/>
+
+<Code
+  code="$ nrz build --target='#esbuild, #node-gyp'"
+  title="Terminal (nrz)"
+  lang="bash"
+/>
+
+You can persist the target:
+
+<Code
+  code='$ nrz config set "command.build.target=#esbuild, #node-gyp"'
+  title="Terminal"
+  lang="bash"
+/>
+
+See [`nrz build`](/client/commands/build) for full details.
+
+---
+
+## Workspaces
+
+### pnpm
+
+pnpm defines workspaces in `pnpm-workspace.yaml`:
+
+<Code
+  code={`packages:
+  - "packages/*"
+  - "apps/*"`}
+  title="pnpm-workspace.yaml"
+  lang="yaml"
+/>
+
+### nrz
+
+nrz reads that `packages` list, and `nrz install` copies it to
+`nrz.json`, nrz's own place for workspaces (see
+[Workspaces](/client/workspaces#saving-workspaces-to-nrzjson)).
+`pnpm-workspace.yaml` is left as-is. Commit `nrz.json`: `nrz ci` reads
+workspaces from it only, and later `pnpm-workspace.yaml` edits are
+ignored by nrz:
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: ['packages/*', 'apps/*'],
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+nrz also supports **named workspace groups**:
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: {
+        apps: 'apps/*',
+        libs: ['packages/*', 'shared/*'],
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+### Workspace Commands
+
+| pnpm                               | nrz                                               |
+| ---------------------------------- | ------------------------------------------------- |
+| `pnpm --filter <name> <cmd>`       | `nrz <cmd> -w <path>` or `cd <path> && nrz <cmd>` |
+| `pnpm --filter ./packages/* <cmd>` | `nrz <cmd> -w packages/*`                         |
+| `pnpm -r <cmd>`                    | `nrz <cmd> --recursive`                           |
+| `pnpm -r run test`                 | `nrz run test --recursive`                        |
+
+**Note:** nrz's `--workspace` (`-w`) flag takes paths or glob
+patterns, not package names.
+
+<Code
+  code={`# Run tests in a specific workspace
+$ nrz run test -w packages/core
+
+# Run build across a workspace group
+
+$ nrz run build -g libs`} title="Terminal" lang="bash" />
+
+See [Workspaces](/client/workspaces) for full details.
+
+---
+
+## Catalogs
+
+If you use pnpm's catalog feature (`pnpm-workspace.yaml`), nrz has
+direct support for [catalogs](/client/catalogs) with compatible
+syntax. nrz doesn't read `catalog`/`catalogs` from
+`pnpm-workspace.yaml`; move them to `nrz.json`, else `catalog:` specs
+fail with a [catalog error](/client/catalogs#error-handling).
+
+**pnpm:**
+
+<Code
+  code={`# pnpm-workspace.yaml
+packages:
+  - "packages/*"
+
+catalog: typescript: "^5.0.0" eslint: "^8.0.0"
+
+catalogs: testing: vitest: "^1.0.0"`} title="pnpm-workspace.yaml"
+lang="yaml" />
+
+**nrz:**
+
+<Code
+  code={JSON.stringify(
+    {
+      workspaces: ['packages/*'],
+      catalog: {
+        typescript: '^5.0.0',
+        eslint: '^8.0.0',
+      },
+      catalogs: {
+        testing: {
+          vitest: '^1.0.0',
+        },
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+The `catalog:` protocol in `package.json` works the same way:
+
+<Code
+  code={JSON.stringify(
+    {
+      devDependencies: {
+        typescript: 'catalog:',
+        vitest: 'catalog:testing',
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json"
+  lang="json"
+/>
+
+See [Catalogs](/client/catalogs) for full details.
+
+---
+
+## Overrides → Graph Modifiers
+
+pnpm uses `pnpm.overrides` in `package.json`. nrz uses
+[Graph Modifiers](/client/graph-modifiers) in `nrz.json`.
+
+<Code
+  code={JSON.stringify(
+    {
+      pnpm: {
+        overrides: {
+          lodash: '^4.17.21',
+          'express>qs': '6.10.0',
+        },
+      },
+    },
+    null,
+    2,
+  )}
+  title="package.json (pnpm)"
+  lang="json"
+/>
+
+<Code
+  code={JSON.stringify(
+    {
+      modifiers: {
+        '#lodash': '^4.17.21',
+        ':root > #express > #qs': '=6.10.0',
+      },
+    },
+    null,
+    2,
+  )}
+  title="nrz.json"
+  lang="json"
+/>
+
+Graph Modifiers use DSS selectors, giving you more precise control
+(e.g., target by path, workspace, or semver range).
+
+pnpm's `"-"` override value maps to the same `"-"` modifier value, see
+[Removing Dependencies](/client/graph-modifiers#removing-dependencies).
+
+---
+
+## node_modules Layout
+
+pnpm uses a content-addressable store with symlinks to create a strict
+`node_modules` layout where packages can only access their declared
+dependencies.
+
+nrz also creates a `node_modules` directory but uses a different
+internal layout (under `node_modules/.nrz/`). The result is similar in
+that packages resolve correctly at runtime — your application code
+doesn't need to change.
+
+---
+
+## Features Not in nrz
+
+Some pnpm-specific features don't have direct equivalents:
+
+- **Side-effects cache** — Not available in nrz
+- **`pnpm patch`** — Not yet available in nrz
+- **`pnpm deploy`** — Not available; use standard deployment tooling
+- **`pnpm.peerDependencyRules`** — nrz handles peer dependencies
+  automatically with [context isolation](/client/peer-dependencies)
+
+---
+
+## Migration Checklist
+
+1. Install nrz: `npm install -g nrz`
+2. Create `nrz.json` with your `.npmrc` registry config (`nrz install`
+   copies `pnpm-workspace.yaml` `packages` to it)
+3. Move scoped registry config from `.npmrc` to `nrz.json`
+4. Move catalogs from `pnpm-workspace.yaml` to `nrz.json` (`catalog`
+   and `catalogs` fields)
+5. Move `pnpm.overrides` from `package.json` to `modifiers` in
+   `nrz.json`
+6. Run `nrz install` then `nrz build`
+7. Commit `nrz.json` and `nrz-lock.json`
+8. Update CI scripts: replace `pnpm install --frozen-lockfile` with
+   `nrz install --frozen-lockfile && nrz build`
+9. Update CI auth: replace `NPM_TOKEN` with `NRZ_TOKEN`
+10. Update any `pnpm dlx` usage to `nrx`
+11. Remove `pnpm-workspace.yaml` and pnpm-specific `.npmrc` settings
+    once no other tool reads them

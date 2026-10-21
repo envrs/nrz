@@ -1,0 +1,210 @@
+import { emitter } from '@nrz/output'
+import type { Events } from '@nrz/output'
+import { Box, render, Text } from 'ink'
+import type { Instance } from 'ink'
+import Spinner from 'ink-spinner'
+import {
+  createElement as $,
+  Fragment,
+  useEffect,
+  useState,
+} from 'react'
+import { ViewClass } from '../../view.ts'
+import { asError } from '@nrz/types'
+import type { InstallResult } from '../install.ts'
+import { persistedEntries } from '../../persist-spec-config.ts'
+import {
+  keptLine,
+  savedLine,
+  unmatchedLines,
+  unscannedLines,
+} from '../../allow-skills.ts'
+
+type Step = {
+  state: 'waiting' | 'in_progress' | 'completed'
+}
+
+const labels: Record<Events['graphStep']['step'], string> = {
+  build: 'resolving dependencies',
+  actual: '',
+  reify: 'extracting files',
+}
+
+const GraphStep = ({ text, step }: { text: string; step: Step }) => {
+  if (step.state === 'waiting') {
+    return $(Text, { color: 'gray' }, text)
+  }
+  if (step.state === 'in_progress') {
+    return $(
+      Text,
+      { color: 'yellow' },
+      text + ' ',
+      $(Spinner, { type: 'dots' }),
+    )
+  }
+  return $(Text, { color: 'green' }, text, ' ✓')
+}
+
+const App = ({ trailer }: { trailer?: string }) => {
+  const [requests, setRequests] = useState(0)
+  const [cacheHit, setCacheHit] = useState(0)
+
+  const [steps, setSteps] = useState<
+    Record<Events['graphStep']['step'], Step>
+  >({
+    build: {
+      state: 'waiting',
+    },
+    actual: {
+      state: 'waiting',
+    },
+    reify: {
+      state: 'waiting',
+    },
+  })
+
+  useEffect(() => {
+    const updateRequests = ({ state }: Events['request']) => {
+      if (state === 'start') {
+        setRequests(p => p + 1)
+      } else if (
+        state === 'cache' ||
+        state === 'stale' ||
+        state === 'store'
+      ) {
+        setCacheHit(p => p + 1)
+      }
+    }
+    emitter.on('request', updateRequests)
+    return () => emitter.off('request', updateRequests)
+  }, [])
+
+  useEffect(() => {
+    const update = ({ step, state }: Events['graphStep']) => {
+      setSteps(p => ({
+        ...p,
+        [step]: {
+          ...p[step],
+          state: state === 'start' ? 'in_progress' : 'completed',
+        },
+      }))
+    }
+    emitter.on('graphStep', update)
+    return () => emitter.off('graphStep', update)
+  }, [])
+
+  return $(
+    Fragment,
+    null,
+    $(
+      Box,
+      null,
+      ...(['build', 'actual', 'reify'] as const).map(
+        (step, idx, list) => {
+          const separator = idx === list.length - 1 ? '' : ' > '
+          const label = labels[step]
+          if (!label) return null
+          return $(
+            Text,
+            { key: step },
+            $(GraphStep, { text: label, step: steps[step] }),
+            $(Text, { color: 'gray' }, separator),
+          )
+        },
+      ),
+    ),
+    cacheHit > 0 ?
+      $(Text, null, `${cacheHit} cache hit${cacheHit > 1 ? 's' : ''}`)
+    : null,
+    requests > 0 ?
+      $(Text, null, `${requests} request${requests > 1 ? 's' : ''}`)
+    : null,
+    trailer ? $(Text, null, trailer) : null,
+  )
+}
+
+export class InstallReporter extends ViewClass {
+  #instance: Instance | null = null
+
+  start() {
+    // Ink measures the terminal on every render, and when stdout has no
+    // width (a pipe, a CI log) it does so by spawning `tput cols` and
+    // `tput lines`: thousands of processes over one install. Give a
+    // non-TTY stdout the width Ink would fall back to anyway, so the
+    // output is the same and nothing is spawned.
+    if (!process.stdout.isTTY) {
+      // only a sane COLUMNS counts; -1 or Infinity would be truthy
+      const cols = Number(process.env.COLUMNS)
+      process.stdout.columns ||=
+        Number.isInteger(cols) && cols > 0 ? cols : 80
+    }
+    this.#instance = render($(App))
+  }
+
+  async done(_result: InstallResult, { time }: { time: number }) {
+    let out = `Done in ${time}ms`
+
+    // prints a very complete message explaining users the next steps
+    // in case there are packages to be built
+    if (_result.buildQueue?.length) {
+      out += `\n\n📦 ${_result.buildQueue.length} packages have install scripts defined & were not fully built\n`
+      out += '🔎 Run `nrz query :scripts` to list them\n'
+      out +=
+        '🔨 Run `nrz build` to run all required scripts to build installed packages.\n'
+    }
+    const {
+      linked = [],
+      removed = [],
+      conflicts = [],
+      skipped = [],
+      gitignore = [],
+      unmatched = [],
+    } = _result.skills ?? {}
+    const s = (n: number) => (n === 1 ? '' : 's')
+    const skills: string[] = []
+    if (linked.length) {
+      // one per skill, linked in any number of dirs
+      const n = new Set(linked.map(r => `${r.id}\0${r.skill}`)).size
+      const dirs = [...new Set(linked.map(r => r.dir))].join(', ')
+      skills.push(`🔗 Linked ${n} agent skill${s(n)} into ${dirs}`)
+    }
+    if (removed.length) {
+      skills.push(
+        `🧹 Removed ${removed.length} stale skill link${s(removed.length)}: ${removed.join(', ')}`,
+      )
+    }
+    if (conflicts.length) {
+      skills.push(
+        `⚠️ ${conflicts.length} skill link${s(conflicts.length)} skipped, path in use or taken by another package: ${conflicts.join(', ')}`,
+      )
+    }
+    skills.push(...unmatchedLines(unmatched))
+    if (skipped.length) {
+      skills.push(`⚠️ Skipped ${skipped.join(', ')}`)
+    }
+    if (gitignore.length) {
+      skills.push(`⚠️ Could not update ${gitignore.join(', ')}`)
+    }
+    skills.push(...unscannedLines(_result.skills ?? {}))
+    if (skills.length) out += `\n${skills.join('\n')}\n`
+    const saved = _result.persistedConfig
+    if (saved) {
+      for (const e of persistedEntries(saved.values)) {
+        out += `\nSaved ${e} to ${saved.which} nrz.json`
+      }
+    }
+    const migrated = _result.migratedWorkspaces
+    if (migrated) {
+      out += `\nSaved workspaces from ${migrated.source} to nrz.json`
+    }
+    const a = _result.allowSkills
+    if (a?.stored) out += `\n${keptLine(a.stored)}`
+    else if (a) out += `\n${savedLine(a.query, 'project')}`
+    this.#instance?.rerender($(App, { trailer: out }))
+    return undefined
+  }
+
+  error(err: unknown) {
+    this.#instance?.unmount(asError(err))
+  }
+}

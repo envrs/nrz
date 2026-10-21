@@ -1,0 +1,20 @@
+name: 🔧 Chore
+description: Maintenance tasks, refactoring, or technical improvements
+title: '[CHORE] '
+labels: ['chore', 'maintenance']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🔧 Chore
+        Thanks for identifying a maintenance task! Please provide details about the work needed to keep our codebase healthy and efficient.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 📋 Description
+      description: Provide a clear description of the maintenance task or improvement needed.
+      placeholder: 'Describe the chore/maintenance task...'
+    validations:
+      required: true

@@ -1,0 +1,58 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/commands/update.ts > TAP > update with no arguments > should call update with expected options 1`] = `
+update
+
+`
+
+exports[`test/commands/update.ts > TAP > usage > usage 1`] = `
+Usage:
+  nrz update
+
+Update dependencies to their latest in-range versions. Discards the lockfile and
+resolves dependencies from scratch (with -w: only matching workspaces'
+dependencies).
+
+  Aliases
+
+    ​u
+
+  Options
+
+    workspace
+      Limit update to matching workspaces. Others, and deps they share, keep
+      their locked versions.
+
+      ​--workspace=<path|glob>
+
+    workspace-group
+      Limit update to workspace groups. Others, and deps they share, keep their
+      locked versions.
+
+      ​--workspace-group=<name>
+
+    save-config
+      Save registry and git host options given on the command line or via env
+      (e.g. \`--registries name=url\`) to the project nrz.json, or the user
+      nrz.json with --config=user.
+
+      ​--save-config
+
+    allow-scripts
+      Filter which packages are allowed to run lifecycle scripts using DSS query
+      syntax.
+
+      ​--allow-scripts=<query>
+
+    allow-skills
+      Link agent skills of packages matching this DSS query into the project's
+      agent skill dirs. Saved to nrz.json.
+
+      ​--allow-skills=<query>
+
+`

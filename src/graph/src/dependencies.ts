@@ -1,19 +1,33 @@
-import { type DepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
-import { type Spec } from '@nrz/spec'
+import type { ErrorCauseOptions } from '@nrz/error-cause'
+import { Spec } from '@nrz/spec/browser'
+import type { SpecOptions } from '@nrz/spec'
+import type {
+  DependencySaveType,
+  DependencyTypeLong,
+  DependencyTypeShort,
+  Manifest,
+  NodeLike,
+} from '@nrz/types'
 import {
-  type Manifest,
-  type DependencyTypeLong,
-  type DependencyTypeShort,
+  isErrorWithCause,
+  isObject,
+  dependencyTypes,
   longDependencyTypes,
   shortDependencyTypes,
-  dependencyTypes,
 } from '@nrz/types'
 
 export const isDependencyTypeShort = (
   obj: unknown,
 ): obj is DependencyTypeShort =>
   shortDependencyTypes.has(obj as DependencyTypeShort)
+
+export const isDependencySaveType = (
+  obj: unknown,
+): obj is DependencyTypeShort =>
+  shortDependencyTypes.has(obj as DependencyTypeShort) ||
+  obj === 'implicit'
 
 export const asDependencyTypeShort = (
   obj: unknown,
@@ -46,9 +60,10 @@ export type Dependency = {
    */
   spec: Spec
   /**
-   * The {@link DependencyTypeShort}, describing the type of dependency.
+   * The {@link DependencySaveType}, describing the way this dependency should
+   * be saved back to the manifest.
    */
-  type: DependencyTypeShort
+  type: DependencySaveType
 }
 
 /**
@@ -87,7 +102,7 @@ export const isDependency = (o: unknown): o is Dependency =>
   isObj(o) &&
   isObj(o.spec) &&
   !!o.spec.type &&
-  isDependencyTypeShort(o.type)
+  isDependencySaveType(o.type)
 
 export const asDependency = (obj: unknown): Dependency => {
   if (!isDependency(obj)) {
@@ -97,12 +112,21 @@ export const asDependency = (obj: unknown): Dependency => {
 }
 
 /**
+ * The key an added dependency is filed under. A nameless spec
+ * (`github:u/r`, `file:../x`, a tarball url) has no name to key by, so
+ * the CLI uses its stringified form; every reader of an `add` map has to
+ * derive the key the same way.
+ */
+export const addKey = (spec: Spec): string =>
+  spec.name === '(unknown)' ? spec.spec : spec.name
+
+/**
  * Get the {@link DependencyTypeShort} from a {@link DependencyTypeLong}.
  */
 export const shorten = (
   typeLong: DependencyTypeLong,
   name?: string,
-  manifest?: Manifest,
+  manifest?: Pick<Manifest, 'peerDependenciesMeta'> | null,
 ): DependencyTypeShort => {
   const shortName = dependencyTypes.get(typeLong)
   if (!shortName) {
@@ -121,4 +145,162 @@ export const shorten = (
     return 'peerOptional'
   }
   return 'peer'
+}
+
+const isStringArray = (a: unknown): a is string[] =>
+  Array.isArray(a) && !a.some(b => typeof b !== 'string')
+
+/**
+ * Only install devDeps for git dependencies and importers
+ * Everything else always gets installed
+ *
+ * Deliberately stricter than {@link getRawDependencies}, which also keeps
+ * devDeps of `file:` nodes: this is the rule the ideal build places with, so
+ * peer checks use it to match what actually lands in the graph.
+ */
+export const shouldInstallDepType = (
+  node: NodeLike,
+  depType: DependencyTypeLong,
+) =>
+  depType !== 'devDependencies' ||
+  node.importer ||
+  node.id.startsWith('git')
+
+/*
+ * Retrieves a map of all dependencies, of all types, that can be iterated
+ * on and consulted when parsing the directory contents of a given node.
+ */
+export const getRawDependencies = (node: NodeLike) => {
+  const dependencies = new Map<string, RawDependency>()
+  const bundleDeps: unknown = node.manifest?.bundleDependencies ?? []
+  // if it's an importer, bundleDeps are just normal. if it's a dep,
+  // then they're ignored entirely.
+  const bundled =
+    (
+      !node.importer &&
+      !node.id.startsWith('git') &&
+      isStringArray(bundleDeps)
+    ) ?
+      new Set(bundleDeps)
+    : new Set<string>()
+  for (const depType of longDependencyTypes) {
+    const obj: Record<string, string> | undefined =
+      node.manifest?.[depType]
+    // only care about devDeps for importers and git or symlink deps
+    // technically this will also include devDeps for tarball file: specs,
+    // but that is likely rare enough to not worry about too much.
+    if (
+      depType === 'devDependencies' &&
+      !node.importer &&
+      !node.id.startsWith('git') &&
+      !node.id.startsWith('file')
+    ) {
+      continue
+    }
+    if (obj) {
+      for (const [name, bareSpec] of Object.entries(obj)) {
+        // if it's a bundled dependency, we just ignore it entirely.
+        if (bundled.has(name)) continue
+        // a name already collected from a regular dependency type is the
+        // package's own dependency; the peer entry only constrains it
+        if (
+          depType === 'peerDependencies' &&
+          dependencies.has(name)
+        ) {
+          continue
+        }
+        dependencies.set(name, {
+          name,
+          type: depType,
+          bareSpec,
+          registry: node.registry,
+        })
+      }
+    }
+  }
+  return dependencies
+}
+
+/**
+ * Maps short dependency types to the `package.json` field declaring them.
+ */
+export const longDependencyTypeNames: Record<
+  DependencyTypeShort,
+  DependencyTypeLong
+> = {
+  prod: 'dependencies',
+  dev: 'devDependencies',
+  optional: 'optionalDependencies',
+  peer: 'peerDependencies',
+  peerOptional: 'peerDependencies',
+}
+
+// `./`-relative unless already relative or absolute
+const manifestPath = ({ location = '.' }: NodeLike) =>
+  `${/^(?:\.\.?(?:\/|$)|\/|[a-z]:)/i.test(location) ? '' : './'}${location}/package.json`
+
+/**
+ * Point an `ECONFIG` spec error (eg: an undefined `catalog:`) at the
+ * package.json & dependency type that declared it. `source` names the
+ * file the spec was read from when not the manifest (eg: a lockfile).
+ * Other values are returned as is.
+ */
+export const asDependencySpecError = (
+  er: unknown,
+  from: NodeLike,
+  type: DependencyTypeShort,
+  source?: string,
+): unknown => {
+  if (
+    !isErrorWithCause(er) ||
+    !isObject(er.cause) ||
+    er.cause.code !== 'ECONFIG'
+  ) {
+    return er
+  }
+  const pj = manifestPath(from)
+  const depType = longDependencyTypeNames[type]
+  return error(
+    er.message,
+    {
+      ...(er.cause as ErrorCauseOptions),
+      from:
+        source ?
+          `${source} (${pj} ${depType})`
+        : `${pj} (${depType})`,
+      cause: er,
+    },
+    asDependencySpecError,
+  )
+}
+
+/**
+ * Retrieves a map of all dependencies, of all types, that can be inferred
+ * from a given node manifest, including missing dependencies.
+ */
+export const getDependencies = (
+  node: NodeLike,
+  options: SpecOptions,
+): Map<string, Dependency> => {
+  const res = new Map<string, Dependency>()
+  const dependencies = getRawDependencies(node)
+  for (const { name, type, bareSpec } of dependencies.values()) {
+    const depType = shorten(type, name, node.manifest)
+    let spec: Spec
+    try {
+      spec = Spec.parse(name, bareSpec, {
+        ...options,
+        // fall back to options.registry so deps don't lose the configured
+        // registry when the node itself has none. see nrz/nrz#1580.
+        registry: node.registry ?? options.registry,
+      })
+    } catch (er) {
+      throw asDependencySpecError(er, node, depType)
+    }
+    res.set(name, {
+      spec,
+      type: depType,
+    })
+  }
+  return res
 }

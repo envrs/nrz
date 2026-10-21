@@ -1,0 +1,188 @@
+---
+title: nrz cache
+sidebar:
+  label: cache
+---
+
+Usage:
+
+<Code
+  code="$ nrz cache <command> [flags]"
+  title="Terminal"
+  lang="bash"
+/>
+
+Work with nrz cache folders
+
+## Subcommands
+
+### add
+
+Resolve the referenced package identifiers and ensure they are cached.
+
+<Code
+  code="$ nrz cache add <package-spec> [<package-spec>...]"
+  title="Terminal"
+  lang="bash"
+/>
+
+### ls
+
+Show cache entries. If no keys are provided, then a list of available
+keys will be printed. If one or more keys are provided, then details
+will be shown for the specified items.
+
+<Code code="$ nrz cache ls [<key>...]" title="Terminal" lang="bash" />
+
+### info
+
+Print metadata details for the specified cache key to stderr, and the
+response body to stdout.
+
+<Code code="$ nrz cache info <key>" title="Terminal" lang="bash" />
+
+### clean
+
+Purge expired cache entries. If one or more keys are provided, then
+only those cache entries will be considered.
+
+<Code
+  code="$ nrz cache clean [<key>...]"
+  title="Terminal"
+  lang="bash"
+/>
+
+### delete
+
+Purge items explicitly, whether expired or not. If one or more keys
+are provided, then only those cache entries will be considered.
+
+<Code
+  code="$ nrz cache delete <key> [<key>...]"
+  title="Terminal"
+  lang="bash"
+/>
+
+### delete-before
+
+Purge all cache items from before a given date, and global store
+entries written before it. Date can be provided in any format that
+JavaScript can parse.
+
+<Code
+  code="$ nrz cache delete-before <date>"
+  title="Terminal"
+  lang="bash"
+/>
+
+### delete-all
+
+Delete the entire cache folder to make nrz slower.
+
+<Code code="$ nrz cache delete-all" title="Terminal" lang="bash" />
+
+### verify
+
+Check global store entries against their cached tarballs (file list,
+contents, exec bits) and remove any that differ or have no cached
+tarball, e.g. after a file in `node_modules` was edited in place.
+
+<Code
+  code={`$ nrz cache verify <package-spec> [<package-spec>...]
+$ nrz cache verify --all`}
+  title="Terminal"
+  lang="bash"
+/>
+
+### prune-store
+
+Remove global store entries that no `node_modules` folder links to.
+Copies do not show use: an entry copied or cloned from (install
+scripts, `store-linker=copy`, macOS, a cache on another drive) stays
+if that last happened after `<date>`, or in the last 30 days without
+one.
+
+<Code
+  code={`$ nrz cache prune-store
+$ nrz cache prune-store 2026-01-01`}
+  title="Terminal"
+  lang="bash"
+/>
+
+## Global store
+
+The global store holds cached registry package tarballs unpacked,
+under `<cache>/store`. A background process fills it after each
+install, and later installs place package files from it instead of
+unpacking tarballs again: hardlinked on Linux, cloned copy-on-write
+(`clonefile`) on macOS with a Node that has `node:ffi` (26.1 and
+later, and `--allow-ffi` under `--permission`). By default
+(`store-linker=auto`) that is all: Windows, and macOS without
+`node:ffi`, unpack tarballs as before, unless `store-linker` is set to
+`hardlink`, `clone` or `copy`. Where a clone fails (a volume without
+clones, a project on another volume), the package is unpacked. A
+hardlinked package is copied right before its install scripts run, so
+they don't change its files in the store; a cloned one needs no copy.
+
+When installed with `auto` on Linux or with `hardlink`, files in
+`node_modules` are hardlinks into the global store, so editing one in
+place changes it for every project on the machine. To edit
+`node_modules` in place (debugging, patching), set
+[`store-linker=copy`](/client/configuring#--store-linkerauto--hardlink--clone--copy--unpack)
+and reinstall from scratch (remove `node_modules` first), so its files
+are copies. If files were already edited through a hardlink, run
+`nrz cache verify --all` to drop the changed entries, then remove
+`node_modules` and reinstall in every project that linked them: their
+files are still the edited ones. A clone shares storage with the
+global store only until it is written to, so editing a cloned
+`node_modules` in place is safe. `store-linker=unpack` (or
+`NRZ_STORE_LINKER=unpack`) skips the global store entirely.
+
+The global store is a cache: deleting it, whole or in part, never
+breaks an installed project. `delete`, `delete-before` and `clean`
+also remove the global store entries of the tarballs they remove,
+`delete-all` removes the whole global store, and `prune-store` removes
+entries no project links to and no install copied or cloned from
+lately. Nothing links to the global store on macOS, where packages are
+cloned, so there `prune-store` (or `delete-before`) is what keeps it
+from growing.
+
+## Examples
+
+Show cache metadata for a given registry URL:
+
+<Code
+  code="$ nrz cache ls https://registry.npmjs.org/typescript"
+  title="Terminal"
+  lang="bash"
+/>
+
+Add a given package specifier to the cache by fetching its resolved
+value:
+
+<Code
+  code="$ nrz cache add eslint@latest"
+  title="Terminal"
+  lang="bash"
+/>
+
+Print the cache metadata to stderr, and write the tarball on stdout,
+redirecting to a file:
+
+<Code
+  code="$ nrz cache info https://registry.npmjs.org/eslint/-/eslint-9.25.1.tgz > eslint.tgz"
+  title="Terminal"
+  lang="bash"
+/>
+
+Delete all entries created before Jan 1, 2025:
+
+<Code
+  code="$ nrz cache delete-before 2025-01-01"
+  title="Terminal"
+  lang="bash"
+/>
+
+Check every global store entry:
+
+<Code code="$ nrz cache verify --all" title="Terminal" lang="bash" />

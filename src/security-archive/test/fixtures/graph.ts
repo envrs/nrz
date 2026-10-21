@@ -1,0 +1,154 @@
+import { joinDepIDTuple } from '@nrz/dep-id'
+import { defaultRegistryName, getOptions, Spec } from '@nrz/spec'
+import type {
+  GraphLike,
+  NodeLike,
+  DependencyTypeShort,
+} from '@nrz/types'
+import type { SpecLike } from '@nrz/spec/browser'
+
+export const specOptions = getOptions({
+  registries: {
+    // the `npm` alias is no longer a built-in default; configure it so
+    // bare specs resolve to the npm registry (and register as `npm`
+    // ecosystem packages for the security API)
+    npm: 'https://registry.npmjs.org/',
+    custom: 'http://example.com',
+  },
+})
+
+export const mirrorSpecOptions = getOptions({
+  registries: {
+    npm: 'https://registry.nrz.io/acct/npm/',
+    custom: 'http://example.com',
+  },
+})
+
+const projectRoot = '.'
+export const newGraph = (rootName: string): GraphLike => {
+  const graph = {} as GraphLike
+  // Initialize nodesByName before calling addNode
+  graph.nodesByName = new Map()
+  graph.nodes = new Map()
+  graph.edges = new Set()
+
+  const addNode = newNode(graph)
+  const mainImporter = addNode(rootName)
+  mainImporter.id = joinDepIDTuple(['file', '.'])
+  mainImporter.mainImporter = true
+  mainImporter.importer = true
+  mainImporter.graph = graph
+
+  // Initialize empty workspaces Map for consistency with NodeLike interface
+  mainImporter.workspaces = new Map()
+
+  graph.importers = new Set([mainImporter])
+  graph.mainImporter = mainImporter
+  graph.nodes.set(mainImporter.id, mainImporter)
+
+  return graph
+}
+export const newNode =
+  (graph: GraphLike, options = specOptions) =>
+  (name: string, version = '1.0.0', registry?: string): NodeLike => {
+    const node: NodeLike = {
+      projectRoot,
+      edgesIn: new Set(),
+      edgesOut: new Map(),
+      importer: false,
+      mainImporter: false,
+      graph,
+      id: joinDepIDTuple([
+        'registry',
+        registry ?? defaultRegistryName,
+        `${name}@${version}`,
+      ]),
+      name,
+      version,
+      location:
+        'node_modules/.nrz/~${registry ?? defaultRegistryName}~${name}@${version}/node_modules/${name}',
+      manifest: { name, version },
+      rawManifest: undefined,
+      integrity: 'sha512-deadbeef',
+      resolved: undefined,
+      dev: false,
+      optional: false,
+      confused: false,
+      workspaces: undefined,
+      options,
+      setResolved() {},
+      maybeSetConfusedManifest() {},
+      setConfusedManifest() {},
+      toJSON() {
+        return {
+          id: this.id,
+          name: this.name,
+          version: this.version,
+          location: this.location,
+          importer: this.importer,
+          manifest: this.manifest,
+          rawManifest: this.rawManifest,
+          projectRoot: this.projectRoot,
+          integrity: this.integrity,
+          resolved: this.resolved,
+          dev: this.dev,
+          optional: this.optional,
+          confused: false,
+        }
+      },
+    }
+
+    // Update nodesByName when creating a new node
+    const existingNodes =
+      graph.nodesByName.get(name) ?? new Set<NodeLike>()
+    existingNodes.add(node)
+    graph.nodesByName.set(name, existingNodes)
+
+    return node
+  }
+
+const newEdge = (
+  from: NodeLike,
+  spec: SpecLike<Spec>,
+  type: DependencyTypeShort,
+  to?: NodeLike,
+) => {
+  const edge = { name: spec.name, from, to, spec, type }
+  from.edgesOut.set(spec.name, edge)
+  if (to) {
+    to.edgesIn.add(edge)
+  }
+  from.graph.edges.add(edge)
+}
+
+export const getSimpleReportGraph = (
+  options = specOptions,
+): GraphLike => {
+  const graph = newGraph('my-project')
+  const addNode = newNode(graph, options)
+  const foo = addNode('@ruyadorno/foo')
+  const englishDays = addNode('english-days')
+  const customRegistry = addNode('registry', '1.0.1', 'custom')
+  graph.nodes.set(foo.id, foo)
+  graph.nodes.set(englishDays.id, englishDays)
+  graph.nodes.set(customRegistry.id, customRegistry)
+  newEdge(
+    graph.mainImporter,
+    Spec.parse('@ruyadorno/foo', '^1.0.0', options),
+    'prod',
+    foo,
+  )
+  newEdge(
+    graph.mainImporter,
+    Spec.parse('english-days', '^1.0.0', options),
+    'dev',
+    englishDays,
+  )
+  newEdge(
+    graph.mainImporter,
+    Spec.parse('registry', 'custom:registry@^1.0.0', options),
+    'dev',
+    customRegistry,
+  )
+  return graph
+}

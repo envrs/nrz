@@ -1,5 +1,5 @@
-import { type Graph } from './graph.ts'
-import { type Node } from './node.ts'
+import type { Graph } from './graph.ts'
+import type { Node } from './node.ts'
 
 /**
  * Remove the affected optional nodes starting from a given optional node
@@ -20,7 +20,7 @@ export const removeOptionalSubgraph = (
 ) => {
   const removed = new Set<Node>()
   for (const node of findOptionalSubgraph(startingNode)) {
-    graph.removeNode(node)
+    graph.removeNode(node, undefined, true)
     removed.add(node)
   }
   return removed

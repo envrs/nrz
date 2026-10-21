@@ -1,0 +1,325 @@
+import { error } from '@nrz/error-cause'
+import t from 'tap'
+import type { LoadedConfig } from '../../src/config/index.ts'
+import type { InstallResult } from '../../src/commands/install.ts'
+import { isLazyView, loadLazyView } from '../../src/view.ts'
+
+const options = {}
+let log = ''
+t.afterEach(() => (log = ''))
+
+const Command = await t.mockImport<
+  typeof import('../../src/commands/update.ts')
+>('../../src/commands/update.ts', {
+  '@nrz/graph': {
+    async update() {
+      log += 'update\n'
+      return {
+        graph: {},
+      }
+    },
+  },
+})
+
+t.test('usage', t => {
+  t.matchSnapshot(Command.usage().usage(), 'usage')
+  t.end()
+})
+
+t.test('update with no arguments', async t => {
+  log = ''
+  await Command.command({
+    positionals: [],
+    values: {},
+    options,
+    explicit: {},
+    get: (_key: string) => undefined,
+  } as unknown as LoadedConfig)
+  t.matchSnapshot(log, 'should call update with expected options')
+})
+
+t.test('unknown spec prefix from package.json', async t => {
+  const { command } = await t.mockImport<
+    typeof import('../../src/commands/update.ts')
+  >('../../src/commands/update.ts', {
+    '@nrz/graph': {
+      async update() {
+        throw error('Protocol nope: is not defined', {
+          spec: 'bar@nope:bar@^2.x',
+          found: 'nope:',
+        })
+      },
+    },
+  })
+  await t.rejects(
+    command({
+      positionals: [],
+      values: {},
+      options,
+      explicit: {},
+      get: () => undefined,
+    } as unknown as LoadedConfig),
+    {
+      message: /^Unknown spec prefix "nope:"/,
+      cause: { code: 'ECONFIG' },
+    },
+  )
+})
+
+t.test('update with arguments throws error', async t => {
+  await t.rejects(
+    Command.command({
+      positionals: ['some-package'],
+      values: {},
+      options,
+      get: (_key: string) => undefined,
+    } as unknown as LoadedConfig),
+    {
+      message: 'Arguments are not yet supported for nrz update',
+      cause: { code: 'EUSAGE' },
+    },
+  )
+})
+
+t.test('update with multiple arguments throws error', async t => {
+  await t.rejects(
+    Command.command({
+      positionals: ['package-a', 'package-b'],
+      values: {},
+      options,
+      get: (_key: string) => undefined,
+    } as unknown as LoadedConfig),
+    {
+      message: 'Arguments are not yet supported for nrz update',
+      cause: { code: 'EUSAGE' },
+    },
+  )
+})
+
+t.test('views.json returns graph toJSON', t => {
+  const mockGraph = {
+    buildQueue: [],
+    graph: {
+      toJSON: () => ({ updated: true }),
+    },
+  } as unknown as InstallResult
+
+  t.strictSame(Command.views.json(mockGraph), {
+    graph: { updated: true },
+  })
+  t.end()
+})
+
+t.test('views.human uses InstallReporter', async t => {
+  t.ok(isLazyView(Command.views.human))
+  const human = await loadLazyView(Command.views.human)
+  t.equal(human.name, 'InstallReporter')
+})
+
+// Test JSON view with buildQueue
+t.strictSame(
+  Command.views.json({
+    buildQueue: ['~~foo@1.0.0' as any, '~~bar@2.0.0' as any],
+    graph: {
+      toJSON: () => ({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    } as any,
+  }),
+  {
+    buildQueue: ['~~foo@1.0.0', '~~bar@2.0.0'],
+    message:
+      '2 packages that will need to be built, run "nrz build" to complete the update.',
+    graph: { lockfileVersion: 1, options: {}, nodes: {}, edges: {} },
+  },
+  'json view with buildQueue should include buildQueue, message, and graph',
+)
+
+t.test('persists spec config after update', async t => {
+  const plan = {
+    which: 'project',
+    values: { registries: { loc: 'http://loc/' } },
+  }
+  const setup = async (opts: {
+    plan?: typeof plan
+    conflict?: boolean
+    fail?: boolean
+  }) => {
+    let log = ''
+    const Command = await t.mockImport<
+      typeof import('../../src/commands/update.ts')
+    >('../../src/commands/update.ts', {
+      '@nrz/graph': {
+        async update() {
+          log += 'update\n'
+          if (opts.fail) throw new Error('update failed')
+          return { graph: { toJSON: () => ({}) } }
+        },
+      },
+      '../../src/persist-spec-config.ts': {
+        planSpecConfigPersist: () => {
+          log += 'plan\n'
+          if (opts.conflict) throw new Error('conflict')
+          return opts.plan
+        },
+      },
+    })
+    const conf = {
+      positionals: [],
+      values: {},
+      options: {},
+      explicit: {},
+      get: () => undefined,
+      addConfigToFile: async (which: string, values: unknown) => {
+        log += `write ${which} ${JSON.stringify(values)}\n`
+      },
+    } as unknown as LoadedConfig
+    return {
+      Command,
+      run: () => Command.command(conf),
+      log: () => log,
+    }
+  }
+
+  t.test('writes after update', async t => {
+    const { Command, run, log } = await setup({ plan })
+    const res = await run()
+    t.equal(
+      log(),
+      'plan\nupdate\nwrite project {"registries":{"loc":"http://loc/"}}\n',
+    )
+    t.strictSame(res.persistedConfig, plan)
+    t.match(Command.views.json(res), { persistedConfig: plan })
+  })
+  t.test('no plan, no write', async t => {
+    const { run, log } = await setup({})
+    t.equal((await run()).persistedConfig, undefined)
+    t.equal(log(), 'plan\nupdate\n')
+  })
+  t.test('failed update, no write', async t => {
+    const { run, log } = await setup({ plan, fail: true })
+    await t.rejects(run(), { message: 'update failed' })
+    t.equal(log(), 'plan\nupdate\n')
+  })
+  t.test('conflict, no update', async t => {
+    const { run, log } = await setup({ plan, conflict: true })
+    await t.rejects(run(), { message: 'conflict' })
+    t.equal(log(), 'plan\n')
+  })
+  t.end()
+})
+
+t.test('allow-skills', async t => {
+  const skills = {
+    linked: [{ mount: '.agents/skills/a' }],
+    unchanged: [],
+    removed: ['.agents/skills/x'],
+    conflicts: ['.agents/skills/b'],
+    dirs: ['.agents/skills'],
+    skipped: ['.claude/skills (not a directory)'],
+  }
+  let seen: unknown
+  const Command = await t.mockImport<
+    typeof import('../../src/commands/update.ts')
+  >('../../src/commands/update.ts', {
+    '@nrz/graph': {
+      async update(opts: {
+        allowSkills?: string
+        skillsDirs?: string[]
+      }) {
+        seen = [opts.allowSkills, opts.skillsDirs]
+        return {
+          graph: { toJSON: () => ({}) },
+          ...(opts.allowSkills ? { skills } : null),
+        }
+      },
+    },
+  })
+  const run = (value?: string, dirs?: string[]) =>
+    Command.command({
+      positionals: [],
+      values: {},
+      options: {},
+      explicit: {},
+      get: (k: string) =>
+        k === 'allow-skills' ? value
+        : k === 'skills-dir' ? dirs
+        : undefined,
+    } as unknown as LoadedConfig)
+
+  const res = await run('#foo', [])
+  t.strictSame(seen, ['#foo', []], 'passed to update')
+  t.equal(res.skills, skills, 'returned')
+  t.notOk('skills' in (await run()), 'no skills key when unset')
+  t.strictSame(Command.views.json(res), {
+    graph: {},
+    skills: {
+      linked: ['.agents/skills/a'],
+      removed: ['.agents/skills/x'],
+      conflicts: ['.agents/skills/b'],
+      dirs: ['.agents/skills'],
+      skipped: ['.claude/skills (not a directory)'],
+    },
+  })
+  const allowSkills = { query: '#foo' }
+  t.match(Command.views.json({ ...res, allowSkills }), {
+    allowSkills,
+  })
+})
+
+t.test('saves --allow-skills after update', async t => {
+  const setup = async (o: { stored?: string; fail?: boolean }) => {
+    const log: string[] = []
+    const Command = await t.mockImport<
+      typeof import('../../src/commands/update.ts')
+    >('../../src/commands/update.ts', {
+      '@nrz/graph': {
+        async update() {
+          log.push('update')
+          if (o.fail) throw new Error('update failed')
+          return { graph: {} }
+        },
+      },
+    })
+    const conf = {
+      positionals: [],
+      values: {},
+      options: {},
+      explicit: { 'allow-skills': '#foo' },
+      layers:
+        o.stored ? { project: { 'allow-skills': o.stored } } : {},
+      get: (k: string) => (k === 'allow-skills' ? '#foo' : undefined),
+      addConfigToFile: async (which: string, values: unknown) => {
+        log.push(`write ${which} ${JSON.stringify(values)}`)
+      },
+    } as unknown as LoadedConfig
+    return { run: () => Command.command(conf), log }
+  }
+
+  t.test('saved', async t => {
+    const { run, log } = await setup({})
+    t.strictSame((await run()).allowSkills, { query: '#foo' })
+    t.strictSame(log, [
+      'update',
+      'write project {"allow-skills":"#foo"}',
+    ])
+  })
+
+  t.test('another stored: kept', async t => {
+    const { run, log } = await setup({ stored: '#bar' })
+    t.strictSame((await run()).allowSkills, {
+      query: '#foo',
+      stored: { query: '#bar', which: 'project' },
+    })
+    t.strictSame(log, ['update'])
+  })
+
+  t.test('failed update: no write', async t => {
+    const { run, log } = await setup({ fail: true })
+    await t.rejects(run(), { message: 'update failed' })
+    t.strictSame(log, ['update'])
+  })
+})

@@ -1,0 +1,264 @@
+---
+title: CI & automation
+description:
+  Install and publish from CI, Vercel and coding-agent sandboxes with
+  a nrz.io service token.
+sidebar:
+  label: CI & Automation
+  order: 7
+---
+
+Store your token as a secret named `NRZ_TOKEN` and expose it to the
+job as an env var. The config files in these guides reference it
+(`${NRZ_TOKEN}`, or `$NRZ_TOKEN` in `bunfig.toml`), so nothing else
+changes between your laptop and CI — except pnpm, see
+[below](#pnpm-needs-a-different-approach).
+
+<Aside type="caution" title="If CI publishes, the token must be a service token">
+
+Personal tokens require an interactive browser confirmation on every
+publish and will fail with `EOTP`. See
+[Publishing from CI](#publishing-from-ci).
+
+</Aside>
+
+## Who reads what
+
+Only the nrz CLI reads `NRZ_TOKEN` itself (with `NRZ_REGISTRY`, or
+per-registry `NRZ_TOKEN_*`; see
+[Authentication](/client/auth#ci-and-other-headless-environments)).
+Other tools see the secret only through an auth line that references
+it (pnpm: `~/.npmrc` or a `pnpm_config_…` env var), so setting the
+secret alone sends no credentials.
+
+| Tool          | Auth from                                | Token reference in committed project file                 |
+| ------------- | ---------------------------------------- | --------------------------------------------------------- |
+| nrz           | keychain or env vars                     | n/a, `.npmrc` not read                                    |
+| npm, npx      | `.npmrc`                                 | expanded                                                  |
+| pnpm          | `~/.npmrc`, or `pnpm_config_…` env var   | **ignored** ([11.5.3+](#pnpm-needs-a-different-approach)) |
+| yarn          | `.yarnrc.yml` (Classic: `.npmrc`)        | expanded                                                  |
+| bun           | `bunfig.toml` (`$NRZ_TOKEN`) or `.npmrc` | expanded                                                  |
+| deno          | `.npmrc`                                 | expanded                                                  |
+| Vercel builds | `.npmrc` written from `NPM_RC`           | see [Vercel](#vercel)                                     |
+
+## GitHub Actions
+
+```yaml
+name: ci
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NRZ_TOKEN: ${{ secrets.NRZ_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+```
+
+Commit the `.npmrc` / `bunfig.toml` / `.yarnrc.yml` from the relevant
+guide. Because they reference `${NRZ_TOKEN}` rather than a literal
+token, they are safe in version control and need no rewriting step in
+CI (pnpm: see [below](#pnpm-needs-a-different-approach)).
+
+## Per package manager
+
+```sh
+# npm — commit .npmrc with ${NRZ_TOKEN}
+npm ci
+
+# pnpm — pin to 11.26.0, and pass the token as a config env var (see below)
+env "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN" \
+  pnpm install --frozen-lockfile
+
+# yarn — commit .yarnrc.yml with ${NRZ_TOKEN}
+yarn install --immutable
+
+# bun — commit bunfig.toml with $NRZ_TOKEN
+bun install --frozen-lockfile
+
+# deno — commit .npmrc with ${NRZ_TOKEN}
+deno ci
+
+# nrz — one NRZ_TOKEN_<registry> per registry
+NRZ_TOKEN_https_registry_nrz_io_acme_npm=$NRZ_TOKEN \
+NRZ_TOKEN_https_registry_nrz_io_acme_main=$NRZ_TOKEN \
+nrz install --frozen-lockfile
+```
+
+### Generating `.npmrc` at runtime instead
+
+If you would rather not commit the file, write it in a step:
+
+```yaml
+- run: |
+    cat > .npmrc <<'EOF'
+    registry=https://registry.nrz.io/acme/npm/
+    @acme:registry=https://registry.nrz.io/acme/main/
+    //registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
+    //registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+    EOF
+```
+
+Keep the quotes on `<<'EOF'` so the shell leaves `${NRZ_TOKEN}` intact
+for the package manager to expand — never write the literal token into
+a project `.npmrc`. pnpm ignores `${NRZ_TOKEN}` here too; see below.
+
+### pnpm needs a different approach
+
+pnpm ignores `${NRZ_TOKEN}` in a project `.npmrc` on purpose, so the
+committed-file pattern above does not carry credentials for it. Commit
+only the routing, and supply the token as a config environment
+variable:
+
+```yaml
+- run:
+    env
+    "pnpm_config_//registry.nrz.io/acme/npm/:_authToken=$NRZ_TOKEN"
+    pnpm install --frozen-lockfile
+```
+
+Use `env` rather than `export`: the variable name contains `/`, `:`
+and `.`, which the shell will not accept in an assignment. This needs
+**pnpm 11.6.0 or newer**; see
+[the pnpm guide](/registry/publishing/pnpm) for the full version
+matrix.
+
+Or write the auth lines to the user-level `~/.npmrc`, where pnpm still
+expands `${NRZ_TOKEN}`:
+
+```yaml
+- run: |
+    cat >> ~/.npmrc <<'EOF'
+    //registry.nrz.io/acme/npm/:_authToken=${NRZ_TOKEN}
+    //registry.nrz.io/acme/main/:_authToken=${NRZ_TOKEN}
+    EOF
+- run: pnpm install --frozen-lockfile
+```
+
+`PNPM_CONFIG_NPMRC_AUTH_FILE=<path>` (env form of `--npmrc-auth-file`)
+does the same with an auth file outside the repo (verified on pnpm
+11.26 and 12).
+
+Pin pnpm by exact version in `packageManager`, not by range. Corepack
+resolves a range against its local cache first, so `pnpm@11` can
+produce different versions on different runners.
+
+### Two notes on the other tools
+
+- **deno** — `deno ci` (Deno 2.8+) is the equivalent of `npm ci`: it
+  installs strictly from `deno.lock` and fails rather than updating
+  it.
+- **deno** — Deno's default 24-hour dependency-age gate will block a
+  package you published minutes earlier. If CI installs your own fresh
+  releases, configure `minimumDependencyAge` as shown in
+  [the deno guide](/registry/publishing/deno).
+
+## Vercel
+
+Vercel doesn't read `NRZ_TOKEN`. Builds install with an `.npmrc`
+Vercel writes from the `NPM_RC` env var. Set `NPM_RC` to your routing
+and auth lines with a `package:read` service token, and keep a
+`registry.npmjs.org` line — Vercel installs its runtimes from the
+public registry. For multi-line values, set it with the Vercel CLI to
+keep the line breaks. Use `NPM_RC`, not `NPM_TOKEN` (meant for private
+packages on npm's own registry; `NPM_RC` wins if both are set). See
+Vercel's
+[private dependencies guide](https://vercel.com/kb/guide/using-private-dependencies-with-vercel).
+
+## Coding-agent sandboxes
+
+Each cloud agent or dev environment (Cursor, Claude Code, Devin,
+Codespaces, …) needs the token set up separately — treat each like a
+CI runner:
+
+- Give it its own `package:read` service token (owners and admins
+  create them), so you can revoke one without breaking the others.
+- Store the token in that environment's secrets (these guides call it
+  `NRZ_TOKEN`).
+- Commit the routing: default `registry` → the `npm` mirror, `@acme`
+  scope → `main` (`.npmrc` / `.yarnrc.yml` / `bunfig.toml` /
+  `nrz.json`).
+- Provide auth for both registry URLs: committed `${NRZ_TOKEN}` lines
+  (npm, yarn, deno; `$NRZ_TOKEN` in `bunfig.toml`), a setup step
+  writing `~/.npmrc` (pnpm,
+  [above](#pnpm-needs-a-different-approach)), or, for nrz, the env
+  vars in
+  [Authentication](/client/auth#ci-and-other-headless-environments).
+
+## Publishing from CI
+
+**Use a service token.** When you create the token at
+[nrz.io → Tokens](https://www.nrz.io), choose _This is a service
+token_ rather than _This token is for myself_, and give it
+`package:read` and `package:write`.
+
+That choice is what makes unattended publishing work. A **personal**
+token answers every publish with a one-time-password challenge and
+fails in CI with:
+
+```
+npm error code EOTP
+npm error This operation requires a one-time password.
+```
+
+A **service** token has no such challenge — verified with npm, pnpm,
+yarn, bun and nrz, all publishing to `main` with no prompt.
+
+```yaml
+- run: npm publish
+  env:
+    NRZ_TOKEN: ${{ secrets.NRZ_TOKEN_CI }}
+```
+
+Nothing else about the config changes; a service token is a drop-in
+replacement in every snippet in these guides. Store it as a separate
+secret from your personal token so it is obvious which one CI uses.
+
+Three per-tool notes:
+
+- **yarn** needs `yarn install` before `yarn npm publish`, or it
+  aborts with
+  `This package doesn't seem to be present in your lockfile`.
+- **pnpm** needs `--no-git-checks` in CI, since the checkout is often
+  not on the publish branch.
+- **deno** publishes in two steps — `deno pack` then
+  `npm publish <tarball>`. Set `publish.include` in `deno.json` first,
+  or `deno pack` may bundle your `.npmrc` into the tarball. See
+  [the deno guide](/registry/publishing/deno).
+
+If you are stuck with a personal token, `nrz publish` can take a
+pre-obtained code:
+
+```sh
+NRZ_OTP=<code> nrz publish
+```
+
+## Read-only installs of public packages
+
+A job that installs only public packages from `main` needs no secret
+at all — just the registry URL:
+
+```ini
+@acme:registry=https://registry.nrz.io/acme/main/
+```
+
+The npm mirror always requires a token, so this only helps if every
+one of your dependencies is a public package from `main`.
+
+## Checklist
+
+- `NRZ_TOKEN` is set as a masked secret, not a plaintext variable.
+- The committed config uses `${NRZ_TOKEN}` (or `$NRZ_TOKEN` for
+  `bunfig.toml`; pnpm: routing only) — never a literal token.
+- The secret is really set in the job: npm, bun and deno send an unset
+  token variable literally, which looks like a bad token.
+- After switching registries: npm and pnpm lockfiles kept;
+  `nrz-lock.json`, `yarn.lock`, `bun.lock` and `deno.lock` regenerated
+  (see each guide).
+- Installs use the frozen-lockfile flag for the package manager.

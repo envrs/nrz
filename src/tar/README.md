@@ -2,28 +2,30 @@
 
 # @nrz/tar
 
-A library for unpacking JavaScript package tarballs (gzip-compressed or raw) into a specified folder.
+A library for unpacking JavaScript package tarballs (gzip-compressed
+or raw) into a specified folder.
 
-**[Usage](#usage)**
-·
+**[Usage](#usage)** · **[Global store](#global-store)** ·
 **[Caveats](#caveats)**
 
 ## Overview
 
-If you are unpacking anything other than npm packages, in precisely the way that [nrz](https://khulnasoft.com) does, then this is
-probably not what you're looking for.
+If you are unpacking anything other than npm packages, in precisely
+the way that [nrz](https://nrz.khulnasoft.com) does, then this is probably not
+what you're looking for.
 
-For a very complete and battle-tested generic tar implementation in JavaScript, see [node-tar](http://npm.im/tar).
+For a very complete and battle-tested generic tar implementation in
+JavaScript, see [node-tar](http://npm.im/tar).
 
 ## Usage
 
 ### unpack(tarData, targetFolder)
 
 Pass your gzip-compressed or raw uncompressed JavaScript package
-tarball in a Buffer (or Uint8Array, or ArrayBuffer slice) into
-the function, along with the folder you want to drop it in.
+tarball in a Buffer (or Uint8Array, or ArrayBuffer slice) into the
+function, along with the folder you want to drop it in.
 
-It will unpack as fast as possible, using synchronous I/O.
+It will unpack as fast as possible.
 
 ```js
 import { unpack } from '@nrz/tar'
@@ -36,59 +38,173 @@ const unzipped = gunzipSync(gzipped)
 unpack(unzipped, 'node_modules/target')
 ```
 
+### unpackSync(tarData, targetFolder)
+
+Same as `unpack`, but blocking. Faster: the async writers pay a libuv
+round trip per file, which costs more than the IO itself.
+
+### unpackFileSync(file, targetFolder, offset = 0)
+
+Read the tarball from a file on disk, skipping `offset` leading bytes,
+and unpack it synchronously. The offset lets a tarball be extracted
+straight out of a cache entry whose file starts with a header block.
+
 ### `class Pool`
 
-Create a pool of worker threads which will service unpack
-requests in parallel.
+The interface the nrz CLI extracts through. All methods are `async`
+for the caller's convenience; the work itself is synchronous and runs
+on the main thread.
 
-New requests that get added will be assigned to workers as those
-workers become available. When a worker completes its task, and
-there are no more tasks to assign, it is terminated. If not
-enough workers are available to service requests, then new ones
-will be spawned.
-
-#### `pool.jobs`
-
-The number of worker threads that will be created.
-
-#### `pool.workers`
-
-Set of currently active worker threads.
-
-#### `pool.queue`
-
-Queue of requests awaiting an available worker.
-
-#### `pool.pending`
-
-Unpack requests that have been assigned to a worker, but not yet
-completed.
+The pool holds no queue and imposes no limit -- callers are expected
+to cap their own concurrency. (`@nrz/graph`'s reify does.)
 
 #### `pool.unpack(tarData: Buffer, target: string) => Promise<void>`
 
-Unpack the supplied Buffer of data into the target folder,
-using synchronous I/O in a worker thread.
+Unpack the supplied Buffer of data into the target folder.
 
-Promise resolves when this unpack request has been completed.
+#### `pool.unpackFile(file: string, target: string, offset = 0) => Promise<void>`
+
+Unpack a tarball read from `file`, skipping `offset` leading bytes.
+
+#### `pool.linkFromStore(storeEntry, target, opts?) => Promise<{ how, index } | false>`
+
+#### `pool.unpackToStore(tarData, dir) => Promise<{ index }>`
+
+See [Global store](#global-store).
+
+## Global store
+
+A global store entry is a tarball exploded once into a directory, with
+a sidecar index at `<entry>.json` (`StoreIndex`). Packages are then
+materialized by hardlinking files, or cloning the directory, instead
+of unpacking the tarball again. Publishing entries atomically
+(sidecar, then rename the dir into place) is up to the caller.
+
+The nrz CLI keeps its global store under `<cache>/store/v1`, filled by
+a background process, and installs from it with the `store-linker`
+config (`auto` by default, `hardlink`, `clone`, `copy`; `unpack` skips
+it). `auto` links on Linux, clones on macOS where
+[`cloneAvailable()`](#cloneavailable) is true, and means `unpack`
+everywhere else.
+
+### unpackToStoreSync(tarData, dir)
+
+Explode a gzipped or raw tarball into `dir` (must not exist) and
+return `{ index }`. Same parsing, path safety and modes as
+`unpackSync`; package.json `bin` targets also get every exec bit, so
+nothing has to chmod them later. Throws, writing nothing, without a
+valid package.json.
+
+The index has files (`[path, size, exec]`, sorted), every directory
+(shortest first), `scripts` (install scripts or a root `binding.gyp`),
+normalized `bins`, `name`, `version` and `manifest` (package.json as
+compact JSON text, if valid; lets reify skip reading it back).
+
+### linkFromStore(storeEntry, target, { copy, clone })
+
+Hardlink every file of a store entry into a sibling temp dir
+(package.json last), then rename it to `target`. Returns
+`{ how, index }`: `how` is `'link'`, `'clone'` when the directory was
+cloned, or `'copy'` when files were copied instead (see below).
+Returns `false`, creating nothing, if the sidecar is missing or
+invalid, the entry is not a directory, the target's parent is a
+symlink, or a clone fails (see below). An entry with a missing file is
+removed and `false` returned. Two index paths that collide on a
+case-insensitive target (`EEXIST`) also return `false`.
+
+`EXDEV`, `EPERM`, `EACCES` and `ENOTSUP` switch the process to copying
+(read + write into a fresh file); `ENOENT` while both the source and
+the target's parent exist (overlayfs cross-layer links) does the same.
+`EMLINK` copies that file only. Other link errors throw. Every file is
+copied with `copy: true`, or when package.json is copied after another
+file was linked: a private package.json means nothing is shared. A
+copy, or a link of a package with install scripts (reify copies it
+before they run), touches the entry's copied marker
+(`<entry>.copied`): its mtime is the last time one did.
+
+With `clone: true` the whole entry directory is cloned copy-on-write
+into the temp dir in one `clonefile(2)` call instead (see
+[`cloneDir`](#clonefile)). A clone is checked against the index (the
+names in every directory, since a clone holds whatever the entry
+holds), and, sharing no inode with the store, marks the entry copied.
+Nothing written into a clone reaches the store, so `copy` changes
+nothing about it, and install scripts need no copy before they run. A
+failed clone is a store miss, so the caller unpacks: on APFS,
+hardlinking file by file is slower than that. Whatever it left in the
+temp dir is removed. After `ENOTSUP`, `EXDEV`, `EPERM` or `EACCES`,
+every later clone is a miss without trying, for the rest of the
+process.
+
+`NRZ_STORE_VERIFY=1` checks the linked package.json size against the
+index and removes the entry on a mismatch (debugging aid).
+
+### clonefile
+
+`cloneAvailable()` is true on macOS with a Node whose `node:ffi` (26.1
+and later) loads: the permission model denies it without
+`--allow-ffi`. That is what `cloneDir(src, dst)` calls `clonefile(2)`
+through: it clones the directory `src` to `dst`, which must not exist,
+and returns `true` or the errno code of the failure (`ENOTSUP`
+wherever it is unavailable: another platform, no usable `node:ffi`, a
+filesystem without clones, or an ffi call that throws, after which it
+stays unavailable). `node:ffi` is loaded on the first call of either,
+once, and its experimental warning is swallowed.
+
+### readStoreIndex(storeEntry)
+
+The sidecar index, or `undefined` if missing or invalid.
+
+### storeIndexPath(storeEntry)
+
+Sidecar path: `<storeEntry>.json`.
+
+### Maintenance
+
+- `storeEntryNames(root)`: integrity hex names of the entries under a
+  store root (entry dir, sidecar or copied marker).
+- `verifyStoreEntry(storeEntry, tarData)`: compare an entry with its
+  tarball (sidecar, file list, bytes). Returns why it differs, or
+  `undefined`.
+- `storeEntryLinked(storeEntry, index?)`: true if any file has another
+  hardlink, i.e. some `node_modules` uses it.
+- `storeEntryCopied(storeEntry, index?)`: true if the entry has a
+  copied marker or install scripts (copied before they run), i.e.
+  nlink cannot show use.
+- `storeCopiedPath(storeEntry)`, `markStoreEntryCopied(storeEntry)`:
+  the copied marker, and its touch (created the first time).
+- `storeEntryLastCopied(storeEntry)`: the copied marker's mtime in ms,
+  else `storeEntryTime(storeEntry)`.
+- `storeEntryTime(storeEntry)`: sidecar mtime in ms (dir mtime without
+  one, else 0).
+- `removeStoreEntry(storeEntry)`: remove the dir, then the sidecar and
+  copied marker.
 
 ## Caveats
 
-As stated above, **this is not a general purpose tar
-implementation**. It does not handle symbolic links at all (those
-aren't allowed in JavaScript packages). It does not respect
-uid/gid ownership flags. All files are with a mode of `0o644` (or
-`0o666` on Windows - technically it's `0o666` xor'ed with the
-system umask, so that'll often be `0o664` on linux systems). All
-directories are created with a mode of `0o755` by default (with
-the same windows/umask caveats as files, so maybe that's `0o775`
-or some such.) All ctime/mtime/atime/birthtime values will just
-be left as the current time.
+As stated above, **this is not a general purpose tar implementation**.
+It does not handle symbolic links at all (those aren't allowed in
+JavaScript packages). It does not respect uid/gid ownership flags. All
+files are with a mode of `0o644` (or `0o666` on Windows - technically
+it's `0o666` xor'ed with the system umask, so that'll often be `0o664`
+on linux systems). All directories are created with a mode of `0o755`
+by default (with the same windows/umask caveats as files, so maybe
+that's `0o775` or some such.) All ctime/mtime/atime/birthtime values
+will just be left as the current time.
 
-It does not do any of the binary linking or other stuff that a
-package manager will need to do. It _just_ does the unpack, as
-ruthlessly fast as possible, and that's all.
+Gzip-compressed tarballs are inflated with a size bound before any tar
+structure checks run. The cap is the smaller of 2 GiB and 1000 times
+the compressed size (the same 1000:1 ratio node-tar and npm use).
+Exceeding it fails with `tarball exceeds maximum unpacked size` rather
+than allocating the decompressed buffer. Raise the ceiling with
+`NRZ_TAR_MAX_UNPACKED_BYTES` if a legitimate package is larger than 2
+GiB unpacked.
 
-Synchronous IO is used because that's faster and requires less
-CPU utilization. The `Pool` class manages multiple worker threads
-doing this work, so faster sync IO for the whole thing is much
-more optimal.
+It does not do any of the binary linking or other stuff that a package
+manager will need to do. It _just_ does the unpack, as ruthlessly fast
+as possible, and that's all.
+
+Synchronous IO is used because it is faster and costs less CPU than
+the async writers, which pay a libuv round trip per file. The cost is
+that extraction blocks the event loop while it runs. Set
+`NRZ_TAR_SYNC=0` to make `Pool` use the async writers instead -- a
+kill switch, not a supported mode.

@@ -1,0 +1,1054 @@
+import { resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import t from 'tap'
+import { joinDepIDTuple, baseDepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import type { NodeLike } from '@nrz/types'
+import { SecurityArchive, usesNpmRegistry } from '../src/index.ts'
+import {
+  getSimpleReportGraph,
+  mirrorSpecOptions,
+  newGraph,
+  newNode,
+} from './fixtures/graph.ts'
+import { hangingFetch } from './fixtures/hanging-fetch.ts'
+import type { PackageReportData } from '../src/types.ts'
+
+const fooReport = {
+  id: '99923218962',
+  author: ['ruyadorno'],
+  size: 13003,
+  type: 'npm',
+  namespace: '@ruyadorno',
+  name: 'foo',
+  version: '1.0.0',
+  license: 'MIT',
+  licenseDetails: [],
+  score: {
+    license: 1,
+    maintenance: 0.84,
+    overall: 0.93,
+    quality: 0.83,
+    supplyChain: 0.99,
+    vulnerability: 1,
+  },
+  alerts: [],
+  batchIndex: 1,
+}
+
+const fooNewReport = {
+  id: '99923218963',
+  author: ['ruyadorno'],
+  size: 13013,
+  type: 'npm',
+  namespace: '@ruyadorno',
+  name: 'foo',
+  version: '1.0.1',
+  license: 'MIT',
+  licenseDetails: [],
+  score: {
+    license: 1,
+    maintenance: 0.84,
+    overall: 0.93,
+    quality: 0.83,
+    supplyChain: 0.99,
+    vulnerability: 1,
+  },
+  alerts: [],
+  batchIndex: 1,
+}
+
+const englishDaysReport = {
+  id: '15713076833',
+  author: ['wesleytodd'],
+  size: 1632,
+  type: 'npm',
+  name: 'english-days',
+  version: '1.0.0',
+  license: 'ISC',
+  licenseDetails: [],
+  score: {
+    license: 1,
+    maintenance: 0.75,
+    overall: 0.78,
+    quality: 0.55,
+    supplyChain: 0.6,
+    vulnerability: 1,
+  },
+  alerts: [
+    {
+      key: 'QG35N0uHm_B_BG4Bc_OlJW3rR2XiTPlFZMNZjm-G1Ufg',
+      type: 'unmaintained',
+      severity: 'low',
+      category: 'maintenance',
+      props: { lastPublish: '2016-02-17T02:52:33.918Z' },
+    },
+    {
+      key: 'Q2JOM20TNSY962_q6c1goNPMN46sXiFfk0X_8YrIplsU',
+      type: 'trivialPackage',
+      severity: 'middle',
+      category: 'supplyChainRisk',
+      props: { linesOfCode: 9 },
+    },
+    {
+      key: 'Q1hdrp66HKyFF0sBwU7tGypHUBcwpNViZKOQHEKyvIMo',
+      type: 'unpopularPackage',
+      severity: 'middle',
+      category: 'quality',
+    },
+  ],
+  batchIndex: 0,
+}
+
+t.test('map-like', async t => {
+  const archive = new SecurityArchive()
+  const id = joinDepIDTuple(['registry', 'npm', 'bar'])
+  const idWithExtra = joinDepIDTuple([
+    'registry',
+    'npm',
+    'bar',
+    'peer.0123456789abcdef',
+  ])
+  archive.set(idWithExtra, { name: 'bar' } as PackageReportData, {
+    noDisposeOnSet: true,
+  })
+  t.strictSame(archive.has(id), true)
+  t.strictSame(archive.has(idWithExtra), true)
+  t.strictSame(archive.get(id, { updateAgeOnGet: false }), {
+    name: 'bar',
+  })
+  t.strictSame(archive.get(idWithExtra), { name: 'bar' })
+  archive.delete(idWithExtra)
+  t.strictSame(archive.get(id), undefined)
+  t.strictSame(archive.has(idWithExtra), false)
+})
+
+const nodeWith = (id: DepID, options: SpecOptions = {}): NodeLike =>
+  ({
+    id,
+    options,
+  }) as NodeLike
+
+t.test('usesNpmRegistry', async t => {
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['git', 'github:user/repo', 'main'])),
+    ),
+    false,
+    'git DepID is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(nodeWith(joinDepIDTuple(['file', '.']))),
+    false,
+    'file DepID is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['workspace', 'packages/a'])),
+    ),
+    false,
+    'workspace DepID is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
+        registries: { npm: 'https://registry.npmjs.org/' },
+      }),
+    ),
+    true,
+    'npm alias pointing at registry.npmjs.org is eligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'unknown', 'foo@1.0.0']), {
+        registries: { npm: 'https://registry.npmjs.org/' },
+      }),
+    ),
+    false,
+    'unknown alias is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
+        registries: {
+          npm: 'https://registry.nrz.io/acct/npm/',
+        },
+      }),
+    ),
+    true,
+    'npm alias matching a configured mirror is eligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'custom', 'foo@1.0.0']), {
+        registries: {
+          npm: 'https://registry.npmjs.org/',
+          custom: 'http://example.com',
+        },
+      }),
+    ),
+    false,
+    'alias pointing at an unrelated URL is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(
+        joinDepIDTuple([
+          'registry',
+          'https://registry.npmjs.org/',
+          'foo@1.0.0',
+        ]),
+      ),
+    ),
+    true,
+    'URL-form DepID for registry.npmjs.org is eligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(
+        joinDepIDTuple([
+          'registry',
+          'https://registry.nrz.io/acct/npm/',
+          'foo@1.0.0',
+        ]),
+        {
+          registries: {
+            npm: 'https://registry.nrz.io/acct/npm/',
+          },
+        },
+      ),
+    ),
+    true,
+    'URL-form DepID matching registries.npm is eligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
+        registries: { npm: 'https://registry.nrz.io/acct/npm' },
+      }),
+    ),
+    true,
+    'registries.npm without a trailing slash still matches',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(
+        joinDepIDTuple([
+          'registry',
+          'https://registry.npmjs.org',
+          'foo@1.0.0',
+        ]),
+      ),
+    ),
+    true,
+    'URL-form DepID for registry.npmjs.org without trailing slash is eligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(
+        joinDepIDTuple([
+          'registry',
+          'https://registry.nrz.io/acct/npm/',
+          'foo@1.0.0',
+        ]),
+      ),
+    ),
+    false,
+    'URL-form mirror DepID with no registries.npm is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
+        registries: { npm: '' },
+      }),
+    ),
+    false,
+    'empty registries.npm URL is ineligible',
+  )
+  t.equal(
+    usesNpmRegistry(
+      nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {}),
+    ),
+    false,
+    'alias-form DepID with no registries config is ineligible',
+  )
+})
+
+t.test('SecurityArchive.refresh', async t => {
+  t.capture(console, 'warn').args
+  const dir = t.testdir()
+  const graph = getSimpleReportGraph()
+  const nodes = [...graph.nodes.values()]
+  t.intercept(global, 'fetch', {
+    value: async () =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+      }) as unknown as Response,
+  })
+  const path = resolve(dir, 'test.db')
+  const archive = await SecurityArchive.start({
+    nodes,
+    path,
+  })
+
+  t.strictSame(
+    archive.get(
+      joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    ),
+    fooReport,
+    'should have loaded API response into the in-memory archive',
+  )
+
+  const db = new DatabaseSync(path)
+  const dbRead = db.prepare('SELECT depID, report FROM cache')
+  const dbDump: Record<string, any> = {}
+  const readData = dbRead.all() as { depID: string; report: any }[]
+  for (const { depID, report } of readData) {
+    dbDump[depID] = JSON.parse(report)
+  }
+  t.matchSnapshot(
+    dbDump,
+    'should have persisted the API response into the database',
+  )
+
+  t.matchSnapshot(
+    archive.toJSON(),
+    'should output a JSON representation of the current archive',
+  )
+
+  // Updates the fetch mock to return a new version of foo
+  t.intercept(global, 'fetch', {
+    value: async () =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => `${JSON.stringify(fooNewReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+      }) as unknown as Response,
+  })
+
+  await archive.refresh({ nodes })
+
+  // here we test that retrieving data for foo still returns the old
+  // version, since that was loaded from the db instead and is still valid
+  t.strictSame(
+    archive.get(
+      joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    ),
+    fooReport,
+    'should have loaded API response from db',
+  )
+
+  // check pruning bad entries from the db
+  t.intercept(global, 'fetch', {
+    value: async () =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+      }) as unknown as Response,
+  })
+
+  const dbWrite = db.prepare(
+    'INSERT OR REPLACE INTO cache (depID, report, start, ttl) ' +
+      'VALUES (?, ?, ?, ?)',
+  )
+  dbWrite.run(
+    joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    'borked data',
+    Date.now(),
+    SecurityArchive.defaultTtl,
+  )
+
+  await archive.refresh({ nodes })
+
+  const readBorked = db.prepare('SELECT depID, report FROM cache')
+  const dumpBorked: Record<string, any> = {}
+  const borkedData = readBorked.all() as {
+    depID: string
+    report: any
+  }[]
+  for (const { depID, report } of borkedData) {
+    dumpBorked[depID] = JSON.parse(report)
+  }
+  t.matchSnapshot(
+    dumpBorked,
+    'should have removed the borked entry from the database',
+  )
+
+  db.close()
+
+  await t.test('extraneous package in API response', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'missing.db')
+
+    // fetch mock returns a response with an extraneous pkg report
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+${JSON.stringify({
+  id: '99923218964',
+  type: 'npm',
+  name: 'extraneous',
+  version: '1.0.0',
+})}
+`,
+        }) as unknown as Response,
+    })
+
+    const warn = t.capture(console, 'warn').args
+    const archive = new SecurityArchive({ path })
+    await archive.refresh({ nodes })
+
+    t.strictSame(
+      warn(),
+      [
+        [
+          'security-archive: failed to find node for extraneous@1.0.0 found in the response.',
+        ],
+      ],
+      'should warn about the extraneous package',
+    )
+  })
+
+  await t.test(
+    'unscored package and wrapper items in API response',
+    async t => {
+      const dir = t.testdir()
+      const path = resolve(dir, 'unscored.db')
+
+      // a package that was published too recently for socket.dev to
+      // have analyzed it comes back as an artifact with no score
+      const { score: _, ...unscoredEnglishDays } = englishDaysReport
+
+      t.intercept(global, 'fetch', {
+        value: async () =>
+          ({
+            ok: true,
+            status: 200,
+            text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(unscoredEnglishDays)}
+${JSON.stringify({
+  _type: 'purlError',
+  value: {
+    error: 'package_not_found',
+    inputPurl: 'pkg:npm/missing@1.0.0',
+    retryable: false,
+  },
+})}
+${JSON.stringify({
+  _type: 'summary',
+  value: {
+    purl_input: 3,
+    resolved: 2,
+    errors: {
+      purl_malformed: 0,
+      purl_ecosystem_not_enabled: 0,
+      package_not_found: 1,
+    },
+  },
+})}
+`,
+          }) as unknown as Response,
+      })
+
+      const warn = t.capture(console, 'warn').args
+      const archive = new SecurityArchive({ path })
+      await archive.refresh({ nodes })
+
+      t.ok(
+        archive.has(
+          joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+        ),
+        'should store the scored package',
+      )
+      t.notOk(
+        archive.has(
+          joinDepIDTuple(['registry', 'npm', 'english-days@1.0.0']),
+        ),
+        'should leave out the package that has no score yet',
+      )
+      t.equal(
+        archive.ok,
+        false,
+        'should flag the archive as incomplete',
+      )
+      t.strictSame(
+        warn(),
+        [],
+        'should not warn about the wrapper items',
+      )
+
+      // the unscored package must not have been persisted either
+      const db = new DatabaseSync(path)
+      const rows = db
+        .prepare('SELECT depID FROM cache ORDER BY depID')
+        .all() as { depID: string }[]
+      db.close()
+      t.strictSame(
+        rows.map(r => r.depID),
+        [joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0'])],
+        'should only persist the scored package',
+      )
+    },
+  )
+
+  await t.test('missing cache folder', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'missing-folder/new.db')
+
+    const archive = new SecurityArchive({ path })
+    await archive.refresh({ nodes })
+    t.ok('cache folder created')
+  })
+
+  await t.test('bad api response', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'missing.db')
+
+    // Updates the fetch mock to return a new version of foo
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: false,
+          status: 500,
+          text: async () => '',
+        }) as unknown as Response,
+    })
+
+    const archive = new SecurityArchive({ path, retries: 0 })
+    await t.rejects(
+      archive.refresh({ nodes }),
+      /Failed to fetch security data/,
+      'should throw an error when the API response is invalid',
+    )
+  })
+
+  await t.test('missing api response', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'missing.db')
+
+    // Updates the fetch mock to return a new version of foo
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: false,
+          status: 404,
+          text: async () => 'Missing API',
+        }) as unknown as Response,
+    })
+
+    const archive = new SecurityArchive({ path })
+    await t.rejects(
+      archive.refresh({ nodes }),
+      /Missing API/,
+      'should abort retries',
+    )
+  })
+
+  const fooId = joinDepIDTuple([
+    'registry',
+    'npm',
+    '@ruyadorno/foo@1.0.0',
+  ])
+  const timeoutMsg = (ms: number) =>
+    `security-archive: timed out after ${ms}ms fetching security data; 2 package(s) left unscanned (use :scanned to exclude them). Set NRZ_SECURITY_ARCHIVE_TIMEOUT=<ms> to wait longer.`
+  const countRows = (path: string) => {
+    const db = new DatabaseSync(path)
+    const { count } = db
+      .prepare('SELECT COUNT(*) AS count FROM cache')
+      .get() as { count: number }
+    db.close()
+    return count
+  }
+
+  await t.test('timeout on hanging api response', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'timeout.db')
+    const warn = t.capture(console, 'warn').args
+    t.intercept(global, 'fetch', { value: hangingFetch })
+
+    const archive = new SecurityArchive({ path, timeout: 50 })
+    await archive.refresh({ nodes })
+
+    t.strictSame(
+      warn(),
+      [[timeoutMsg(50)]],
+      'should warn once about the timeout',
+    )
+    t.equal(archive.ok, false, 'should not be ok')
+    t.equal(archive.timedOut, true, 'should flag timed out')
+    t.equal(archive.has(fooId), false, 'should leave pkg unscanned')
+    t.equal(countRows(path), 0, 'should not cache anything')
+
+    await t.test('recovers after timeout', async t => {
+      t.intercept(global, 'fetch', {
+        value: async () =>
+          ({
+            ok: true,
+            status: 200,
+            text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+          }) as unknown as Response,
+      })
+
+      await archive.refresh({ nodes })
+
+      t.strictSame(archive.get(fooId), fooReport, 'should load data')
+      t.equal(archive.ok, true, 'should be ok')
+      t.equal(archive.timedOut, false, 'should reset timed out')
+      t.strictSame(warn(), [], 'should not warn again')
+      t.equal(countRows(path), 2, 'should cache new data')
+    })
+  })
+
+  await t.test('timeout spans retries', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'timeout-retries.db')
+    const warn = t.capture(console, 'warn').args
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: false,
+          status: 500,
+          text: async () => '',
+        }) as unknown as Response,
+    })
+
+    const archive = new SecurityArchive({
+      path,
+      retries: 3,
+      timeout: 50,
+    })
+    const start = Date.now()
+    await archive.refresh({ nodes })
+    const elapsed = Date.now() - start
+
+    t.ok(elapsed < 1000, `should not wait on backoff (${elapsed}ms)`)
+    t.strictSame(warn(), [[timeoutMsg(50)]], 'should warn once')
+    t.equal(archive.timedOut, true, 'should flag timed out')
+  })
+
+  await t.test('NRZ_SECURITY_ARCHIVE_TIMEOUT env', async t => {
+    const setEnv = (value: string) =>
+      t.intercept(process, 'env', {
+        value: {
+          ...process.env,
+          NRZ_SECURITY_ARCHIVE_TIMEOUT: value,
+        },
+      })
+    const dir = t.testdir()
+    const warn = t.capture(console, 'warn').args
+    t.intercept(global, 'fetch', { value: hangingFetch })
+
+    setEnv('50')
+    await new SecurityArchive({
+      path: resolve(dir, 'env-only.db'),
+    }).refresh({ nodes })
+    t.strictSame(warn(), [[timeoutMsg(50)]], 'should use env value')
+
+    await new SecurityArchive({
+      path: resolve(dir, 'env-bad-option.db'),
+      timeout: 0,
+    }).refresh({ nodes })
+    t.strictSame(
+      warn(),
+      [[timeoutMsg(50)]],
+      'should ignore invalid option',
+    )
+
+    await new SecurityArchive({
+      path: resolve(dir, 'env-and-option.db'),
+      timeout: 60,
+    }).refresh({ nodes })
+    t.strictSame(
+      warn(),
+      [[timeoutMsg(60)]],
+      'option should win over env',
+    )
+
+    // 0 would abort right away if not ignored
+    setEnv('0')
+    t.intercept(global, 'fetch', {
+      value: async () => {
+        await new Promise(res => setTimeout(res, 20))
+        return {
+          ok: true,
+          status: 200,
+          text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+        } as unknown as Response
+      },
+    })
+    const archive = new SecurityArchive({
+      path: resolve(dir, 'env-invalid.db'),
+    })
+    await archive.refresh({ nodes })
+    t.equal(archive.timedOut, false, 'should ignore invalid env')
+    t.equal(archive.ok, true, 'should load data')
+    t.strictSame(warn(), [], 'should not warn')
+  })
+
+  await t.test('defaultTimeout', async t => {
+    t.equal(SecurityArchive.defaultTimeout, 30_000)
+  })
+
+  await t.test('stale-while-revalidate cache', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'stale-revalidate.db')
+    const graph = getSimpleReportGraph()
+    const nodes = [...graph.nodes.values()]
+
+    // Initial fetch response
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+        }) as unknown as Response,
+    })
+
+    // Create an initial archive and populate it
+    await SecurityArchive.start({
+      nodes,
+      path,
+    })
+
+    // Open the database directly to manipulate entries for testing
+    const db = new DatabaseSync(path)
+
+    // Manually mark the englishDays entry as expired by setting its TTL to be in the past
+    const englishDaysId = joinDepIDTuple([
+      'registry',
+      'npm',
+      'english-days@1.0.0',
+    ])
+    const currentTime = Date.now()
+    const expiredStart =
+      currentTime - SecurityArchive.defaultTtl - 1000 // 1 second past expiration
+
+    const dbWrite = db.prepare(
+      'UPDATE cache SET start = ? WHERE depID = ?',
+    )
+    dbWrite.run(expiredStart, englishDaysId)
+
+    // Create a new archive that should load the expired entry and trigger
+    // background revalidation in a detached process (non-blocking)
+    const refreshedArchive = new SecurityArchive({ path })
+    const startTime = Date.now()
+    await refreshedArchive.refresh({ nodes })
+    const elapsed = Date.now() - startTime
+
+    // The refresh should complete quickly since revalidation is detached
+    // (previously it would block waiting for the background fetch)
+    t.ok(
+      elapsed < 2000,
+      `refresh should complete quickly (took ${elapsed}ms), not block on revalidation`,
+    )
+
+    // Initially, we should get the stale data while revalidation happens in background
+    const initialData = refreshedArchive.get(englishDaysId)
+    t.strictSame(
+      initialData,
+      englishDaysReport,
+      'should initially return the stale data while revalidating',
+    )
+
+    // The foo entry should also be available (not expired)
+    const fooData = refreshedArchive.get(
+      joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    )
+    t.strictSame(
+      fooData,
+      fooReport,
+      'non-expired entries should be loaded from db',
+    )
+
+    db.close()
+  })
+
+  await t.test('average score calculation', async t => {
+    const dir = t.testdir()
+    const path = resolve(dir, 'average-score.db')
+    const graph = getSimpleReportGraph()
+    const nodes = [...graph.nodes.values()]
+
+    // Mock response with scores that will result in a specific average
+    const testReport = {
+      ...fooReport,
+      score: {
+        license: 0.75,
+        maintenance: 0.85,
+        quality: 0.9,
+        supplyChain: 0.95,
+        vulnerability: 0.7,
+      },
+    }
+
+    t.intercept(global, 'fetch', {
+      value: async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(testReport) + '\n',
+        }) as unknown as Response,
+    })
+
+    const archive = await SecurityArchive.start({
+      nodes,
+      path,
+    })
+
+    const storedData = archive.get(
+      joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    )
+
+    // Verify the average score is calculated correctly (0.75 + 0.85 + 0.90 + 0.95 + 0.70) / 5 = 0.83
+    t.ok(storedData, 'should have stored data')
+    t.equal(
+      storedData!.score.overall,
+      0.83,
+      'should calculate average score correctly with 2 decimal places',
+    )
+  })
+})
+
+t.test('SecurityArchive.refresh with npm mirror', async t => {
+  const dir = t.testdir()
+  const path = resolve(dir, 'mirror.db')
+  const graph = getSimpleReportGraph(mirrorSpecOptions)
+  const nodes = [...graph.nodes.values()]
+
+  let fetchBody: unknown
+  t.intercept(global, 'fetch', {
+    value: async (_url: string, init?: { body?: string }) => {
+      fetchBody = JSON.parse(init?.body ?? '{}')
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `${JSON.stringify(fooReport)}
+${JSON.stringify(englishDaysReport)}
+`,
+      } as unknown as Response
+    },
+  })
+
+  const archive = await SecurityArchive.start({ nodes, path })
+
+  t.ok(archive.ok, 'archive is complete for npm-mirror packages')
+  t.strictSame(
+    fetchBody,
+    {
+      components: [
+        { purl: 'pkg:npm/@ruyadorno/foo@1.0.0' },
+        { purl: 'pkg:npm/english-days@1.0.0' },
+      ],
+    },
+    'should queue only npm-alias packages from the mirror',
+  )
+  t.ok(
+    archive.has(
+      joinDepIDTuple(['registry', 'npm', '@ruyadorno/foo@1.0.0']),
+    ),
+    'should store the mirrored npm package',
+  )
+  t.notOk(
+    archive.has(
+      joinDepIDTuple(['registry', 'custom', 'registry@1.0.1']),
+    ),
+    'should skip the custom-registry package',
+  )
+  t.matchSnapshot(
+    archive.toJSON(),
+    'should persist security data for packages from registries.npm',
+  )
+})
+
+t.test('DepID normalization', async t => {
+  const dir = t.testdir()
+  const path = resolve(dir, 'normalization.db')
+
+  // Create a proper graph with a node that has extra information in its DepID
+  const graph = newGraph('test-project')
+  const addNode = newNode(graph)
+
+  const depIDWithExtra = joinDepIDTuple([
+    'registry',
+    'npm',
+    '@ruyadorno/foo@1.0.0',
+    'extra-peer-dep-info',
+  ])
+  const baseDepIDValue = baseDepID(depIDWithExtra)
+
+  const fooNode = addNode('@ruyadorno/foo')
+  fooNode.id = depIDWithExtra // Node itself can have extra info
+  // But graph stores nodes using normalized DepID keys
+  graph.nodes.set(baseDepIDValue, fooNode)
+  const nodes = [...graph.nodes.values()]
+
+  // Mock fetch response
+  t.intercept(global, 'fetch', {
+    value: async () =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(fooReport) + '\n',
+      }) as unknown as Response,
+  })
+
+  const archive = await SecurityArchive.start({
+    nodes,
+    path,
+  })
+
+  t.test('should normalize DepID in cache', async t => {
+    // The cache should store the normalized (base) DepID, not the one with extra info
+    t.strictSame(
+      archive.has(baseDepIDValue),
+      true,
+      'should find the normalized DepID in cache',
+    )
+
+    t.strictSame(
+      archive.has(depIDWithExtra),
+      true,
+      'should find a DepID with extra via baseDepID normalization',
+    )
+
+    t.strictSame(
+      archive.get(baseDepIDValue),
+      fooReport,
+      'should retrieve data using normalized DepID',
+    )
+
+    t.strictSame(
+      archive.get(depIDWithExtra),
+      fooReport,
+      'should retrieve data using a DepID with extra',
+    )
+  })
+
+  t.test('should normalize DepID in database', async t => {
+    // Check that the database stores the normalized DepID
+    const db = new DatabaseSync(path)
+    const dbRead = db.prepare('SELECT depID, report FROM cache')
+    const dbData = dbRead.all() as { depID: string; report: string }[]
+
+    t.equal(dbData.length, 1, 'should have one entry in database')
+    t.ok(dbData[0], 'should have a database entry')
+    t.equal(
+      dbData[0]!.depID,
+      baseDepIDValue,
+      'should store normalized DepID in database',
+    )
+
+    // Verify the stored data is correct
+    const storedData = JSON.parse(dbData[0]!.report)
+    t.strictSame(
+      storedData,
+      fooReport,
+      'should store correct data for normalized DepID',
+    )
+
+    db.close()
+  })
+
+  t.test('should handle lookup with mixed DepID formats', async t => {
+    // Create a fresh archive to test loading from database
+    const freshArchive = new SecurityArchive({ path })
+    await freshArchive.refresh({ nodes })
+
+    // Should find the data using the normalized DepID
+    t.strictSame(
+      freshArchive.has(baseDepIDValue),
+      true,
+      'should find normalized DepID after loading from database',
+    )
+
+    t.strictSame(
+      freshArchive.get(baseDepIDValue),
+      fooReport,
+      'should retrieve data using normalized DepID after loading from database',
+    )
+  })
+
+  t.test('should normalize different DepID types', async t => {
+    // Test git DepID normalization
+    const gitDepIDWithExtra = joinDepIDTuple([
+      'git',
+      'github:user/repo',
+      'branch-name',
+      'git-extra-info',
+    ])
+    const gitBaseDepID = baseDepID(gitDepIDWithExtra)
+
+    t.not(
+      gitDepIDWithExtra,
+      gitBaseDepID,
+      'git DepID with extra should differ from base',
+    )
+
+    // Test remote DepID normalization
+    const remoteDepIDWithExtra = joinDepIDTuple([
+      'remote',
+      'https://example.com/package.tgz',
+      'remote-extra-info',
+    ])
+    const remoteBaseDepID = baseDepID(remoteDepIDWithExtra)
+
+    t.not(
+      remoteDepIDWithExtra,
+      remoteBaseDepID,
+      'remote DepID with extra should differ from base',
+    )
+
+    // Test that registry DepID normalization works as expected
+    const registryDepIDWithExtra = joinDepIDTuple([
+      'registry',
+      'npm',
+      'package@1.0.0',
+      'registry-extra-info',
+    ])
+    const registryBaseDepID = baseDepID(registryDepIDWithExtra)
+
+    t.not(
+      registryDepIDWithExtra,
+      registryBaseDepID,
+      'registry DepID with extra should differ from base',
+    )
+  })
+
+  t.test(
+    'should handle nodes with non-normalized IDs but normalized keys',
+    async t => {
+      // Test that the system works when the node.id has extra info but graph key is normalized
+      const nodeFromGraph = graph.nodes.get(baseDepIDValue)
+      t.ok(nodeFromGraph, 'should find node using normalized key')
+      t.equal(
+        nodeFromGraph!.id,
+        depIDWithExtra,
+        'node.id should retain extra information',
+      )
+      t.equal(
+        baseDepID(nodeFromGraph!.id),
+        baseDepIDValue,
+        'baseDepID of node.id should equal the normalized key',
+      )
+    },
+  )
+})

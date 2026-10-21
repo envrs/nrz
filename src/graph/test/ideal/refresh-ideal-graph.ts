@@ -1,0 +1,1004 @@
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { SpecOptions } from '@nrz/spec'
+import { kCustomInspect, Spec } from '@nrz/spec'
+import type { DependencySaveType } from '@nrz/types'
+import { Monorepo } from '@nrz/workspaces'
+import { setTimeout as delay } from 'node:timers/promises'
+import { PathScurry } from 'path-scurry'
+import t from 'tap'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+  RemoveImportersDependenciesMap,
+} from '../../src/dependencies.ts'
+import { Graph } from '../../src/graph.ts'
+import type { GraphModifier } from '../../src/modifiers.ts'
+import { refreshIdealGraph } from '../../src/ideal/refresh-ideal-graph.ts'
+import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
+import { RollbackRemove } from '@nrz/rollback-remove'
+import { load } from '../../src/actual/load.ts'
+import { PackageJson } from '@nrz/package-json'
+
+Object.assign(Spec.prototype, {
+  [kCustomInspect](this: Spec) {
+    return `Spec {${this}}`
+  },
+})
+
+const configData = {
+  registry: 'https://registry.npmjs.org/',
+  registries: {
+    npm: 'https://registry.npmjs.org/',
+  },
+} satisfies SpecOptions
+
+t.test('refreshIdealGraph', async t => {
+  const fooManifest = {
+    name: 'foo',
+    version: '1.0.0',
+    dependencies: {
+      bar: '^1.0.0',
+    },
+  }
+  const barManifest = {
+    name: 'bar',
+    version: '1.0.0',
+  }
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+  }
+  const graph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest,
+  })
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      switch (spec.name) {
+        case 'bar':
+          return barManifest
+        case 'foo':
+          return fooManifest
+      }
+    },
+  } as PackageInfoClient
+  const addEntry = (
+    name: string,
+    type: DependencySaveType = 'implicit',
+  ) =>
+    new Map(
+      Object.entries({
+        foo: {
+          spec: Spec.parse(name, '^1.0.0'),
+          type,
+        } satisfies Dependency,
+      }),
+    )
+
+  t.matchSnapshot(objectLikeOutput(graph), 'initial graph')
+
+  await refreshIdealGraph({
+    add: new Map([
+      [joinDepIDTuple(['file', '.']), addEntry('foo')],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    graph,
+    packageInfo,
+    scurry: new PathScurry(t.testdirName),
+    remover: new RollbackRemove(),
+  })
+  t.matchSnapshot(objectLikeOutput(graph), 'graph with an added foo')
+
+  await refreshIdealGraph({
+    add: new Map([
+      [joinDepIDTuple(['file', '.']), addEntry('foo')],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    graph,
+    scurry: new PathScurry(t.testdirName),
+    packageInfo,
+    remover: new RollbackRemove(),
+  })
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'graph after adding foo when there is an already existing foo',
+  )
+
+  // place a missing package bar on the main importer
+  graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    Spec.parse('bar', '^1.0.0'),
+  )
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'graph with missing package bar',
+  )
+
+  // now it should install the package bar to the main importer
+  await refreshIdealGraph({
+    add: new Map([
+      [joinDepIDTuple(['file', '.']), addEntry('bar', 'dev')],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    scurry: new PathScurry(t.testdirName),
+    graph,
+    packageInfo,
+    remover: new RollbackRemove(),
+  })
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'graph after adding a previously missing dependency bar',
+  )
+
+  t.test('with modifiers', async t => {
+    const modifierCalls = {
+      tryImporter: 0,
+      tryDependencies: 0,
+    }
+
+    const mockModifier = {
+      tryImporter: () => {
+        modifierCalls.tryImporter++
+        return undefined
+      },
+      tryDependencies: () => {
+        modifierCalls.tryDependencies++
+        return new Map()
+      },
+    } as unknown as GraphModifier
+
+    await refreshIdealGraph({
+      add: new Map([
+        [joinDepIDTuple(['file', '.']), addEntry('foo')],
+      ]) as AddImportersDependenciesMap,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      graph,
+      packageInfo,
+      scurry: new PathScurry(t.testdirName),
+      modifiers: mockModifier,
+      remover: new RollbackRemove(),
+    })
+
+    t.equal(modifierCalls.tryImporter, 1, 'tryImporter was called')
+    t.equal(
+      modifierCalls.tryDependencies,
+      1,
+      'tryDependencies was called',
+    )
+  })
+})
+
+t.test('refreshIdealGraph waits for extraction promises', async t => {
+  const fooManifest = {
+    name: 'foo',
+    version: '1.0.0',
+  }
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+  }
+
+  // Create an ideal graph with a new node
+  const idealGraph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest,
+  })
+
+  // Create an actual graph without the node
+  const actualGraph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest,
+  })
+
+  const extractionCompleted = { value: false }
+  const extractionStarted = { value: false }
+
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      if (spec.name === 'foo') return fooManifest
+      return null
+    },
+    async extract() {
+      extractionStarted.value = true
+      // Simulate async extraction with a delay
+      await new Promise(resolve => setTimeout(resolve, 50))
+      extractionCompleted.value = true
+      return { extracted: true }
+    },
+  } as unknown as PackageInfoClient
+
+  const addEntry = new Map(
+    Object.entries({
+      foo: {
+        spec: Spec.parse('foo', '^1.0.0'),
+        type: 'prod' as DependencySaveType,
+      } satisfies Dependency,
+    }),
+  )
+
+  // Call refreshIdealGraph with actual graph to trigger early extraction
+  await refreshIdealGraph({
+    add: new Map([
+      [joinDepIDTuple(['file', '.']), addEntry],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    graph: idealGraph,
+    packageInfo,
+    scurry: new PathScurry(t.testdirName),
+    actual: actualGraph,
+    remover: new RollbackRemove(),
+  })
+
+  // Verify that extraction was started and completed
+  t.ok(extractionStarted.value, 'extraction was started')
+  t.ok(
+    extractionCompleted.value,
+    'extraction was completed before refreshIdealGraph returned',
+  )
+})
+
+t.test('lockfileOnly skips early extraction', async t => {
+  const mainManifest = { name: 'my-project', version: '1.0.0' }
+  const graph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest,
+  })
+  let extracts = 0
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      /* c8 ignore next */
+      if (spec.name !== 'foo') return null
+      return { name: 'foo', version: '1.0.0' }
+    },
+    async extract() {
+      /* c8 ignore next 2 */
+      extracts++
+      return { extracted: true }
+    },
+  } as unknown as PackageInfoClient
+
+  await refreshIdealGraph({
+    add: new Map([
+      [
+        joinDepIDTuple(['file', '.']),
+        new Map(
+          Object.entries({
+            foo: {
+              spec: Spec.parse('foo', '^1.0.0'),
+              type: 'prod' as DependencySaveType,
+            } satisfies Dependency,
+          }),
+        ),
+      ],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    graph,
+    packageInfo,
+    scurry: new PathScurry(t.testdirName),
+    // an actual graph is what makes a node eligible for extraction
+    actual: new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    }),
+    remover: new RollbackRemove(),
+    lockfileOnly: true,
+  })
+
+  t.equal(extracts, 0, 'nothing was extracted')
+  t.notOk(
+    [...graph.nodes.values()].some(n => n.extracted),
+    'no node is marked extracted',
+  )
+})
+
+t.test('a failed build leaves no extraction unhandled', async t => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (er: unknown) => unhandled.push(er)
+  process.on('unhandledRejection', onUnhandled)
+  t.teardown(() => process.off('unhandledRejection', onUnhandled))
+
+  const mainManifest = { name: 'my-project', version: '1.0.0' }
+  const graph = () =>
+    new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    })
+  let extracted = 0
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      if (spec.name === 'missing') throw new Error('missing')
+      return {
+        name: 'foo',
+        version: '1.0.0',
+        dependencies: { missing: '1' },
+      }
+    },
+    async extract() {
+      extracted++
+      await delay(20)
+      throw new Error('extract failed')
+    },
+  } as unknown as PackageInfoClient
+  const options = (lockfileOnly?: boolean) => ({
+    add: new Map([
+      [
+        joinDepIDTuple(['file', '.']),
+        new Map(
+          Object.entries({
+            foo: {
+              spec: Spec.parse('foo', '^1.0.0'),
+              type: 'prod' as DependencySaveType,
+            } satisfies Dependency,
+          }),
+        ),
+      ],
+    ]) as AddImportersDependenciesMap,
+    remove: new Map() as RemoveImportersDependenciesMap,
+    graph: graph(),
+    packageInfo,
+    scurry: new PathScurry(t.testdirName),
+    // makes foo eligible for early extraction
+    actual: graph(),
+    remover: new RollbackRemove(),
+    lockfileOnly,
+  })
+
+  await t.rejects(refreshIdealGraph(options()), /missing/)
+  t.equal(extracted, 1, 'an extraction was in flight')
+  await t.rejects(refreshIdealGraph(options(true)), /missing/)
+  t.equal(extracted, 1, 'none when lockfileOnly')
+  // past the extract rejection
+  await delay(50)
+  t.strictSame(unhandled, [])
+})
+
+t.test(
+  'refreshIdealGraph handles multiple extraction promises concurrently',
+  async t => {
+    const fooManifest = {
+      name: 'foo',
+      version: '1.0.0',
+    }
+    const barManifest = {
+      name: 'bar',
+      version: '1.0.0',
+    }
+    const bazManifest = {
+      name: 'baz',
+      version: '1.0.0',
+    }
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+
+    const idealGraph = new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    })
+
+    const actualGraph = new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    })
+
+    const extractedPackages: string[] = []
+    const extractionOrder: number[] = []
+    let extractionCounter = 0
+
+    const packageInfo = {
+      async manifest(spec: Spec) {
+        switch (spec.name) {
+          case 'foo':
+            return fooManifest
+          case 'bar':
+            return barManifest
+          case 'baz':
+            return bazManifest
+          default:
+            return null
+        }
+      },
+      async extract(spec: Spec) {
+        const order = extractionCounter++
+        extractionOrder.push(order)
+        // Different delays to test concurrent execution
+        const delays: Record<string, number> = {
+          foo: 30,
+          bar: 10,
+          baz: 20,
+        }
+        await new Promise(resolve =>
+          setTimeout(resolve, delays[spec.name] || 0),
+        )
+        extractedPackages.push(spec.name)
+        return { extracted: true }
+      },
+    } as unknown as PackageInfoClient
+
+    const addEntry = new Map(
+      Object.entries({
+        foo: {
+          spec: Spec.parse('foo', '^1.0.0'),
+          type: 'prod' as DependencySaveType,
+        } satisfies Dependency,
+        bar: {
+          spec: Spec.parse('bar', '^1.0.0'),
+          type: 'prod' as DependencySaveType,
+        } satisfies Dependency,
+        baz: {
+          spec: Spec.parse('baz', '^1.0.0'),
+          type: 'prod' as DependencySaveType,
+        } satisfies Dependency,
+      }),
+    )
+
+    await refreshIdealGraph({
+      add: new Map([
+        [joinDepIDTuple(['file', '.']), addEntry],
+      ]) as AddImportersDependenciesMap,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      graph: idealGraph,
+      packageInfo,
+      scurry: new PathScurry(t.testdirName),
+      actual: actualGraph,
+      remover: new RollbackRemove(),
+    })
+
+    // Verify all packages were extracted
+    t.equal(
+      extractedPackages.length,
+      3,
+      'all three packages were extracted',
+    )
+    t.ok(extractedPackages.includes('foo'), 'foo was extracted')
+    t.ok(extractedPackages.includes('bar'), 'bar was extracted')
+    t.ok(extractedPackages.includes('baz'), 'baz was extracted')
+
+    // Verify all extractions started before any completed (concurrent execution)
+    t.equal(extractionOrder.length, 3, 'all extractions were started')
+  },
+)
+
+t.test('nextPeerContextIndex', async t => {
+  t.test('returns incrementing indices', async t => {
+    const mainManifest = {
+      name: 'test-project',
+      version: '1.0.0',
+    }
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    const graph = new Graph({
+      ...configData,
+      mainManifest,
+      projectRoot,
+    })
+    const idx1 = graph.nextPeerContextIndex()
+    const idx2 = graph.nextPeerContextIndex()
+    const idx3 = graph.nextPeerContextIndex()
+
+    t.ok(idx2 > idx1, 'second index should be greater')
+    t.ok(idx3 > idx2, 'third index should be greater')
+    t.equal(idx3 - idx2, 1, 'should increment by 1')
+  })
+})
+
+t.test('refreshIdealGraph with workspaces', async t => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'root-project',
+      version: '1.0.0',
+    }),
+    'nrz.json': JSON.stringify({
+      workspaces: ['./packages/*'],
+    }),
+    packages: {
+      'workspace-a': {
+        'package.json': JSON.stringify({
+          name: 'workspace-a',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+          },
+        }),
+      },
+      'workspace-b': {
+        'package.json': JSON.stringify({
+          name: 'workspace-b',
+          version: '1.0.0',
+          dependencies: {
+            bar: '^1.0.0',
+          },
+        }),
+      },
+      'workspace-c': {
+        'package.json': JSON.stringify({
+          name: 'workspace-c',
+          version: '1.0.0',
+          peerDependencies: {
+            lorem: '^1.0.0',
+          },
+        }),
+        node_modules: {
+          lorem: t.fixture(
+            'symlink',
+            `../../../node_modules/.nrz/${joinDepIDTuple(['registry', '', 'lorem@1.0.0'])}/node_modules/lorem`,
+          ),
+        },
+      },
+      // Second workspace with peerDeps to cover sorting both aIsPeer and bIsPeer
+      'workspace-d': {
+        'package.json': JSON.stringify({
+          name: 'workspace-d',
+          version: '1.0.0',
+          peerDependencies: {
+            ipsum: '^1.0.0',
+          },
+        }),
+        node_modules: {
+          ipsum: t.fixture(
+            'symlink',
+            `../../../node_modules/.nrz/${joinDepIDTuple(['registry', '', 'ipsum@1.0.0'])}/node_modules/ipsum`,
+          ),
+        },
+      },
+    },
+    node_modules: {
+      '.nrz': {
+        [joinDepIDTuple(['registry', '', 'lorem@1.0.0'])]: {
+          node_modules: {
+            lorem: {
+              'package.json': JSON.stringify({
+                name: 'lorem',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+        [joinDepIDTuple(['registry', '', 'ipsum@1.0.0'])]: {
+          node_modules: {
+            ipsum: {
+              'package.json': JSON.stringify({
+                name: 'ipsum',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+      },
+    },
+  })
+
+  const fooManifest = {
+    name: 'foo',
+    version: '1.0.0',
+  }
+  const barManifest = {
+    name: 'bar',
+    version: '1.0.0',
+  }
+  const bazManifest = {
+    name: 'baz',
+    version: '1.0.0',
+  }
+  const quxManifest = {
+    name: 'qux',
+    version: '1.0.0',
+  }
+
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      switch (spec.name) {
+        case 'foo':
+          return fooManifest
+        case 'bar':
+          return barManifest
+        case 'baz':
+          return bazManifest
+        case 'qux':
+          return quxManifest
+        case 'lorem':
+        case 'ipsum': {
+          throw new Error(
+            `${spec.name} should be loaded from the actual graph`,
+          )
+        }
+        default:
+          return null
+      }
+    },
+  } as PackageInfoClient
+
+  const mainManifest = {
+    name: 'root-project',
+    version: '1.0.0',
+    workspaces: ['packages/*'],
+  }
+
+  const scurry = new PathScurry(projectRoot)
+  const packageJson = new PackageJson()
+  const monorepo = Monorepo.load(projectRoot, {
+    config: {
+      workspaces: ['./packages/*'],
+    },
+    scurry,
+    packageJson,
+  })
+  const graph = load({
+    projectRoot,
+    scurry,
+    packageJson,
+    monorepo,
+    ...configData,
+    mainManifest,
+    loadManifests: true,
+  })
+
+  t.equal(
+    graph.importers.size,
+    5,
+    'should have expected number of importers',
+  )
+
+  // Create add/remove maps for different importers
+  const add = new Map<DepID, Map<string, Dependency>>([
+    [
+      graph.mainImporter.id,
+      new Map<string, Dependency>([
+        [
+          'baz',
+          {
+            spec: Spec.parse('baz', '^1.0.0'),
+            type: 'prod',
+          } satisfies Dependency,
+        ],
+      ]),
+    ],
+    [
+      joinDepIDTuple(['workspace', 'packages/workspace-a']),
+      new Map<string, Dependency>([
+        [
+          'qux',
+          {
+            spec: Spec.parse('qux', '^1.0.0'),
+            type: 'dev',
+          } satisfies Dependency,
+        ],
+      ]),
+    ],
+  ]) as AddImportersDependenciesMap
+  add.modifiedDependencies = true
+
+  const remove = new Map<DepID, Set<string>>([
+    [
+      joinDepIDTuple(['workspace', 'packages/workspace-b']),
+      new Set<string>(['bar']),
+    ],
+  ]) as RemoveImportersDependenciesMap
+  remove.modifiedDependencies = true
+
+  await refreshIdealGraph({
+    add,
+    remove,
+    graph,
+    packageInfo,
+    scurry: new PathScurry(projectRoot),
+    remover: new RollbackRemove(),
+  })
+
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'graph with workspace changes',
+  )
+
+  // Verify main importer has baz
+  const mainBazEdge = graph.mainImporter.edgesOut.get('baz')
+  t.ok(mainBazEdge, 'main importer should have baz edge')
+  t.equal(mainBazEdge?.to?.name, 'baz', 'baz edge points to baz node')
+
+  // Verify workspace-a has qux
+  const workspaceA = graph.nodes.get(
+    joinDepIDTuple(['workspace', 'packages/workspace-a']),
+  )!
+  const workspaceAQuxEdge = workspaceA.edgesOut.get('qux')
+  t.ok(workspaceAQuxEdge, 'workspace-a should have qux edge')
+  t.equal(
+    workspaceAQuxEdge?.to?.name,
+    'qux',
+    'qux edge points to qux node',
+  )
+
+  // Verify workspace-b no longer has bar
+  const workspaceB = graph.nodes.get(
+    joinDepIDTuple(['workspace', 'packages/workspace-b']),
+  )!
+  const workspaceBBarEdge = workspaceB.edgesOut.get('bar')
+  t.notOk(workspaceBBarEdge, 'workspace-b should not have bar edge')
+})
+
+t.test(
+  'refreshIdealGraph processes mainImporter before workspaces',
+  async t => {
+    // Use "z-" prefix for main project so it would sort LAST alphabetically
+    // Use "a-" prefix for workspaces so they would sort FIRST alphabetically
+    // This proves mainImporter is always processed first regardless of name
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'z-main-project',
+        version: '1.0.0',
+      }),
+      'nrz.json': JSON.stringify({
+        workspaces: ['./packages/*'],
+      }),
+      packages: {
+        'a-workspace': {
+          'package.json': JSON.stringify({
+            name: 'a-workspace',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+
+    const mainDepManifest = { name: 'main-dep', version: '1.0.0' }
+    const wsDepManifest = { name: 'ws-dep', version: '1.0.0' }
+
+    // Track order of manifest fetches to verify processing order
+    const fetchOrder: string[] = []
+    const packageInfo = {
+      async manifest(spec: Spec) {
+        fetchOrder.push(spec.name)
+        if (spec.name === 'main-dep') return mainDepManifest
+        if (spec.name === 'ws-dep') return wsDepManifest
+        return null
+      },
+    } as PackageInfoClient
+
+    const mainManifest = {
+      name: 'z-main-project',
+      version: '1.0.0',
+    }
+
+    const scurry = new PathScurry(projectRoot)
+    const packageJson = new PackageJson()
+    const monorepo = Monorepo.load(projectRoot, {
+      config: { workspaces: ['./packages/*'] },
+      scurry,
+      packageJson,
+    })
+    const graph = new Graph({
+      projectRoot,
+      ...configData,
+      mainManifest,
+      monorepo,
+    })
+
+    // Add deps to both main importer and workspace
+    const add = new Map<DepID, Map<string, Dependency>>([
+      [
+        graph.mainImporter.id,
+        new Map<string, Dependency>([
+          [
+            'main-dep',
+            {
+              spec: Spec.parse('main-dep', '^1.0.0'),
+              type: 'prod',
+            } satisfies Dependency,
+          ],
+        ]),
+      ],
+      [
+        joinDepIDTuple(['workspace', 'packages/a-workspace']),
+        new Map<string, Dependency>([
+          [
+            'ws-dep',
+            {
+              spec: Spec.parse('ws-dep', '^1.0.0'),
+              type: 'prod',
+            } satisfies Dependency,
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap
+    add.modifiedDependencies = true
+
+    await refreshIdealGraph({
+      add,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      graph,
+      packageInfo,
+      scurry,
+      remover: new RollbackRemove(),
+    })
+
+    // Verify mainImporter's dependency was fetched FIRST
+    t.equal(
+      fetchOrder[0],
+      'main-dep',
+      'mainImporter dependency should be fetched first',
+    )
+    t.equal(
+      fetchOrder[1],
+      'ws-dep',
+      'workspace dependency should be fetched second',
+    )
+  },
+)
+
+t.test(
+  'locked capture keys peer copies by base id only when unambiguous',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const graph = new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    })
+    const dupManifest = {
+      name: 'dup',
+      version: '1.0.0',
+      dependencies: { x: '^1.0.0' },
+    }
+    const parents = []
+    const suffixes = [
+      'peer.aaaaaaaaaaaaaaaa',
+      'peer.bbbbbbbbbbbbbbbb',
+      'peer.cccccccccccccccc',
+    ]
+    for (const [i, suffix] of suffixes.entries()) {
+      const parName = `par-${i}`
+      const par = graph.placePackage(
+        graph.mainImporter,
+        'prod',
+        Spec.parse(parName, '^1.0.0', configData),
+        {
+          name: parName,
+          version: '1.0.0',
+          dependencies: { dup: '^1.0.0' },
+        },
+      )!
+      parents.push(par)
+      const dup = graph.placePackage(
+        par,
+        'prod',
+        Spec.parse('dup', '^1.0.0', configData),
+        dupManifest,
+        joinDepIDTuple(['registry', '', 'dup@1.0.0', suffix]),
+      )!
+      // three copies of the same base resolving x to different versions
+      // make the base-id key ambiguous and dropped from the capture
+      graph.placePackage(dup, 'prod', Spec.parse('x', '^1.0.0'), {
+        name: 'x',
+        version: `1.0.${i + 1}`,
+      })
+    }
+
+    const packageInfo = {
+      async manifest(spec: Spec) {
+        switch (spec.name) {
+          case 'new-dep':
+            return { name: 'new-dep', version: '1.0.0' }
+          case 'dup':
+            return dupManifest
+          default:
+            return { name: 'x', version: '1.0.9' }
+        }
+      },
+    } as PackageInfoClient
+
+    await refreshIdealGraph({
+      add: Object.assign(
+        new Map([
+          [
+            joinDepIDTuple(['file', '.']),
+            new Map(
+              Object.entries({
+                'new-dep': {
+                  spec: Spec.parse('new-dep', '^1.0.0'),
+                  type: 'prod',
+                } satisfies Dependency,
+              }),
+            ),
+          ],
+        ]),
+        { modifiedDependencies: true },
+      ),
+      remove: new Map() as RemoveImportersDependenciesMap,
+      graph,
+      packageInfo,
+      scurry: new PathScurry(t.testdirName),
+      remover: new RollbackRemove(),
+      ...configData,
+    })
+
+    // without peer deps in the manifest the rebuild re-derives the
+    // unsuffixed id, so the three peer copies collapse into one node;
+    // the point of this test is the capture loop above: the base-keyed
+    // `dup@1.0.0 x` entry is recorded once, then dropped as ambiguous
+    for (const par of parents) {
+      t.equal(
+        par.edgesOut.get('dup')?.to?.id,
+        joinDepIDTuple(['registry', '', 'dup@1.0.0']),
+        'parents share the rebuilt dup node',
+      )
+    }
+    t.equal(
+      parents[0]?.edgesOut.get('dup')?.to?.edgesOut.get('x')?.to
+        ?.version,
+      '1.0.1',
+      'ambiguous base key dropped, x falls back to the first copy',
+    )
+    t.ok(
+      graph.mainImporter.edgesOut.get('new-dep')?.to,
+      'new dependency was added',
+    )
+    t.equal(
+      graph.lockedResolutions,
+      undefined,
+      'locked capture is cleared after the rebuild',
+    )
+  },
+)
+
+t.test('an options change makes the lockfile stale', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { foo: '^1.0.0' },
+  }
+  const fooManifest = { name: 'foo', version: '1.0.0' }
+  const packageInfo = {
+    async manifest(_spec: Spec) {
+      return fooManifest
+    },
+  } as unknown as PackageInfoClient
+
+  const build = async (optionsChanged: boolean) => {
+    const graph = new Graph({
+      projectRoot: t.testdirName,
+      ...configData,
+      mainManifest,
+    })
+    graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0', configData),
+      fooManifest,
+    )
+    graph.optionsChanged = optionsChanged
+    await refreshIdealGraph({
+      add: new Map() as AddImportersDependenciesMap,
+      remove: new Map() as RemoveImportersDependenciesMap,
+      graph,
+      packageInfo,
+      scurry: new PathScurry(t.testdirName),
+      remover: new RollbackRemove(),
+      ...configData,
+    })
+    return graph
+  }
+
+  const changed = await build(true)
+  t.equal(changed.lockfileStale, true, 'flagged for saving')
+  t.equal(
+    changed.mainImporter.edgesOut.get('foo')?.to?.id,
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+    'edge target is unchanged',
+  )
+
+  const unchanged = await build(false)
+  t.equal(unchanged.lockfileStale, false, 'not flagged')
+})

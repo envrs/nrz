@@ -1,28 +1,19 @@
-import { type DepID, splitDepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import { splitDepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
-import { type PackageJson } from '@nrz/package-json'
-import {
-  type Manifest,
-  type DependencyTypeLong,
-  type DependencyTypeShort,
-  longDependencyTypes,
-} from '@nrz/types'
-import { type Graph } from '../graph.ts'
-import {
-  type AddImportersDependenciesMap,
-  type RemoveImportersDependenciesMap,
-  type Dependency,
+import type { PackageJson } from '@nrz/package-json'
+import { Spec } from '@nrz/spec'
+import type { NormalizedManifest } from '@nrz/types'
+import { longDependencyTypes } from '@nrz/types'
+import { longDependencyTypeNames } from '../dependencies.ts'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+  RemoveImportersDependenciesMap,
 } from '../dependencies.ts'
-
-const SAVE_PREFIX = '^'
-
-const depTypesMap = new Map<DependencyTypeShort, DependencyTypeLong>([
-  ['prod', 'dependencies'],
-  ['dev', 'devDependencies'],
-  ['peer', 'peerDependencies'],
-  ['peerOptional', 'peerDependencies'],
-  ['optional', 'optionalDependencies'],
-])
+import type { Graph } from '../graph.ts'
+import { resolveSaveType } from '../resolve-save-type.ts'
+import { calculateSaveValue } from './calculate-save-value.ts'
 
 export type UpdatePackageJsonOptions = {
   /**
@@ -50,28 +41,39 @@ export type UpdatePackageJsonOptions = {
    * instance used to load these `package.json` files previously.
    */
   packageJson: PackageJson
+  /**
+   * When true, save dependencies with exact versions (e.g. `1.2.3`)
+   * instead of the default semver range operator (e.g. `^1.2.3`).
+   */
+  saveExact?: boolean
+  /**
+   * The prefix to use when saving dependency versions (e.g. `^`, `~`, `>=`, ``).
+   * Defaults to `^` if not specified. Ignored when `saveExact` is true.
+   */
+  savePrefix?: string
 }
 
 const addOrRemoveDeps = (
-  importerId: DepID,
+  nodeId: DepID,
   graph: Graph,
   addOrRemove?:
-    | AddImportersDependenciesMap
-    | RemoveImportersDependenciesMap,
-): Manifest | undefined => {
-  const importer = graph.nodes.get(importerId)
-  if (!importer) {
-    throw error('Failed to retrieve importer node', {
-      found: importerId,
+    AddImportersDependenciesMap | RemoveImportersDependenciesMap,
+  saveExact?: boolean,
+  savePrefix?: string,
+): NormalizedManifest | undefined => {
+  const node = graph.nodes.get(nodeId)
+  if (!node) {
+    throw error('Failed to retrieve node', {
+      found: nodeId,
     })
   }
-  const manifest = importer.manifest
+  const manifest = node.manifest
   if (!manifest) {
     throw error('Could not find manifest data for node', {
-      found: importerId,
+      found: nodeId,
     })
   }
-  const deps = addOrRemove?.get(importerId)
+  const deps = addOrRemove?.get(nodeId)
   /* c8 ignore start -- impossible but TS doesn't know that */
   if (!deps) {
     throw error('Failed to retrieve added deps info', {
@@ -83,45 +85,87 @@ const addOrRemoveDeps = (
   for (const deleteNameOrAddItem of deps) {
     if (typeof deleteNameOrAddItem === 'string') {
       const name = deleteNameOrAddItem
-      // TODO: needs to also remove any possible peerDependenciesMeta
       for (const depType of longDependencyTypes) {
         if (manifest[depType]?.[name]) {
           delete manifest[depType][name]
           manifestChanged = true
         }
       }
+      if (manifest.peerDependenciesMeta?.[name]) {
+        delete manifest.peerDependenciesMeta[name]
+        manifestChanged = true
+      }
     } else {
       const [name, dep] = deleteNameOrAddItem
-      // TODO: peerOptional also needs to add peerDependenciesMeta entry
-      const depType = depTypesMap.get(dep.type)
+      // peerOptional also needs to add peerDependenciesMeta entry
+      const depTypeShort = resolveSaveType(node, name, dep.type)
+      const depType =
+        Object.hasOwn(longDependencyTypeNames, depTypeShort) ?
+          longDependencyTypeNames[depTypeShort]
+        : undefined
       if (!depType) {
         throw error('Failed to retrieve dependency type', {
-          validOptions: [...depTypesMap.keys()],
+          validOptions: Object.keys(longDependencyTypeNames),
           found: dep.type,
         })
       }
-      const node = importer.edgesOut.get(name)?.to
-      if (!node) {
+      const edge = node.edgesOut.get(name)
+      if (!edge?.to) {
         throw error('Dependency node could not be found')
       }
-      const [nodeType] = splitDepID(node.id)
+      const n = edge.to
+      const [nodeType] = splitDepID(n.id)
+
+      for (const dtype of longDependencyTypes) {
+        if (dtype === depType || !manifest[dtype]) continue
+        delete manifest[dtype][name]
+      }
+      if (depTypeShort === 'peerOptional') {
+        manifest.peerDependenciesMeta ??= {}
+        manifest.peerDependenciesMeta[name] = { optional: true }
+      } else if (manifest.peerDependenciesMeta?.[name]) {
+        delete manifest.peerDependenciesMeta[name]
+      }
+
       const dependencies =
         manifest[depType] ?? (manifest[depType] = {})
-      dependencies[name] =
-        (
-          nodeType === 'registry' &&
-          (!dep.spec.semver || !dep.spec.range)
-        ) ?
-          `${SAVE_PREFIX}${node.version}`
-        : dep.spec.bareSpec
-      manifestChanged = true
+      // check to see if we need to save a different version
+      // - If you install a single specific version, that is deliberate,
+      //   we save that exact version, no matter what.
+      // - If the requested spec matches the manifest, make no change
+      // If the requested spec had no bareSpec, and the manifest has
+      // a dependency entry, make no change.
+      // If the requested spec has a bareSpec that did NOT match the manifest,
+      // then update it.
+      // If the manifest does not contain anything, then update it.
+      // Only for registry dependencies
+      const existing = dependencies[name]
+      const saveValue = calculateSaveValue(
+        nodeType,
+        dep.spec,
+        existing,
+        n.version,
+        saveExact,
+        savePrefix,
+      )
+      dependencies[name] = saveValue
+      manifestChanged = manifestChanged || saveValue !== existing
+
+      // the lockfile has to carry the value package.json carries, or a
+      // later install reads back `latest` where the manifest says
+      // `^1.2.3`. anything keyed by the old spec from here on must be
+      // invalidated at this point.
+      if (saveValue !== edge.spec.bareSpec) {
+        edge.spec = Spec.parse(name, saveValue, dep.spec.options)
+        graph.lockfileStale = true
+      }
     }
   }
   return manifestChanged ? manifest : undefined
 }
 
 /**
- * Updates the importers of a provided {@link Graph} accordingly to the
+ * Updates nodes of a provided {@link Graph} accordingly to the
  * provided add or remove arguments.
  */
 export const updatePackageJson = ({
@@ -129,14 +173,25 @@ export const updatePackageJson = ({
   graph,
   packageJson,
   remove,
+  saveExact,
+  savePrefix,
 }: UpdatePackageJsonOptions) => {
-  const manifestsToUpdate = new Set<Manifest>()
+  const manifestsToUpdate = new Set<NormalizedManifest>()
   const operations = new Set([add, remove])
 
   for (const operation of operations) {
     if (operation) {
-      for (const importerId of operation.keys()) {
-        const manifest = addOrRemoveDeps(importerId, graph, operation)
+      // These node ids are from either importer nodes or dependencies
+      // that are nested folders from which the user can also add new
+      // dependencies to
+      for (const nodeId of operation.keys()) {
+        const manifest = addOrRemoveDeps(
+          nodeId,
+          graph,
+          operation,
+          saveExact,
+          savePrefix,
+        )
         if (manifest) {
           manifestsToUpdate.add(manifest)
         }

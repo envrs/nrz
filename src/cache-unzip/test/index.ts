@@ -1,52 +1,183 @@
 import t from 'tap'
+import type { Test } from 'tap'
 
-t.test('registering the beforeExit event', async t => {
-  const beHooks: (() => void)[] = []
-  t.capture(process, 'on', (ev: string, ...args: any[]) => {
-    t.equal(ev, 'beforeExit')
-    t.equal(args.length, 1)
-    t.match(args[0], Function)
-    beHooks.push(args[0])
+const mockUnzip = async (
+  t: Test,
+  mocks: Record<string, any> = {},
+) => {
+  let beforeExitHook: (() => void) | null = null
+
+  const state = {
+    unrefCalled: false,
+    cmd: '',
+    args: [] as string[],
+    opts: {} as Record<string, any>,
+    written: [] as string[],
+  }
+
+  t.capture(process, 'on', (ev: string, fn: () => void) => {
+    if (ev === 'beforeExit') {
+      beforeExitHook = fn
+    }
   })
-  let unrefCalled = false
+
   const { register } = await t.mockImport<
     typeof import('../src/index.ts')
   >('../src/index.ts', {
+    ...mocks,
     child_process: {
       spawn: (
         cmd: string,
         args: string[],
         opts: Record<string, any>,
       ) => {
-        t.equal(cmd, process.execPath)
-        t.equal(args.length, 2)
-        t.match(args[0], /unzip\.ts$/)
-        t.equal(args[1], t.testdirName)
-        t.strictSame(opts, {
-          detached: true,
-          stdio: ['pipe', 'ignore', 'ignore'],
-        })
-        const written: string[] = []
+        state.cmd = cmd
+        state.args = args
+        state.opts = opts
         return {
           stdin: {
             write: (arg: string) => {
-              written.push(arg)
+              state.written.push(arg)
             },
+            end: () => {},
           },
           unref: () => {
-            unrefCalled = true
-            t.strictSame(written, ['key 1\0', 'key 2\0'])
+            state.unrefCalled = true
           },
         }
       },
     },
   })
 
+  return {
+    register,
+    beforeExit: () => beforeExitHook?.(),
+    state,
+  }
+}
+
+t.test('registering the beforeExit event', async t => {
+  const { register, beforeExit, state } = await mockUnzip(t)
+
   register(t.testdirName, 'key 1')
   register(t.testdirName, 'key 2')
   register(t.testdirName, 'key 1')
-  t.equal(beHooks.length, 1)
-  t.type(beHooks[0], 'function')
-  beHooks[0]?.()
-  t.equal(unrefCalled, true)
+  beforeExit()
+
+  t.equal(state.cmd, process.execPath)
+  t.equal(state.args.length, 2)
+  t.match(state.args[0], /[\\/]unzip\.ts$/)
+  t.equal(state.args[1], t.testdirName)
+  t.strictSame(state.opts, {
+    detached: true,
+    stdio: ['pipe', 'ignore', 'ignore'],
+    env: { ...process.env },
+  })
+
+  t.equal(state.unrefCalled, true)
+
+  t.strictSame(state.written, ['key 1\0', 'key 2\0'])
+})
+
+t.test('passes the global store root to the child', async t => {
+  t.intercept(process, 'env', {
+    value: { ...process.env, NRZ_STORE_LINKER: 'hardlink' },
+  })
+  const { register, beforeExit, state } = await mockUnzip(t)
+
+  register(t.testdirName, 'key 1')
+  register(t.testdirName, 'key 2', '/store/v1')
+  register(t.testdirName, 'key 3', '/other')
+  beforeExit()
+
+  t.equal(state.args.length, 3)
+  t.equal(state.args[1], t.testdirName)
+  t.equal(state.args[2], '/store/v1')
+  t.equal(state.opts.env.NRZ_STORE_LINKER, 'hardlink')
+  t.strictSame(state.written, ['key 1\0', 'key 2\0', 'key 3\0'])
+})
+
+t.test('passes an integrity next to its key', async t => {
+  const { register, beforeExit, state } = await mockUnzip(t)
+  register(t.testdirName, 'key 1', '/s', 'sha512-a')
+  register(t.testdirName, 'key 1', '/s')
+  register(t.testdirName, 'key 2', '/s')
+  beforeExit()
+  t.strictSame(state.written, ['key 1\tsha512-a\0', 'key 2\0'])
+})
+
+t.test('shares the compile cache dir with the worker', async t => {
+  const { register, beforeExit, state } = await mockUnzip(t, {
+    'node:module': {
+      default: { getCompileCacheDir: () => '/compile/cache' },
+    },
+  })
+
+  register(t.testdirName, 'key 1')
+  beforeExit()
+
+  t.equal(state.opts.env.NODE_COMPILE_CACHE, '/compile/cache')
+})
+
+t.test('does not clobber an explicit NODE_COMPILE_CACHE', async t => {
+  t.intercept(process, 'env', {
+    value: { ...process.env, NODE_COMPILE_CACHE: '/explicit' },
+  })
+
+  const { register, beforeExit, state } = await mockUnzip(t, {
+    'node:module': {
+      default: { getCompileCacheDir: () => '/compile/cache' },
+    },
+  })
+
+  register(t.testdirName, 'key 1')
+  beforeExit()
+
+  t.equal(state.opts.env.NODE_COMPILE_CACHE, '/explicit')
+})
+
+t.test('deno', async t => {
+  t.intercept(
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    globalThis as typeof globalThis & { Deno?: any },
+    'Deno',
+    {
+      value: {},
+    },
+  )
+
+  t.intercept(process, 'platform', { value: 'linux' })
+
+  const { register, beforeExit, state } = await mockUnzip(t)
+
+  register(t.testdirName, 'key 1')
+  beforeExit()
+
+  t.equal(state.args.length, 4)
+  t.equal(state.args[0], '--unstable-node-globals')
+  t.equal(state.args[1], '--unstable-bare-node-builtins')
+
+  t.equal(state.unrefCalled, true)
+})
+
+t.test('deno + windows', async t => {
+  t.intercept(
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    globalThis as typeof globalThis & { Deno?: any },
+    'Deno',
+    {
+      value: {},
+    },
+  )
+
+  t.intercept(process, 'platform', { value: 'win32' })
+
+  const { register, beforeExit, state } = await mockUnzip(t)
+
+  register(t.testdirName, 'key 1')
+  beforeExit()
+
+  t.equal(state.opts.detached, false, 'detached is false on windows')
+  t.equal(state.unrefCalled, false, 'unref is not called on windows')
+  t.strictSame(state.written, ['key 1\0'])
 })

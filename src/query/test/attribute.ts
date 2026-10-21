@@ -1,7 +1,6 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
-import { type EdgeLike, type NodeLike } from '@nrz/graph'
-import { type Manifest } from '@nrz/types'
-import { type Attribute } from 'postcss-selector-parser'
+import type { EdgeLike, NodeLike } from '@nrz/types'
+import type { Attribute } from 'postcss-selector-parser'
 import t from 'tap'
 import {
   attribute,
@@ -17,11 +16,13 @@ import {
   getGraphSelectionState,
   selectorFixture,
 } from './fixtures/selector.ts'
-import { type TestCase } from './fixtures/types.ts'
-import {
-  type GraphSelectionState,
-  type ParserState,
+import type { TestCase } from './fixtures/types.ts'
+import type {
+  GraphSelectionState,
+  ParserState,
 } from '../src/types.ts'
+
+type ManifestLike = Record<string, any>
 
 const testAttr = selectorFixture(attribute)
 
@@ -133,7 +134,7 @@ t.test('attribute', async t => {
 
 t.test('bad selector type', async t => {
   await t.rejects(
-    testAttr('.dev'),
+    testAttr(':dev'),
     /Mismatching query node/,
     'should throw an error',
   )
@@ -142,7 +143,14 @@ t.test('bad selector type', async t => {
 t.test('bad operator', async t => {
   await t.rejects(
     testAttr('[name==foo]'),
-    /Unsupported attribute operator: +=/,
+    {
+      message: 'Unsupported attribute operator: =',
+      cause: {
+        code: 'EQUERY',
+        found: '[name==foo]',
+        validOptions: ['=', '^=', '$=', '~=', '*=', '|='],
+      },
+    },
     'should throw an error',
   )
 })
@@ -193,21 +201,21 @@ t.test('getManifestPropertyValues', async t => {
     'should return the value from a array-nested object',
   )
 
-  b.manifest = { foo: 1 } as Manifest
+  b.manifest = { foo: 1 } as ManifestLike
   t.strictSame(
     getManifestPropertyValues(b, ['foo'], 'foo'),
     ['1'],
     'should return values as strings',
   )
 
-  b.manifest = { keywords: [undefined, 'foo'] } as Manifest
+  b.manifest = { keywords: [undefined, 'foo'] } as ManifestLike
   t.strictSame(
     getManifestPropertyValues(b, ['keywords'], 'keywords'),
     ['', 'foo'],
     'should turn falsy values into empty strings',
   )
 
-  b.manifest = 'bad manifest' as Manifest
+  b.manifest = 'bad manifest' as unknown as ManifestLike
   t.strictSame(
     getManifestPropertyValues(b, ['name'], 'name'),
     undefined,
@@ -234,11 +242,18 @@ t.test('filterAttributes', async t => {
       edges: new Set<EdgeLike>(),
       nodes: new Set<NodeLike>(),
     },
+    comment: '',
     current: { type: 'attribute', value: 'postinstall' } as Attribute,
     initial: copyGraphSelectionState(all),
     partial: all,
     loose: false,
+    importers: simpleGraph.importers,
+    hostContexts: new Map(),
     walk: async (state: ParserState) => state,
+    retries: 0,
+    securityArchive: undefined,
+    signal: new AbortController().signal,
+    specificity: { idCounter: 0, commonCounter: 0 },
   }
   filterAttributes(
     state,

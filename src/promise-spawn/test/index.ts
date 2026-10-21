@@ -1,14 +1,17 @@
-import cp from 'child_process'
+import cp from 'node:child_process'
 import spawk from 'spawk'
 import t from 'tap'
 import type * as PS from '../src/index.ts'
+import { pathToFileURL } from 'node:url'
 const mockCP = { ...cp }
 // make spawk play nice with ESM
 const { promiseSpawn } = await t.mockImport<
   typeof import('../src/index.ts')
 >('../src/index.ts', {
   child_process: mockCP,
-  spawk: await t.mockImport('spawk', { child_process: mockCP }),
+  spawk: await t.mockImport<typeof import('spawk')>('spawk', {
+    child_process: mockCP,
+  }),
 })
 
 spawk.preventUnmatched()
@@ -17,7 +20,7 @@ t.afterEach(() => {
 })
 
 t.test('types', async () => {
-  /* eslint-disable @typescript-eslint/no-unnecessary-type-parameters, @typescript-eslint/no-unused-vars */
+  /* eslint-disable @typescript-eslint/no-unnecessary-type-parameters */
   // https://www.totaltypescript.com/how-to-test-your-types#rolling-your-own
   type Expect<T extends true> = T
   type Equal<X, Y> =
@@ -31,11 +34,17 @@ t.test('types', async () => {
       PS.PromiseSpawnOptionsStdoutString
   >
   type a = Expect<Equal<StringResult['stderr'], string>>
+  const _a: a = true
+  _a
   type b = Expect<Equal<StringResult['stdout'], string>>
+  const _b: b = true
+  _b
   type c = Expect<
     Equal<PS.SpawnResultString['stdout'], string | null>
   >
-  /* eslint-enable @typescript-eslint/no-unnecessary-type-parameters, @typescript-eslint/no-unused-vars */
+  const _c: c = true
+  _c
+  /* eslint-enable @typescript-eslint/no-unnecessary-type-parameters */
 })
 
 t.test('defaults to returning strings', async t => {
@@ -44,7 +53,7 @@ t.test('defaults to returning strings', async t => {
   const result = await promiseSpawn('pass', [])
   t.hasStrict(result, {
     status: 0,
-    signal: null,
+    signal: undefined,
     stdout: 'OK',
     stderr: '',
   })
@@ -74,7 +83,7 @@ t.test('extra context is returned', async t => {
   )
   t.hasStrict(result, {
     status: 0,
-    signal: null,
+    signal: undefined,
     stdout: 'OK',
     stderr: '',
     extra: 'property',
@@ -104,7 +113,7 @@ t.test('stdioString false returns buffers', async t => {
   })
   t.hasStrict(result, {
     status: 0,
-    signal: null,
+    signal: undefined,
     stdout: Buffer.from('OK\n'),
     stderr: Buffer.from(''),
   })
@@ -135,7 +144,7 @@ t.test(
     })
     t.hasStrict(result, {
       status: 0,
-      signal: null,
+      signal: undefined,
       stdout: null,
       stderr: null,
     })
@@ -161,7 +170,7 @@ t.test(
     })
     t.hasStrict(result, {
       status: 0,
-      signal: null,
+      signal: undefined,
       stdout: null,
       stderr: null,
     })
@@ -192,7 +201,7 @@ t.test(
     const result = await p
     t.hasStrict(result, {
       status: 0,
-      signal: null,
+      signal: undefined,
       stdout: null,
       stderr: '',
     })
@@ -226,7 +235,7 @@ t.test(
     const result = await p
     t.hasStrict(result, {
       status: 0,
-      signal: null,
+      signal: undefined,
       stdout: 'OK',
       stderr: null,
     })
@@ -256,7 +265,7 @@ t.test('exposes stdin', async t => {
   const result = await p
   t.hasStrict(result, {
     status: 0,
-    signal: null,
+    signal: undefined,
     stdout: 'hello',
     stderr: '',
   })
@@ -410,7 +419,7 @@ t.test(
         args: [],
         cwd: process.cwd(),
         status: 1,
-        signal: null,
+        signal: undefined,
         stdout: '',
         stderr: 'Error!',
       },
@@ -648,4 +657,44 @@ t.test('rejects when stderr errors', async t => {
   )
 
   t.ok(proc.called)
+})
+
+t.test('cwd can be a url', async t => {
+  const cwd = pathToFileURL(process.cwd())
+
+  t.test('success', async t => {
+    const proc = spawk
+      .spawn('pass', [], { cwd })
+      .stdout(Buffer.from('OK\n'))
+
+    const result = await promiseSpawn('pass', [], { cwd })
+    t.hasStrict(result, {
+      status: 0,
+      signal: undefined,
+      stdout: 'OK',
+      stderr: '',
+      cwd: cwd.toString(),
+    })
+
+    t.ok(proc.called)
+  })
+
+  t.test('rejects', async t => {
+    const proc = spawk
+      .spawn('fail', [], { cwd })
+      .stderr(Buffer.from('Error!\n'))
+      .exit(1)
+
+    await t.rejects(promiseSpawn('fail', [], { cwd }), {
+      message: 'command failed',
+      cause: {
+        status: 1,
+        stdout: '',
+        stderr: 'Error!',
+        cwd: cwd.toString(),
+      },
+    })
+
+    t.ok(proc.called)
+  })
 })

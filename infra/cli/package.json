@@ -1,0 +1,61 @@
+{
+  "name": "nrz",
+  "description": "The nrz CLI",
+  "version": "1.5.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khulnasoft/nrz.git",
+    "directory": "infra/cli"
+  },
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "devDependencies": {
+    "@nrz/infra-build": "workspace:*"
+  },
+  "license": "BSD-2-Clause-Patent",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "prepack": "nrz-build-prepack"
+  },
+  "type": "module",
+  "keywords": [
+    "nrz",
+    "package",
+    "manager",
+    "cli",
+    "install",
+    "dependency",
+    "dependencies",
+    "graph",
+    "run",
+    "build",
+    "distribute",
+    "publish",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "deno",
+    "node",
+    "javascript",
+    "typescript",
+    "maintence",
+    "module",
+    "cjs",
+    "esm",
+    "init",
+    "create",
+    "project",
+    "workspace",
+    "monorepo",
+    "registry"
+  ],
+  "publishConfig": {
+    "directory": "./.build-publish"
+  },
+  "bugs": {
+    "url": "https://github.com/khulnasoft/nrz/issues"
+  },
+  "homepage": "https://github.com/khulnasoft/nrz/tree/main/infra/cli#readme"
+}

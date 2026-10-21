@@ -1,0 +1,758 @@
+import { Spec, kCustomInspect } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
+import { Monorepo } from '@nrz/workspaces'
+import type { OptionsResults } from 'jackspeak'
+import { inspect as rawInspect } from 'node:util'
+import type { InspectOptions } from 'node:util'
+
+// Normalize inspect output across Node.js versions: strip [Map]/[Set] tags
+// and force consistent multi-line formatting with compact: false
+const inspect = (obj: unknown, opts?: InspectOptions) =>
+  rawInspect(obj, { compact: false, ...opts })
+    .replaceAll(' [Map] ', ' ')
+    .replaceAll(' [Set] ', ' ')
+import { PathScurry } from 'path-scurry'
+import t from 'tap'
+import type {
+  ConfigDefinitions,
+  LoadedConfig,
+} from '../src/config/index.ts'
+import {
+  parseAddArgs,
+  parseRemoveArgs,
+} from '../src/parse-add-remove-args.ts'
+
+class MockConfig {
+  values: Record<string, any> = {}
+  positionals: string[] = []
+  options: { projectRoot: string } = { projectRoot: process.cwd() }
+}
+
+Object.assign(Spec.prototype, {
+  [kCustomInspect](this: Spec) {
+    return `Spec {${this}}`
+  },
+})
+
+t.test('parseAddArgs', async t => {
+  await t.test('no item', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = []
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return no dependency items',
+    )
+  })
+
+  await t.test('single item', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = ['foo']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return a single dependency item',
+    )
+  })
+
+  await t.test('multiple items', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = [
+      'foo@^1',
+      'bar@latest',
+      'baz@1.0.0',
+      'github:a/b',
+      'file:./a',
+    ]
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return multiple dependency items',
+    )
+  })
+
+  await t.test('define dev type dep', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.values = {
+      'save-dev': true,
+    } as unknown as OptionsResults<ConfigDefinitions>
+    conf.positionals = ['foo@latest']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency as type=dev',
+    )
+  })
+
+  await t.test('define optional type dep', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.values = {
+      'save-optional': true,
+    } as OptionsResults<ConfigDefinitions>
+    conf.positionals = ['foo@latest']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency as type=optional',
+    )
+  })
+
+  await t.test('define peer dep', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.values = {
+      'save-peer': true,
+    } as OptionsResults<ConfigDefinitions>
+    conf.positionals = ['foo@latest']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency as type=peer',
+    )
+  })
+
+  await t.test('define optional peer dep', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.values = {
+      'save-optional': true,
+      'save-peer': true,
+    } as OptionsResults<ConfigDefinitions>
+    conf.positionals = ['foo@latest']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency as type=peerOptional',
+    )
+  })
+
+  await t.test('define as prod if explicitly defined', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.values = {
+      'save-dev': true,
+      'save-optional': true,
+      'save-peer': true,
+      'save-prod': true,
+    } as OptionsResults<ConfigDefinitions>
+    conf.positionals = ['foo@latest']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency as type=prod',
+    )
+  })
+
+  await t.test('nested folder without workspaces', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+      nested: {
+        folder: {
+          'package.json': JSON.stringify({ name: 'nested-pkg' }),
+        },
+      },
+    })
+    // PathScurry points to project root but cwd is nested folder
+    const scurry = new PathScurry(dir)
+    t.chdir(`${dir}/nested/folder`)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = ['foo@^1']
+    t.matchSnapshot(
+      inspect(parseAddArgs(conf, scurry), { depth: Infinity }),
+      'should return dependency with nested folder DepID',
+    )
+  })
+
+  await t.test('workspaces', async t => {
+    const dir = t.testdir({
+      'nrz.json': JSON.stringify({
+        workspaces: {
+          app: ['./app/*'],
+          utils: ['./utils/*'],
+          other: ['foo', 'bar'],
+        },
+      }),
+      app: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+          }),
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'b',
+            version: '1.0.0',
+          }),
+        },
+      },
+      utils: {
+        c: {
+          'package.json': JSON.stringify({
+            name: 'c',
+            version: '1.0.0',
+          }),
+        },
+      },
+      foo: {
+        'package.json': JSON.stringify({
+          name: 'foo',
+          version: '1.0.0',
+        }),
+      },
+      bar: {
+        'package.json': JSON.stringify({
+          name: 'bar',
+          version: '1.0.0',
+        }),
+      },
+    })
+
+    await t.test(
+      'define single dep of a single workspace',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo']
+        conf.values = {
+          workspace: ['./app/a'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return dependency of a workspace',
+        )
+      },
+    )
+
+    await t.test(
+      'define root dep if no workspace config defined',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo']
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return dependency of root',
+        )
+      },
+    )
+
+    await t.test(
+      'define multiple deps of a single workspace',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = [
+          'foo@^1',
+          'bar@latest',
+          'baz@1.0.0',
+          'github:a/b',
+          'file:./a',
+        ]
+        conf.values = {
+          workspace: ['c'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return multiple deps of a workspace',
+        )
+      },
+    )
+
+    await t.test(
+      'define multiple deps to multiple workspaces',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = [
+          'foo@^1',
+          'bar@latest',
+          'baz@1.0.0',
+          'github:a/b',
+          'file:./a',
+        ]
+        conf.values = {
+          workspace: ['a', 'b', 'c'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return multiple deps to multiple workspaces',
+        )
+      },
+    )
+
+    await t.test(
+      'define single dep to a group of workspaces',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo']
+        conf.values = {
+          'workspace-group': ['other'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return dependency to a group of workspaces',
+        )
+      },
+    )
+
+    await t.test(
+      'define single dep to multiple groups of workspaces',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo']
+        conf.values = {
+          'workspace-group': ['utils', 'other'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return dependency to many groups of workspaces',
+        )
+      },
+    )
+
+    await t.test(
+      'define multiple deps to multiple groups of workspaces',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = [
+          'foo@^1',
+          'bar@latest',
+          'baz@1.0.0',
+          'github:a/b',
+          'file:./a',
+        ]
+        conf.values = {
+          'workspace-group': ['utils', 'other'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseAddArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should return multiple deps to many groups of workspaces',
+        )
+      },
+    )
+
+    await t.test(
+      'file spec rebased relative to workspace importer',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        // ./foo is relative to cwd (project root) but workspace
+        // "a" is at app/a, so the file: spec should be rebased
+        // to ../../foo (relative to app/a)
+        conf.positionals = ['./foo']
+        conf.values = {
+          workspace: ['a'],
+        } as OptionsResults<ConfigDefinitions>
+        const result = parseAddArgs(conf, scurry, monorepo)
+        t.matchSnapshot(
+          inspect(result, { depth: Infinity }),
+          'should rebase file spec relative to workspace',
+        )
+      },
+    )
+
+    await t.test(
+      'file spec pointing to a workspace resolves as workspace:*',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        // ./app/a points to workspace "a", should become workspace:*
+        conf.positionals = ['./app/a']
+        conf.values = {
+          workspace: ['b'],
+        } as OptionsResults<ConfigDefinitions>
+        const result = parseAddArgs(conf, scurry, monorepo)
+        t.matchSnapshot(
+          inspect(result, { depth: Infinity }),
+          'should convert file spec to workspace:*',
+        )
+      },
+    )
+
+    await t.test(
+      'file spec rebased for multiple workspaces',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        // ./foo relative to cwd, installing into workspaces a (app/a)
+        // and c (utils/c) — each should get a different relative path
+        conf.positionals = ['./foo']
+        conf.values = {
+          workspace: ['a', 'c'],
+        } as OptionsResults<ConfigDefinitions>
+        const result = parseAddArgs(conf, scurry, monorepo)
+        t.matchSnapshot(
+          inspect(result, { depth: Infinity }),
+          'should rebase file spec per workspace',
+        )
+      },
+    )
+
+    await t.test(
+      'non-file specs shared across workspaces with file specs',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        // mix of registry and file specs
+        conf.positionals = ['express@^5', './foo']
+        conf.values = {
+          workspace: ['a'],
+        } as OptionsResults<ConfigDefinitions>
+        const result = parseAddArgs(conf, scurry, monorepo)
+        t.matchSnapshot(
+          inspect(result, { depth: Infinity }),
+          'should include both registry and rebased file specs',
+        )
+      },
+    )
+
+    await t.test(
+      'file spec not rebased when cwd matches workspace',
+      async t => {
+        // create an extra dir that is NOT a workspace
+        const dir2 = t.testdir({
+          'nrz.json': JSON.stringify({
+            workspaces: { ws: ['ws-a'] },
+          }),
+          'ws-a': {
+            'package.json': JSON.stringify({
+              name: 'ws-a',
+              version: '1.0.0',
+            }),
+          },
+          external: {
+            'package.json': JSON.stringify({
+              name: 'external',
+              version: '1.0.0',
+            }),
+          },
+        })
+        // cwd is inside the workspace directory, so the relative
+        // path from cwd and from the workspace are the same
+        t.chdir(`${dir2}/ws-a`)
+        unload()
+        const scurry = new PathScurry(dir2)
+        const monorepo = Monorepo.load(dir2)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['../external']
+        conf.values = {
+          workspace: ['ws-a'],
+        } as OptionsResults<ConfigDefinitions>
+        const result = parseAddArgs(conf, scurry, monorepo)
+        t.matchSnapshot(
+          inspect(result, { depth: Infinity }),
+          'should keep file spec unchanged when cwd is workspace dir',
+        )
+      },
+    )
+  })
+})
+
+t.test('parseRemoveArgs', async t => {
+  await t.test('single item', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = ['foo']
+    t.matchSnapshot(
+      inspect(parseRemoveArgs(conf, scurry)),
+      'should return a single dependency item',
+    )
+  })
+
+  await t.test('multiple items', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = ['foo@^1', 'bar@latest', 'baz@1.0.0']
+    t.matchSnapshot(
+      inspect(parseRemoveArgs(conf, scurry)),
+      'should return multiple dependency item',
+    )
+  })
+
+  await t.test('no items', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({ name: 'my-project' }),
+    })
+    t.chdir(dir)
+    const scurry = new PathScurry(dir)
+    const conf = new MockConfig() as LoadedConfig
+    conf.positionals = []
+    t.matchSnapshot(
+      inspect(parseRemoveArgs(conf, scurry)),
+      'should return no items',
+    )
+  })
+
+  await t.test('workspaces', async t => {
+    const dir = t.testdir({
+      'nrz.json': JSON.stringify({
+        workspaces: {
+          app: ['./app/*'],
+          utils: ['./utils/*'],
+          other: ['foo', 'bar'],
+        },
+      }),
+      app: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+          }),
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'b',
+            version: '1.0.0',
+          }),
+        },
+      },
+      utils: {
+        c: {
+          'package.json': JSON.stringify({
+            name: 'c',
+            version: '1.0.0',
+          }),
+        },
+      },
+      foo: {
+        'package.json': JSON.stringify({
+          name: 'foo',
+          version: '1.0.0',
+        }),
+      },
+      bar: {
+        'package.json': JSON.stringify({
+          name: 'bar',
+          version: '1.0.0',
+        }),
+      },
+    })
+
+    await t.test(
+      'remove dep from root if no workspace defined',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo']
+        conf.values = {} as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseRemoveArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should remove dep from root',
+        )
+      },
+    )
+
+    await t.test('single dep of a single workspace', async t => {
+      t.chdir(dir)
+      unload()
+      const scurry = new PathScurry(dir)
+      const monorepo = Monorepo.load(dir)
+      const conf = new MockConfig() as LoadedConfig
+      conf.positionals = ['foo']
+      conf.values = {
+        workspace: ['./app/a'],
+      } as OptionsResults<ConfigDefinitions>
+      t.matchSnapshot(
+        inspect(parseRemoveArgs(conf, scurry, monorepo), {
+          depth: Infinity,
+        }),
+        'should remove single dep of workspace',
+      )
+    })
+
+    await t.test('multiple deps of a single workspace', async t => {
+      t.chdir(dir)
+      unload()
+      const scurry = new PathScurry(dir)
+      const monorepo = Monorepo.load(dir)
+      const conf = new MockConfig() as LoadedConfig
+      conf.positionals = ['foo', 'bar']
+      conf.values = {
+        workspace: ['c'],
+      } as OptionsResults<ConfigDefinitions>
+      t.matchSnapshot(
+        inspect(parseRemoveArgs(conf, scurry, monorepo), {
+          depth: Infinity,
+        }),
+        'should remove multiple deps of workspace',
+      )
+    })
+
+    await t.test('single dep from a workspace group', async t => {
+      t.chdir(dir)
+      unload()
+      const scurry = new PathScurry(dir)
+      const monorepo = Monorepo.load(dir)
+      const conf = new MockConfig() as LoadedConfig
+      conf.positionals = ['foo']
+      conf.values = {
+        'workspace-group': ['app'],
+      } as OptionsResults<ConfigDefinitions>
+      t.matchSnapshot(
+        inspect(parseRemoveArgs(conf, scurry, monorepo), {
+          depth: Infinity,
+        }),
+        'should remove single dep from a single workspace group',
+      )
+    })
+
+    await t.test('multiple deps from a workspace group', async t => {
+      t.chdir(dir)
+      unload()
+      const scurry = new PathScurry(dir)
+      const monorepo = Monorepo.load(dir)
+      const conf = new MockConfig() as LoadedConfig
+      conf.positionals = ['foo', 'bar']
+      conf.values = {
+        'workspace-group': ['app'],
+      } as OptionsResults<ConfigDefinitions>
+      t.matchSnapshot(
+        inspect(parseRemoveArgs(conf, scurry, monorepo), {
+          depth: Infinity,
+        }),
+        'should remove multiple dep from a single workspace group',
+      )
+    })
+
+    await t.test(
+      'multiple deps from multiple workspace groups',
+      async t => {
+        t.chdir(dir)
+        unload()
+        const scurry = new PathScurry(dir)
+        const monorepo = Monorepo.load(dir)
+        const conf = new MockConfig() as LoadedConfig
+        conf.positionals = ['foo', 'bar']
+        conf.values = {
+          'workspace-group': ['utils', 'other'],
+        } as OptionsResults<ConfigDefinitions>
+        t.matchSnapshot(
+          inspect(parseRemoveArgs(conf, scurry, monorepo), {
+            depth: Infinity,
+          }),
+          'should remove multiple dep from multiple workspace groups',
+        )
+      },
+    )
+  })
+})
+
+t.test('unknown spec prefix', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({ name: 'my-project' }),
+  })
+  t.chdir(dir)
+  const scurry = new PathScurry(dir)
+  const conf = new MockConfig() as LoadedConfig
+  conf.positionals = ['foo@loc:foo@^1.x']
+  t.throws(() => parseAddArgs(conf, scurry), {
+    message: /^Unknown spec prefix "loc:" in "foo@loc:foo@\^1\.x"\./,
+    cause: {
+      code: 'ECONFIG',
+      found: 'loc:',
+      validOptions: Array,
+    },
+  })
+  conf.positionals = ['foo@catalog:nope']
+  t.throws(
+    () => parseAddArgs(conf, scurry),
+    {
+      message: 'Catalog "nope" not found for foo@catalog:nope',
+      cause: { code: 'ECONFIG', found: undefined },
+    },
+    'other spec errors pass through',
+  )
+})

@@ -1,9 +1,10 @@
-import { Spec, type SpecOptions, kCustomInspect } from '@nrz/spec'
+import { Spec, kCustomInspect } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
 import { inspect } from 'node:util'
 import t from 'tap'
 import { Edge } from '../src/edge.ts'
 import { Node } from '../src/node.ts'
-import { type GraphLike } from '../src/types.ts'
+import type { GraphLike } from '@nrz/types'
 
 t.cleanSnapshot = s =>
   s.replace(/^(\s+)projectRoot: .*$/gm, '$1projectRoot: #')
@@ -76,4 +77,78 @@ t.test('Edge', async t => {
   const pdmEdge = new Edge('peerOptional', Spec.parse('foo@*'), pdm)
   t.equal(pdmEdge.peer, true)
   t.equal(pdmEdge.peerOptional, true)
+
+  // Test toJSON() method
+  t.test('toJSON', t => {
+    const edgeWithTo = new Edge(
+      'prod',
+      Spec.parse('child@^1.0.0'),
+      root,
+      child,
+    )
+    const edgeJSON = edgeWithTo.toJSON()
+    t.match(edgeJSON, {
+      from: root.id,
+      to: child.id,
+      type: 'prod',
+      spec: 'child@^1.0.0',
+    })
+    t.type(edgeJSON.from, 'string')
+    t.type(edgeJSON.to, 'string')
+    t.type(edgeJSON.type, 'string')
+    t.type(edgeJSON.spec, 'string')
+
+    // Test dangling edge (no to node)
+    const danglingEdgeJSON = dangling.toJSON()
+    t.match(danglingEdgeJSON, {
+      from: child.id,
+      to: undefined,
+      type: 'prod',
+      spec: 'missing@latest',
+    })
+    t.type(danglingEdgeJSON.from, 'string')
+    t.equal(danglingEdgeJSON.to, undefined)
+
+    // Test different dependency types
+    const devEdge = new Edge(
+      'dev',
+      Spec.parse('dev-dep@1.0.0'),
+      root,
+      child,
+    )
+    const devJSON = devEdge.toJSON()
+    t.equal(devJSON.type, 'dev')
+
+    const optionalJSON = optional.toJSON()
+    t.equal(optionalJSON.type, 'optional')
+
+    const peerOptionalJSON = pdmEdge.toJSON()
+    t.equal(peerOptionalJSON.type, 'peerOptional')
+
+    t.end()
+  })
+
+  t.test('toString', t => {
+    const edge = new Edge(
+      'prod',
+      Spec.parse('foo@^1.0.0'),
+      root,
+      child,
+    )
+    const edgeStr = edge.toString()
+    t.equal(edgeStr, `Edge from: ${root.id} --|prod|--> foo`)
+
+    const danglingEdge = new Edge(
+      'prod',
+      Spec.parse('bar', 'latest'),
+      child,
+    )
+    const danglingStr = danglingEdge.toString()
+    t.equal(
+      danglingStr,
+      `Edge from: ${child.id} --|prod|--> bar (missing)`,
+    )
+
+    t.end()
+  })
 })

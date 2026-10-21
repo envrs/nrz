@@ -1,0 +1,49 @@
+---
+title: nrz exec
+sidebar:
+  label: exec
+---
+
+Usage:
+
+<Code
+  code="$ nrz exec [--package=<pkg>] [--call=<cmd>] [command...]"
+  title="Terminal"
+  lang="bash"
+/>
+
+Run a command defined by a package, installing it if necessary. Also
+available as `nrx`.
+
+- If `--package` is set, that package's bins are used.
+- Otherwise, if the first argument is a bin in the local
+  `node_modules/.bin`, it runs without installing anything.
+- Otherwise, the first argument is treated as the package, and its
+  default bin is run: its single bin, or the bin named after the
+  package.
+
+With no command, a shell is spawned with the bins in `PATH`. Flags for
+the bin go after `--`.
+
+Installs go to nrz's XDG data directory. Local `node_modules` is never
+changed.
+
+## Local packages
+
+A path to a local directory (relative to the current directory) runs
+its bins in place. Nothing is installed, and its own `node_modules` is
+used as-is.
+
+<Code
+  code={`$ nrx .
+$ nrx . -- --help
+$ nrz exec --package=. other-bin`}
+  title="Terminal"
+  lang="bash"
+/>
+
+## Aliases
+
+```
+x
+```

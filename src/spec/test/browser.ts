@@ -1,12 +1,24 @@
 import { Range } from '@nrz/semver'
-import { type InspectOptions, inspect } from 'node:util'
+import type { InspectOptions } from 'node:util'
+import { inspect } from 'node:util'
 import t from 'tap'
+import type { Scope, SpecOptions } from '../src/browser.ts'
 import {
   kCustomInspect,
-  type Scope,
-  type SpecOptions,
+  getOptions,
   Spec,
+  isSpec,
+  currentDefaultRegistryName,
 } from '../src/browser.ts'
+
+// there is no default registry any more; most of these cases predate
+// that change, so keep exercising them against the npm registry. The
+// `npm` alias is also no longer built in, so configure it explicitly for
+// the many cases that rely on `npm:` specs.
+const defaultOptions = {
+  registry: 'https://registry.npmjs.org/',
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
 
 Object.assign(Spec.prototype, {
   [kCustomInspect](
@@ -160,12 +172,25 @@ t.test('basic parsing tests', t => {
     'x@https://github.com/user/project',
     'foo@https://bitbucket.org/user/project/a/s/d/f/#semver:1.x::path:src/foo',
     '@a/b@npm:@y/z@1.2.3',
+    '@luca/cases@jsr:@luca/cases@1',
+    '@luca/cases@jsr:1',
+    '@luca/cases@jsr:@luca/cases',
+    '@luca/cases@jsr:',
+    'cases@jsr:@luca/cases',
+    'cases@jsr:@luca/cases@1',
+    '@other/xyz@jsr:@luca/cases',
+    '@other/xyz@jsr:@luca/cases@1',
+    // little bit confusing, but worth testing
+    'foo@npm:@luca/cases@jsr:1',
+    // GitHub registry support
+    'gh:@octocat/hello-world@1.0.0',
+    'foo@gh:@org/bar@1.0.0',
   ]
 
   t.plan(specs.length)
   for (const v of specs) {
     t.test(v, t => {
-      const s = Spec.parse(v)
+      const s = Spec.parse(v, defaultOptions)
       t.matchSnapshot(inspect(s), 'inspect default')
       t.matchSnapshot(
         inspect(s, { colors: true }),
@@ -198,6 +223,9 @@ t.test('parse args', t => {
     'custom:foo',
     'custom:foo@1',
     'github:a/b',
+    'github:a/b#pull/123',
+    'github:a/b#pull/123/head',
+    'github:a/b#pull/123/merge',
     '@a/b@bitbucket:a/b',
     'x@git+ssh://git@notgithub.com/user/foo#1.2.3',
     'x@git+ssh://git@notgithub.com/user/foo',
@@ -366,6 +394,25 @@ t.test('parse args', t => {
     'x@https://github.com/user/project',
     'foo@https://bitbucket.org/user/project/a/s/d/f/#semver:1.x::path:src/foo',
     '@a/b@npm:@y/z@1.2.3',
+    'jsr:@luca/cases@1',
+    'jsr:@luca/cases',
+    '@luca/cases@jsr:1',
+    '@luca/cases@jsr:',
+    'cases@jsr:@luca/cases@1',
+    'cases@jsr:@luca/cases',
+    'foo@npm:@luca/cases@jsr:1',
+    // little bit confusing, but worth testing
+    'npm:@luca/cases@jsr:1',
+    'jsr:@luca/cases@1',
+    '@luca/cases@jsr:@luca/cases@1',
+    '@luca/cases@jsr:1',
+    '@luca/cases@jsr:@a/b@jsr:1',
+    '@luca/cases@jsr:@luca/cases@jsr:@x/y@1',
+    'npm:abbrev',
+    'npm:abbrev@1',
+    // GitHub registry support
+    'gh:@octocat/hello-world@1.0.0',
+    'foo@gh:@org/bar@1.0.0',
   ]
 
   const specOptions: SpecOptions = {
@@ -392,6 +439,154 @@ t.test('parse args', t => {
   })
 })
 
+t.test('getOptions', t => {
+  t.matchSnapshot(getOptions({}), 'should get default options')
+  t.strictSame(
+    getOptions({ catalog: undefined }).catalog,
+    {},
+    'explicit undefined catalog gets the default',
+  )
+  t.end()
+})
+
+t.test('no default registry', t => {
+  t.equal(
+    getOptions({}).registry,
+    undefined,
+    'getOptions does not fill in a registry',
+  )
+  t.equal(
+    getOptions({ registry: 'https://a.com/' }).registry,
+    'https://a.com/',
+    'an explicit registry is preserved',
+  )
+  t.strictSame(
+    getOptions({}).registries,
+    {
+      gh: 'https://npm.pkg.github.com/',
+    },
+    'only built-in aliases (gh) are kept; npm is not pre-registered',
+  )
+
+  const s = Spec.parse('foo@latest', {})
+  t.equal(s.type, 'registry')
+  t.equal(
+    s.registry,
+    undefined,
+    'registry-type spec with no registry',
+  )
+  t.equal(s.conventionalRegistryTarball, undefined)
+
+  const single = Spec.parse('foo@1.2.3', {})
+  t.equal(
+    single.conventionalRegistryTarball,
+    undefined,
+    'cannot guess a tarball url with no registry',
+  )
+
+  t.equal(
+    Spec.parse('foo@npm:foo@1.2.3', {}).final.registry,
+    undefined,
+    'the npm: alias no longer resolves without configuration',
+  )
+
+  t.equal(
+    Spec.parse('foo@npm:foo@1.2.3', {
+      registries: { npm: 'https://registry.npmjs.org/' },
+    }).final.registry,
+    'https://registry.npmjs.org/',
+    'the npm: alias resolves once configured',
+  )
+
+  t.equal(
+    Spec.parse('@acme/foo@1.2.3', {
+      'scoped-registries': { '@acme': 'https://acme.example.com/' },
+    }).registry,
+    'https://acme.example.com/',
+    'scoped registries still win',
+  )
+  t.end()
+})
+
+t.test(
+  'setting default registry does not configure the npm: alias',
+  async t => {
+    // with only --registry set, `npm:` is not a configured alias, so it
+    // is not recognized as a named-registry spec (no subspec/namedRegistry).
+    const s = Spec.parse('a@npm:a@1', { registry: 'https://a.com/' })
+    t.matchStrict(s, {
+      type: 'registry',
+      spec: 'a@npm:a@1',
+      name: 'a',
+      bareSpec: 'npm:a@1',
+      namedRegistry: undefined,
+      subspec: undefined,
+    })
+
+    // configuring the alias explicitly makes it resolve.
+    const configured = Spec.parse('a@npm:a@1', {
+      registry: 'https://a.com/',
+      registries: { npm: 'https://registry.npmjs.org/' },
+    })
+    t.matchStrict(configured, {
+      type: 'registry',
+      spec: 'a@npm:a@1',
+      name: 'a',
+      bareSpec: 'npm:a@1',
+      namedRegistry: 'npm',
+      registry: 'https://registry.npmjs.org/',
+      subspec: {
+        type: 'registry',
+        spec: 'a@1',
+        name: 'a',
+        bareSpec: '1',
+        namedRegistry: 'npm',
+        registry: 'https://registry.npmjs.org/',
+        registrySpec: '1',
+        semver: '1',
+        range: { raw: '1' },
+      },
+    })
+  },
+)
+
+t.test(
+  'currentDefaultRegistryName retrieves short name if available',
+  t => {
+    const options: SpecOptions = {
+      registry: 'https://custom-registry.com/',
+      registries: {
+        npm: 'https://registry.npmjs.org',
+        custom: 'https://custom-registry.com/',
+      },
+    }
+    t.strictSame(
+      currentDefaultRegistryName(
+        'https://custom-registry.com/',
+        options,
+      ),
+      'custom',
+      'should find default (even when custom) registry name',
+    )
+    t.strictSame(
+      currentDefaultRegistryName(
+        'https://registry.npmjs.org',
+        options,
+      ),
+      'npm',
+      'should find any registry name',
+    )
+    t.notOk(
+      currentDefaultRegistryName(
+        'https://not-configured.example.com',
+        options,
+      ),
+      'should return undefined for unknown registries',
+    )
+    t.end()
+  },
+)
+
 t.test('mixing scopes and names', t => {
   const spec = '@a/b@x:@y/z@i:@j/k@1.2.3'
   const scopeRegs: [Scope, string][] = [
@@ -407,7 +602,7 @@ t.test('mixing scopes and names', t => {
       x: 'https://x.com/',
       i: 'https://i.com/',
     },
-    'scope-registries': scopeRegistries,
+    'scoped-registries': scopeRegistries,
   }
   for (const [scope, reg] of scopeRegs) {
     scopeRegistries[scope] = reg
@@ -450,7 +645,7 @@ t.test('invalid workspace specs', t => {
 })
 
 t.test('get final subspec in chain', t => {
-  const subby = Spec.parse('x@npm:y@npm:z@latest')
+  const subby = Spec.parse('x@npm:y@npm:z@latest', defaultOptions)
   const final = subby.final
   t.not(subby, final, 'final is not the alias spec')
   t.not(subby.subspec, final, 'final is not the first alias value')
@@ -460,7 +655,10 @@ t.test('get final subspec in chain', t => {
 })
 
 t.test('simplify in the toString result', t => {
-  const spec = Spec.parse('x@npm:y@npm:z@npm:a@npm:b@latest')
+  const spec = Spec.parse(
+    'x@npm:y@npm:z@npm:a@npm:b@latest',
+    defaultOptions,
+  )
   t.equal(spec.toString(), 'x@npm:b@latest')
   // test the memoization
   t.equal(spec.toString(), 'x@npm:b@latest')
@@ -471,10 +669,7 @@ t.test('parse argument options', t => {
   const nameAndBare = Spec.parse('foo', 'latest')
   const full = Spec.parse('foo@latest')
   t.matchOnly(full, nameAndBare)
-  t.equal(
-    full,
-    Spec.parse(full, { registry: 'https://khulnasoft.com' }),
-  )
+  t.equal(full, Spec.parse(full, { registry: 'https://nrz.khulnasoft.com' }))
   t.end()
 })
 
@@ -488,10 +683,10 @@ t.test('constructor argument options', t => {
 t.test('reverse-lookup registry: specifiers if named', t => {
   // verify that it works regardless of slashiness
   const specs = [
-    'x@registry:http://khulnasoft.com#x@latest',
-    'x@registry:http://khulnasoft.com/#x@latest',
+    'x@registry:http://nrz.khulnasoft.com#x@latest',
+    'x@registry:http://nrz.khulnasoft.com/#x@latest',
   ]
-  const urls = ['http://khulnasoft.com', 'http://khulnasoft.com/']
+  const urls = ['http://nrz.khulnasoft.com', 'http://nrz.khulnasoft.com/']
   const found: Spec[] = []
   for (const s of specs) {
     for (const nrz of urls) {
@@ -500,8 +695,8 @@ t.test('reverse-lookup registry: specifiers if named', t => {
   }
   for (const spec of found) {
     t.equal(spec.namedRegistry, 'nrz')
-    t.equal(spec.registry, 'http://khulnasoft.com/')
-    t.equal(spec.options.registries.nrz, 'http://khulnasoft.com/')
+    t.equal(spec.registry, 'http://nrz.khulnasoft.com/')
+    t.equal(spec.options.registries.nrz, 'http://nrz.khulnasoft.com/')
   }
   t.matchSnapshot(found.map(s => String(s)))
   t.end()
@@ -591,8 +786,10 @@ t.test('try to guess the conventional tarball URL', t => {
     ['x@npm:z@latest'],
   ]
   const options = {
+    ...defaultOptions,
     registries: {
-      nrz: 'https://registry.khulnasoft.com',
+      npm: 'https://registry.npmjs.org/',
+      nrz: 'https://registry.nrz.khulnasoft.com',
     },
   }
   for (const [spec, path, r] of guesses) {
@@ -605,15 +802,56 @@ t.test('try to guess the conventional tarball URL', t => {
       )
     } else {
       const host =
-        r ?
-          'https://registry.khulnasoft.com'
-        : 'https://registry.npmjs.org'
+        r ? 'https://registry.nrz.khulnasoft.com' : 'https://registry.npmjs.org'
       const expect = String(new URL(path, host))
       t.equal(s.conventionalRegistryTarball, expect)
     }
   }
   t.end()
 })
+
+t.test(
+  'conventionalRegistryTarball preserves registry URL path',
+  async t => {
+    // when the configured registry URL includes a path component
+    // (e.g. https://registry.example.com/npm/), the conventional tarball
+    // URL must keep that path prefix rather than resolving against the
+    // host root.
+    const cases: [string, string, string][] = [
+      [
+        'https://registry.example.com/npm/',
+        'foo',
+        'https://registry.example.com/npm/foo/-/foo-1.0.0.tgz',
+      ],
+      [
+        // missing trailing slash should still work
+        'https://registry.example.com/npm',
+        'foo',
+        'https://registry.example.com/npm/foo/-/foo-1.0.0.tgz',
+      ],
+      [
+        'https://registry.example.com/npm/',
+        '@scope/foo',
+        'https://registry.example.com/npm/@scope/foo/-/foo-1.0.0.tgz',
+      ],
+      [
+        // root-path registry behaves the same as before
+        'https://registry.npmjs.org/',
+        'foo',
+        'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
+      ],
+    ]
+    for (const [registry, name, expected] of cases) {
+      const s = Spec.parse(name, '1.0.0', { registry })
+      t.equal(
+        s.conventionalRegistryTarball,
+        expected,
+        `${registry} + ${name}`,
+      )
+    }
+    t.end()
+  },
+)
 
 t.test('git path selector must be relative', async t => {
   const nogood = [
@@ -627,7 +865,8 @@ t.test('git path selector must be relative', async t => {
   ]
   for (const bad of nogood) {
     t.throws(
-      () => Spec.parse(bad),
+      // named form, since a bare URL is not a valid package name
+      () => Spec.parse('x', bad),
       {
         message: 'Invalid path in git selector',
         cause: { spec: Spec },
@@ -637,10 +876,494 @@ t.test('git path selector must be relative', async t => {
   }
 })
 
-t.test(
-  'spec with registry:undefined uses default registry',
-  async t => {
-    const s = Spec.parse('foo@1.x', { registry: undefined })
-    t.equal(s.registry, 'https://registry.npmjs.org/')
-  },
-)
+t.test('spec with registry:undefined has no registry', async t => {
+  const s = Spec.parse('foo@1.x', { registry: undefined })
+  t.equal(s.registry, undefined)
+})
+
+t.test('gh: registry support (basic functionality)', async t => {
+  // Test that gh: registry is properly configured
+  const spec1 = Spec.parse('test', 'gh:@octocat/hello-world@1.0.0')
+  t.equal(spec1.type, 'registry', 'should be registry type')
+  t.equal(spec1.namedRegistry, 'gh', 'should use gh registry')
+  t.equal(
+    spec1.registry,
+    'https://npm.pkg.github.com/',
+    'should map to GitHub registry URL',
+  )
+  t.equal(spec1.name, 'test', 'should preserve package name')
+
+  const spec2 = Spec.parse(
+    'hello-world',
+    'gh:@octocat/hello-world@1.0.0',
+  )
+  t.equal(spec2.type, 'registry', 'should be registry type')
+  t.equal(spec2.namedRegistry, 'gh', 'should use gh registry')
+  t.equal(
+    spec2.registry,
+    'https://npm.pkg.github.com/',
+    'should map to GitHub registry URL',
+  )
+  t.equal(spec2.name, 'hello-world', 'should be useable as an alias')
+
+  // Test that it works with user-provided registries too
+  const spec3 = Spec.parse('test', 'gh:@octocat/hello-world@1.0.0', {
+    registries: { custom: 'https://custom.registry.com/' },
+  })
+  t.equal(
+    spec3.registry,
+    'https://npm.pkg.github.com/',
+    'should still use default gh registry',
+  )
+
+  t.end()
+})
+
+t.test('gh: registry support (additional test cases)', async t => {
+  // Test multiple subspecs
+  const spec1 = Spec.parse(
+    'test',
+    'npm:foo@gh:@octocat/bar@1.0.0',
+    defaultOptions,
+  )
+  t.equal(spec1.type, 'registry', 'should be registry type')
+  t.equal(spec1.namedRegistry, 'npm', 'should use npm registry')
+  t.equal(spec1.name, 'test', 'should preserve package name')
+
+  // Add assertions on spec1.final properties
+  t.equal(
+    spec1.final.type,
+    'registry',
+    'final should be registry type',
+  )
+  t.equal(
+    spec1.final.namedRegistry,
+    'gh',
+    'final should use gh registry',
+  )
+  t.equal(
+    spec1.final.name,
+    '@octocat/bar',
+    'final should have correct package name',
+  )
+  t.equal(
+    spec1.final.bareSpec,
+    '1.0.0',
+    'final should have correct version',
+  )
+
+  // Test parseArgs
+  const spec2 = Spec.parseArgs('gh:@octocat/hello-world@1.0.0')
+  t.equal(spec2.type, 'registry', 'should be registry type')
+  t.equal(spec2.namedRegistry, 'gh', 'should use gh registry')
+  t.equal(
+    spec2.registry,
+    'https://npm.pkg.github.com/',
+    'should map to GitHub registry URL',
+  )
+  t.equal(
+    spec2.name,
+    '@octocat/hello-world',
+    'should infer package name from subspec',
+  )
+
+  t.end()
+})
+
+t.test('catalogs', async t => {
+  const catalog = { a: '1.2.3' }
+  const catalogs = { x: { a: '1.2.3' }, y: { a: '2.3.4' } }
+  const opts = {
+    catalog,
+    catalogs,
+    registries: { npm: 'https://registry.npmjs.org/' },
+  }
+
+  t.match(Spec.parse('a@catalog:', opts), {
+    name: 'a',
+    type: 'catalog',
+    catalog: '',
+    subspec: {
+      name: 'a',
+      bareSpec: '1.2.3',
+    },
+  })
+
+  t.match(Spec.parse('a@catalog:x', opts), {
+    name: 'a',
+    type: 'catalog',
+    catalog: 'x',
+    subspec: {
+      name: 'a',
+      bareSpec: '1.2.3',
+    },
+  })
+
+  t.match(Spec.parse('b@npm:a@catalog:x', opts), {
+    name: 'b',
+    namedRegistry: 'npm',
+    subspec: {
+      name: 'a',
+      type: 'catalog',
+      catalog: 'x',
+      subspec: {
+        name: 'a',
+        bareSpec: '1.2.3',
+      },
+    },
+  })
+
+  t.throws(() => Spec.parse('b@catalog:', opts), {
+    message: 'Package "b" not found in default catalog',
+    cause: {
+      code: 'ECONFIG',
+      spec: 'b@catalog:',
+      validOptions: ['catalog:', 'catalog:x', 'catalog:y'],
+      wanted: undefined,
+    },
+  })
+  t.throws(
+    () =>
+      Spec.parse('a', 'catalog:', {
+        catalog: undefined,
+        catalogs: { x: { a: '1.2.3' } },
+      }),
+    {
+      message: 'Default catalog not found for a@catalog:',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:',
+        validOptions: ['catalog:x'],
+        wanted: ['catalog:x'],
+      },
+    },
+    'undefined default catalog suggests named catalogs',
+  )
+  t.throws(
+    () =>
+      Spec.parse('a', 'catalog:', {
+        catalog: {},
+        catalogs: { x: { a: '1.2.3' } },
+      }),
+    {
+      message: 'Default catalog not found for a@catalog:',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:',
+        validOptions: ['catalog:x'],
+        wanted: ['catalog:x'],
+      },
+    },
+    'empty default catalog is treated as undefined',
+  )
+  t.throws(
+    () =>
+      Spec.parse('b', 'catalog:', {
+        catalog: undefined,
+        catalogs: undefined,
+      }),
+    {
+      message: 'Default catalog not found for b@catalog:',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'b@catalog:',
+        validOptions: undefined,
+        wanted: undefined,
+      },
+      name: 'Error',
+    },
+    'should throw proper catalog missing when no catalogs provided',
+  )
+  t.throws(() => Spec.parse('b@catalog:z', opts), {
+    message: 'Catalog "z" not found for b@catalog:z',
+    cause: {
+      code: 'ECONFIG',
+      spec: 'b@catalog:z',
+      validOptions: ['catalog:', 'catalog:x', 'catalog:y'],
+      wanted: undefined,
+    },
+  })
+  t.throws(() => Spec.parse('a@catalog:z', opts), {
+    message: 'Catalog "z" not found for a@catalog:z',
+    cause: {
+      code: 'ECONFIG',
+      spec: 'a@catalog:z',
+      validOptions: ['catalog:', 'catalog:x', 'catalog:y'],
+      wanted: ['catalog:', 'catalog:x', 'catalog:y'],
+    },
+  })
+  t.throws(
+    () =>
+      Spec.parse('b@catalog:x', {
+        catalogs: { x: { a: '1.2.3' }, y: { b: '1' } },
+      }),
+    {
+      message: 'Package "b" not found in catalog "x"',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'b@catalog:x',
+        validOptions: ['catalog:x', 'catalog:y'],
+        wanted: ['catalog:y'],
+      },
+    },
+    'suggests catalogs defining the missing dep',
+  )
+  t.throws(
+    () =>
+      Spec.parse('a@catalog:x', {
+        catalog: { a: '' },
+        catalogs: { x: { b: '1' } },
+      }),
+    {
+      message: 'Package "a" not found in catalog "x"',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:x',
+        validOptions: ['catalog:', 'catalog:x'],
+        wanted: undefined,
+      },
+    },
+    'empty catalog entries are not suggested',
+  )
+  t.throws(
+    () => Spec.parse('a@catalog:', { catalog: { a: '' } }),
+    {
+      message: 'Package "a" not found in default catalog',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:',
+        validOptions: ['catalog:'],
+        wanted: undefined,
+      },
+    },
+    'empty catalog entry is not found',
+  )
+  t.throws(
+    () => Spec.parse('a@catalog:constructor', { catalogs: {} }),
+    {
+      message:
+        'Catalog "constructor" not found for a@catalog:constructor',
+      cause: {
+        code: 'ECONFIG',
+        validOptions: undefined,
+        wanted: undefined,
+      },
+    },
+    'prototype keys are not catalog names',
+  )
+  t.throws(
+    () => Spec.parse('constructor@catalog:', { catalog }),
+    {
+      message: 'Package "constructor" not found in default catalog',
+      cause: {
+        code: 'ECONFIG',
+        validOptions: ['catalog:'],
+        wanted: undefined,
+      },
+    },
+    'prototype keys are not catalog entries',
+  )
+  t.throws(
+    () => Spec.parse('a@catalog:', { catalog: { a: 'catalog:' } }),
+    {
+      message:
+        'Catalog entry "a" in default catalog cannot be a catalog: spec',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:',
+        found: 'catalog:',
+      },
+    },
+    'catalog entries cannot point at the default catalog',
+  )
+  t.throws(
+    () =>
+      Spec.parse('a@catalog:x', {
+        catalogs: { x: { a: 'catalog:y' }, y: { a: '1' } },
+      }),
+    {
+      message:
+        'Catalog entry "a" in catalog "x" cannot be a catalog: spec',
+      cause: {
+        code: 'ECONFIG',
+        spec: 'a@catalog:x',
+        found: 'catalog:y',
+      },
+    },
+    'catalog entries cannot point at other catalogs',
+  )
+
+  t.test(
+    'propagates configured registry to catalog subspec',
+    async t => {
+      const registry = 'https://registry.example.com/'
+      const parsed = Spec.parse('a@catalog:', { ...opts, registry })
+      t.equal(parsed.type, 'catalog')
+      t.equal(
+        parsed.subspec?.registry,
+        registry,
+        'subspec inherits configured registry',
+      )
+      t.equal(
+        parsed.registry,
+        registry,
+        'catalog spec exposes registry from its subspec',
+      )
+    },
+  )
+})
+
+t.test('undefined protocols', t => {
+  const protocolError = (proto: string, spec: string) => ({
+    message: `Protocol ${proto}: is not defined`,
+    cause: { spec, found: `${proto}:` },
+  })
+
+  t.throws(
+    () => Spec.parse('x', 'custom:1.x'),
+    protocolError('custom', 'x@custom:1.x'),
+  )
+  t.throws(
+    () => Spec.parseArgs('custom:foo'),
+    protocolError('custom', '(unknown)@custom:foo'),
+  )
+  t.throws(
+    () => Spec.parse('x@nrz:1.x'),
+    protocolError('nrz', 'x@nrz:1.x'),
+  )
+  t.throws(
+    () => Spec.parse('nrz:foo@1'),
+    protocolError('nrz', 'nrz:foo@1'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'link:../x'),
+    protocolError('link', 'x@link:../x'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'portal:../x'),
+    protocolError('portal', 'x@portal:../x'),
+  )
+  t.throws(
+    () => Spec.parse('x', 'patch:foo@1'),
+    protocolError('patch', 'x@patch:foo@1'),
+  )
+
+  t.equal(Spec.parse('x', 'C:/x/y').type, 'file')
+  t.equal(Spec.parse('x', 'C:\\x\\y').distTag, 'C:\\x\\y')
+  t.equal(Spec.parse('x', 'notgithub.com:user/foo').type, 'git')
+  t.equal(Spec.parse('x', 'user/foo#semver:^1').type, 'git')
+  t.equal(Spec.parse('x@not-git@hostname.com:some/repo').type, 'git')
+  t.equal(Spec.parse('x', 'next-9').distTag, 'next-9')
+  t.equal(Spec.parse('x', 'latest').distTag, 'latest')
+  t.equal(Spec.parse('x', 'git@github.com:u/r').type, 'git')
+  t.equal(Spec.parse('npm:foo@1').type, 'registry')
+
+  t.equal(
+    Spec.parse('x', 'custom:foo@1', {
+      registries: { custom: 'https://example.com/' },
+    }).namedRegistry,
+    'custom',
+  )
+  t.equal(
+    Spec.parse('x', 'myhost:a/b', {
+      'git-hosts': {
+        myhost: 'git+ssh://git@myhost.com:$1/$2.git',
+      },
+    }).namedGitHost,
+    'myhost',
+  )
+  t.equal(
+    Spec.parse('x', 'deno:@a/b@1', {
+      'jsr-registries': { deno: 'https://jsr.example.com/' },
+    }).namedJsrRegistry,
+    'deno',
+  )
+
+  t.match(
+    Spec.parse('gh:@octocat/hello-world@1.0.0', defaultOptions),
+    { namedRegistry: 'gh' },
+  )
+  t.throws(() => Spec.parse('github:user/foo'), {
+    message: 'Invalid package name: not usable as a path segment',
+  })
+  t.throws(() => Spec.parse('https://server.com/foo.tgz'), {
+    message: 'Invalid package name: not usable as a path segment',
+  })
+
+  t.end()
+})
+
+t.test('isSpec', async t => {
+  // Valid Spec instance
+  const validSpec = Spec.parse('foo@1.2.3')
+  t.equal(
+    isSpec(validSpec),
+    true,
+    'should identify a valid Spec instance',
+  )
+
+  // Invalid values
+  t.equal(isSpec(null), false, 'null is not a Spec')
+  t.equal(isSpec(undefined), false, 'undefined is not a Spec')
+  t.equal(isSpec('foo@1.2.3'), false, 'string is not a Spec')
+  t.equal(isSpec(123), false, 'number is not a Spec')
+  t.equal(isSpec([]), false, 'array is not a Spec')
+  t.equal(isSpec({}), false, 'empty object is not a Spec')
+
+  // Object with missing properties
+  t.equal(
+    isSpec({ spec: 'foo@1.2.3', bareSpec: '1.2.3', name: 'foo' }),
+    false,
+    'missing type and options',
+  )
+
+  // Object with incorrect property types
+  t.equal(
+    isSpec({
+      spec: 123,
+      bareSpec: '1.2.3',
+      name: 'foo',
+      type: 'registry',
+      options: {},
+    }),
+    false,
+    'spec property is not a string',
+  )
+
+  t.equal(
+    isSpec({
+      spec: 'foo@1.2.3',
+      bareSpec: 123,
+      name: 'foo',
+      type: 'registry',
+      options: {},
+    }),
+    false,
+    'bareSpec property is not a string',
+  )
+
+  t.equal(
+    isSpec({
+      spec: 'foo@1.2.3',
+      bareSpec: '1.2.3',
+      name: 123,
+      type: 'registry',
+      options: {},
+    }),
+    false,
+    'name property is not a string',
+  )
+
+  // An object that looks and behaves like a Spec
+  t.equal(
+    isSpec({
+      spec: 'foo@1.2.3',
+      bareSpec: '1.2.3',
+      name: 'foo',
+      type: 'registry',
+      options: {},
+    }),
+    true,
+    'object with all required properties should pass the type guard',
+  )
+})

@@ -1,0 +1,756 @@
+import { existsSync, linkSync, readFileSync, statSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import t from 'tap'
+import type { Test } from 'tap'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import { build } from '../src/build.ts'
+import { PackageJson } from '@nrz/package-json'
+import { PathScurry } from 'path-scurry'
+
+const scurry = new PathScurry(t.testdirName)
+const packageJson = new PackageJson()
+
+t.test('build function', async t => {
+  t.test('builds when no nodes need building', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {},
+      }),
+      'nrz.json': JSON.stringify({}),
+      node_modules: {
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {
+            registries: {
+              npm: 'https://registry.npmjs.org/',
+            },
+          },
+          nodes: {
+            [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+          },
+          edges: {},
+        }),
+      },
+    })
+
+    // Call build function
+    const result = await build({
+      projectRoot: dir,
+      packageJson,
+      scurry,
+      target: ':scripts',
+    })
+
+    // The function should complete without errors
+    t.ok(result, 'should return build result')
+    t.ok('success' in result, 'should have success array')
+    t.ok('failure' in result, 'should have failure array')
+    t.equal(
+      result.success.length,
+      0,
+      'should have no successful builds when no nodes need building',
+    )
+    t.equal(
+      result.failure.length,
+      0,
+      'should have no failed builds when no nodes need building',
+    )
+    t.pass('build completed successfully with no nodes to build')
+  })
+
+  t.test('handles missing node_modules directory', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {
+          lodash: '4',
+        },
+      }),
+      'nrz.json': JSON.stringify({}),
+    })
+
+    // Call build function - should handle missing node_modules
+    const result = await build({
+      projectRoot: dir,
+      packageJson,
+      scurry,
+      target: ':scripts',
+    })
+
+    // The function should complete without errors even without node_modules
+    t.ok(result, 'should return build result')
+    t.equal(
+      result.success.length,
+      0,
+      'should have no successful builds (no node_modules)',
+    )
+    t.equal(
+      result.failure.length,
+      0,
+      'should have no failed builds (no node_modules)',
+    )
+    t.pass('build handled missing node_modules directory gracefully')
+  })
+
+  t.test(
+    'handles corrupted lockfile build data gracefully',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {},
+        }),
+        'nrz-lock.json': 'invalid json content',
+        node_modules: {
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: {
+              registry: 'https://registry.npmjs.org/',
+            },
+            nodes: {
+              [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+            },
+            edges: {},
+          }),
+        },
+      })
+
+      // Call build function - should handle corrupted lockfile gracefully
+      const result = await build({
+        projectRoot: dir,
+        packageJson,
+        scurry,
+        target: ':scripts',
+      })
+
+      // The function should complete without errors even with corrupted lockfile
+      t.ok(result, 'should return build result')
+      t.ok(result.success, 'should have success array')
+      t.ok(result.failure, 'should have failure array')
+      t.pass('build handled corrupted lockfile gracefully')
+    },
+  )
+
+  t.test('build function with no lockfile data', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {
+          'test-pkg': '1.0.0',
+        },
+      }),
+      node_modules: {
+        'test-pkg': {
+          'package.json': JSON.stringify({
+            name: 'test-pkg',
+            version: '1.0.0',
+          }),
+        },
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {
+            registries: {
+              npm: 'https://registry.npmjs.org/',
+            },
+          },
+          nodes: {
+            [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+            [joinDepIDTuple(['registry', '', 'test-pkg@1.0.0'])]: [
+              0,
+              'test-pkg',
+              'sha512-testintegrity==',
+              null,
+              null,
+              {
+                name: 'test-pkg',
+                version: '1.0.0',
+              },
+            ],
+          },
+          edges: {
+            [`${joinDepIDTuple(['file', '.'])} test-pkg`]: `prod 1.0.0 ${joinDepIDTuple(['registry', '', 'test-pkg@1.0.0'])}`,
+          },
+        }),
+      },
+    })
+
+    // Call build function - should handle missing lockfile gracefully
+    const result = await build({
+      projectRoot: dir,
+      packageJson,
+      scurry,
+      target: ':scripts',
+    })
+
+    // Verify result
+    t.ok(result.success, 'should have success array')
+    t.ok(result.failure, 'should have failure array')
+
+    // Since there's no nrz-lock.json file at the project root,
+    // build results won't be persisted to a lockfile
+    const lockfilePath = resolve(dir, 'nrz-lock.json')
+    t.notOk(
+      existsSync(lockfilePath),
+      'no lockfile should be created when none existed initially',
+    )
+
+    t.pass('build handled missing lockfile data gracefully')
+  })
+
+  t.end()
+})
+
+t.test('hidden lockfile is only saved for a nrz install', async t => {
+  const pkgId = joinDepIDTuple(['registry', '', 'test-pkg@1.0.0'])
+  const testPkg = () => ({
+    'package.json': JSON.stringify({
+      name: 'test-pkg',
+      version: '1.0.0',
+    }),
+  })
+  const manifest = JSON.stringify({
+    name: 'test-project',
+    version: '1.0.0',
+    dependencies: { 'test-pkg': '1.0.0' },
+  })
+  const dir = t.testdir({
+    // installed by another client: no store, packages are plain dirs
+    foreign: {
+      'package.json': manifest,
+      'nrz.json': JSON.stringify({}),
+      node_modules: { 'test-pkg': testPkg() },
+    },
+    // installed by nrz: packages are linked from the store
+    nrz: {
+      'package.json': manifest,
+      'nrz.json': JSON.stringify({}),
+      node_modules: {
+        '.nrz': {
+          [pkgId]: { node_modules: { 'test-pkg': testPkg() } },
+        },
+        'test-pkg': t.fixture(
+          'symlink',
+          join('.nrz', pkgId, 'node_modules', 'test-pkg'),
+        ),
+      },
+    },
+  })
+  const hiddenLockfile = (root: string) =>
+    resolve(root, 'node_modules/.nrz-lock.json')
+  const run = (root: string) =>
+    build({
+      projectRoot: root,
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(root),
+      target: ':scripts',
+    })
+
+  const foreign = resolve(dir, 'foreign')
+  t.strictSame(
+    await run(foreign),
+    { success: [], failure: [] },
+    'should find nothing to build in a foreign node_modules',
+  )
+  t.notOk(
+    existsSync(hiddenLockfile(foreign)),
+    'building a foreign node_modules must not write a hidden lockfile',
+  )
+
+  const nrz = resolve(dir, 'nrz')
+  t.strictSame(
+    await run(nrz),
+    { success: [], failure: [] },
+    'should find nothing to build in the nrz node_modules',
+  )
+  t.ok(
+    existsSync(hiddenLockfile(nrz)),
+    'building a nrz node_modules saves the hidden lockfile',
+  )
+  const saved = JSON.parse(readFileSync(hiddenLockfile(nrz), 'utf8'))
+  t.ok(
+    saved.nodes[pkgId],
+    'should persist the nodes found in the store',
+  )
+})
+
+const testPkgId1 = joinDepIDTuple([
+  'registry',
+  'https://registry.npmjs.org/',
+  'target-pkg-1',
+  '1.0.0',
+])
+const testPkgId2 = joinDepIDTuple([
+  'registry',
+  'https://registry.npmjs.org/',
+  'other-pkg',
+  '1.0.0',
+])
+
+// 2 registry pkgs, both buildState: needed
+const targetFixture = (t: Test) =>
+  t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test-project',
+      version: '1.0.0',
+      dependencies: {
+        'target-pkg-1': '1.0.0',
+        'other-pkg': '1.0.0',
+      },
+    }),
+    'nrz.json': JSON.stringify({}),
+    node_modules: {
+      'target-pkg-1': {
+        'package.json': JSON.stringify({
+          name: 'target-pkg-1',
+          version: '1.0.0',
+        }),
+      },
+      'other-pkg': {
+        'package.json': JSON.stringify({
+          name: 'other-pkg',
+          version: '1.0.0',
+        }),
+      },
+      '.nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {
+          registry: 'https://registry.npmjs.org/',
+        },
+        nodes: {
+          [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+          [testPkgId1]: [
+            0,
+            'target-pkg-1',
+            'sha512-testintegrity==',
+            null,
+            null,
+            {
+              name: 'target-pkg-1',
+              version: '1.0.0',
+            },
+            null,
+            null,
+            null,
+            1, // buildState: needed
+          ],
+          [testPkgId2]: [
+            0,
+            'other-pkg',
+            'sha512-testintegrity==',
+            null,
+            null,
+            {
+              name: 'other-pkg',
+              version: '1.0.0',
+            },
+            null,
+            null,
+            null,
+            1, // buildState: needed
+          ],
+        },
+        edges: {
+          [`${joinDepIDTuple(['file', '.'])} target-pkg-1`]: `prod 1.0.0 ${testPkgId1}`,
+          [`${joinDepIDTuple(['file', '.'])} other-pkg`]: `prod 1.0.0 ${testPkgId2}`,
+        },
+      }),
+    },
+  })
+
+t.test('build with target option', async t => {
+  t.test('builds only nodes matching target query', async t => {
+    const dir = targetFixture(t)
+
+    // Call build with target query - only build packages with name starting with "target-"
+    const result = await build({
+      projectRoot: dir,
+      packageJson,
+      scurry,
+      target: '[name^="target-"]',
+    })
+
+    // Verify result
+    t.ok(result, 'should return build result')
+    t.equal(
+      result.success.length,
+      1,
+      'should have one successful build (target-pkg-1 matches query)',
+    )
+    t.equal(result.failure.length, 0, 'should have no failed builds')
+    t.pass('build with target option completed')
+  })
+
+  t.test('default target builds nodes marked needed', async t => {
+    // e.g. binding.gyp only, no scripts in package.json
+    const id = joinDepIDTuple([
+      'registry',
+      'https://registry.npmjs.org/',
+      'gyp-pkg',
+      '1.0.0',
+    ])
+    const manifest = { name: 'gyp-pkg', version: '1.0.0' }
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: { 'gyp-pkg': '1.0.0' },
+      }),
+      'nrz.json': JSON.stringify({}),
+      node_modules: {
+        'gyp-pkg': { 'package.json': JSON.stringify(manifest) },
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: { registry: 'https://registry.npmjs.org/' },
+          nodes: {
+            [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+            // buildState: needed
+            [id]: [
+              0,
+              'gyp-pkg',
+              null,
+              null,
+              null,
+              manifest,
+              null,
+              null,
+              null,
+              1,
+            ],
+          },
+          edges: {
+            [`${joinDepIDTuple(['file', '.'])} gyp-pkg`]: `prod 1.0.0 ${id}`,
+          },
+        }),
+      },
+    })
+    const result = await build({
+      projectRoot: dir,
+      packageJson,
+      scurry,
+      target: ':scripts:not(:built)',
+    })
+    t.strictSame(
+      result.success.map(n => n.name),
+      ['gyp-pkg'],
+    )
+  })
+
+  t.test(':skills builds pkgs that ship skills', async t => {
+    const { build } = await t.mockImport<
+      typeof import('../src/build.ts')
+    >('../src/build.ts', {
+      '../src/skills/lazy.ts': {
+        hasSkills: async (n: { name: string }) =>
+          n.name === 'other-pkg',
+      },
+    })
+    const result = await build({
+      projectRoot: targetFixture(t),
+      packageJson,
+      scurry,
+      target: ':skills',
+    })
+    t.strictSame(
+      result.success.map(n => n.name),
+      ['other-pkg'],
+    )
+  })
+
+  t.end()
+})
+
+t.test('missing security data fails closed', async t => {
+  const mockBuild = async (
+    timedOut: boolean,
+    scanned: DepID[] = [testPkgId1],
+  ) => {
+    const { build } = await t.mockImport<
+      typeof import('../src/build.ts')
+    >('../src/build.ts', {
+      '@nrz/security-archive': {
+        ...(await import('@nrz/security-archive')),
+        SecurityArchive: {
+          start: async () => ({
+            timedOut,
+            // by default only target-pkg-1 got scanned
+            has: (id: DepID) => scanned.includes(id),
+            get: () => undefined,
+          }),
+        },
+      },
+    })
+    return build
+  }
+
+  t.test('skips registry pkgs left out by a timeout', async t => {
+    const build = await mockBuild(true)
+    const result = await build({
+      projectRoot: targetFixture(t),
+      packageJson,
+      scurry,
+      target: ':not(:malware)',
+    })
+    t.strictSame(
+      result.success.map(n => n.name),
+      ['target-pkg-1'],
+      'should only build scanned pkg',
+    )
+    t.strictSame(
+      result.skipped?.map(n => n.name),
+      ['other-pkg'],
+      'should report skipped pkg',
+    )
+    t.equal(result.skippedReason, 'timeout', 'should blame timeout')
+  })
+
+  t.test('skips registry pkgs not scanned yet', async t => {
+    const build = await mockBuild(false)
+    const result = await build({
+      projectRoot: targetFixture(t),
+      packageJson,
+      scurry,
+      target: ':not(:malware)',
+    })
+    t.strictSame(
+      result.success.map(n => n.name),
+      ['target-pkg-1'],
+      'should only build scanned pkg',
+    )
+    t.strictSame(
+      result.skipped?.map(n => n.name),
+      ['other-pkg'],
+      'should report skipped pkg',
+    )
+    t.equal(
+      result.skippedReason,
+      'unscanned',
+      'should blame missing scan',
+    )
+  })
+
+  t.test('keeps all when all scanned', async t => {
+    const build = await mockBuild(false, [testPkgId1, testPkgId2])
+    const result = await build({
+      projectRoot: targetFixture(t),
+      packageJson,
+      scurry,
+      target: ':not(:malware)',
+    })
+    t.strictSame(
+      result.success.map(n => n.name).sort(),
+      ['other-pkg', 'target-pkg-1'],
+      'should build both pkgs',
+    )
+    t.equal(result.skipped, undefined, 'should skip nothing')
+    t.equal(result.skippedReason, undefined, 'should have no reason')
+  })
+})
+
+t.test('build with optional dependencies that fail', async t => {
+  t.test(
+    'handles optional dependency build failures gracefully',
+    async t => {
+      const optionalPkgId = joinDepIDTuple([
+        'registry',
+        '',
+        'optional-fail-pkg@1.0.0',
+      ])
+
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          optionalDependencies: {
+            'optional-fail-pkg': '1.0.0',
+          },
+        }),
+        'nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {
+            registry: 'https://registry.npmjs.org/',
+          },
+          nodes: {
+            [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+            [optionalPkgId]: [
+              0,
+              'optional-fail-pkg',
+              'sha512-testintegrity==',
+            ],
+          },
+          edges: {
+            [`${joinDepIDTuple(['file', '.'])} optional-fail-pkg`]: `optional 1.0.0 ${optionalPkgId}`,
+          },
+        }),
+        node_modules: {
+          'optional-fail-pkg': {
+            'package.json': JSON.stringify({
+              name: 'optional-fail-pkg',
+              version: '1.0.0',
+              scripts: {
+                install: 'exit 1',
+              },
+            }),
+          },
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: {
+              registry: 'https://registry.npmjs.org/',
+            },
+            nodes: {
+              [joinDepIDTuple(['file', '.'])]: [0, 'test-project'],
+              [optionalPkgId]: [
+                1, // flags: optional (LockfileNodeFlagOptional = 1)
+                'optional-fail-pkg',
+                'sha512-testintegrity==',
+                null,
+                null,
+                {
+                  name: 'optional-fail-pkg',
+                  version: '1.0.0',
+                  scripts: {
+                    install: 'exit 1',
+                  },
+                },
+                null,
+                null,
+                null,
+                1, // buildState: needed
+              ],
+            },
+            edges: {
+              [`${joinDepIDTuple(['file', '.'])} optional-fail-pkg`]: `optional 1.0.0 ${optionalPkgId}`,
+            },
+          }),
+        },
+      })
+
+      // Call build function - optional dependency should fail but not break the build
+      const result = await build({
+        projectRoot: dir,
+        packageJson,
+        scurry,
+        target: ':scripts',
+      })
+
+      // Verify result structure
+      t.ok(result, 'should return build result')
+      t.ok('success' in result, 'should have success array')
+      t.ok('failure' in result, 'should have failure array')
+      t.ok(
+        Array.isArray(result.success),
+        'success should be an array',
+      )
+      t.ok(
+        Array.isArray(result.failure),
+        'failure should be an array',
+      )
+
+      // The optional dependency with failing script should be in failure array
+      t.equal(
+        result.failure.length,
+        1,
+        'should have one failed optional dependency',
+      )
+      t.equal(
+        result.failure[0]?.name,
+        'optional-fail-pkg',
+        'failed node should be optional-fail-pkg',
+      )
+
+      t.pass('build handled optional dependency failure correctly')
+    },
+  )
+
+  t.end()
+})
+
+t.test(
+  'scripts of store-linked packages leave the store alone',
+  async t => {
+    const id = joinDepIDTuple(['registry', '', 's@1.0.0'])
+    const manifest = {
+      name: 's',
+      version: '1.0.0',
+      scripts: { postinstall: 'node w.js' },
+    }
+    const dir = t.testdir({
+      store: {
+        'package.json': JSON.stringify(manifest),
+        'index.js': 'index',
+        'w.js': `require('fs').appendFileSync('index.js', '//x')`,
+      },
+      proj: {
+        'package.json': JSON.stringify({
+          name: 'proj',
+          version: '1.0.0',
+          dependencies: { s: '1.0.0' },
+        }),
+        'nrz.json': JSON.stringify({}),
+        node_modules: {
+          s: t.fixture('symlink', `./.nrz/${id}/node_modules/s`),
+          '.nrz': { [id]: { node_modules: { s: {} } } },
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: {},
+            nodes: {
+              [joinDepIDTuple(['file', '.'])]: [0, 'proj'],
+              // buildState: needed
+              [id]: [
+                0,
+                's',
+                null,
+                null,
+                null,
+                manifest,
+                null,
+                null,
+                null,
+                1,
+              ],
+            },
+            edges: {
+              [`${joinDepIDTuple(['file', '.'])} s`]: `prod 1.0.0 ${id}`,
+            },
+          }),
+        },
+      },
+    })
+    const projectRoot = resolve(dir, 'proj')
+    const pkg = resolve(
+      projectRoot,
+      'node_modules/.nrz',
+      id,
+      'node_modules/s',
+    )
+    for (const f of ['package.json', 'index.js', 'w.js']) {
+      linkSync(resolve(dir, 'store', f), resolve(pkg, f))
+    }
+    const result = await build({
+      projectRoot,
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(projectRoot),
+      target: ':scripts',
+    })
+    t.strictSame(
+      result.success.map(n => n.name),
+      ['s'],
+    )
+    t.equal(
+      readFileSync(resolve(pkg, 'index.js'), 'utf8'),
+      'index//x',
+    )
+    t.equal(
+      readFileSync(resolve(dir, 'store/index.js'), 'utf8'),
+      'index',
+    )
+    for (const f of ['package.json', 'index.js', 'w.js']) {
+      t.equal(statSync(resolve(dir, 'store', f)).nlink, 1, f)
+    }
+  },
+)

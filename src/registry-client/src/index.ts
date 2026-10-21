@@ -1,52 +1,132 @@
 import { Cache } from '@nrz/cache'
-import { register } from '@nrz/cache-unzip'
+import { register as cacheUnzipRegister } from '@nrz/cache-unzip'
 import { error } from '@nrz/error-cause'
-import { type Integrity } from '@nrz/types'
+import { asError } from '@nrz/types'
+import { logRequest } from '@nrz/output'
+import type { Integrity } from '@nrz/types'
 import { urlOpen } from '@nrz/url-open'
 import { XDG } from '@nrz/xdg'
+import { randomUUID } from 'node:crypto'
+import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
+import { dirname, resolve } from 'node:path'
+import { setMaxListeners } from 'node:events'
+import { pipeline } from 'node:stream'
+import type { Readable } from 'node:stream'
 import { setTimeout } from 'node:timers/promises'
-import { loadPackageJson } from 'package-json-from-dist'
-import { Agent, RetryAgent, type Dispatcher } from 'undici'
+import { createGunzip } from 'node:zlib'
+import type { Agent, Dispatcher } from 'undici'
+import { RetryAgent } from 'undici'
+import { userAgent } from '@nrz/user-agent'
 import { addHeader } from './add-header.ts'
+import type { RegistryURLs, Token } from './auth.ts'
 import {
+  clearRuntimeTokens,
   deleteToken,
   getKC,
   getToken,
+  getTokenByURL,
   isToken,
   keychains,
+  normalizeRegistryKey,
+  registryBase,
+  registryKeys,
+  runtimeTokens,
+  setRuntimeToken,
   setToken,
-  type Token,
 } from './auth.ts'
-import { CacheEntry, type JSONObj } from './cache-entry.ts'
-import { bun, deno, node } from './env.ts'
-import { handle304Response } from './handle-304-response.ts'
+import type { JSONObj } from './cache-entry.ts'
+import { CacheEntry } from './cache-entry.ts'
+import { register } from './cache-revalidate.ts'
+import { getHeader } from './get-header.ts'
+import { handleCacheHitResponse } from './handle-304-response.ts'
 import { otplease } from './otplease.ts'
+import { getDispatcher } from './proxy.ts'
 import { isRedirect, redirect } from './redirect.ts'
+import {
+  assertOk,
+  registryErrorMessage,
+  requestError,
+  statusText,
+} from './registry-error.ts'
+import type { ErrorResponse } from './registry-error.ts'
 import { setCacheHeaders } from './set-cache-headers.ts'
-import { logRequest } from '@nrz/output'
-import {
-  isTokenResponse,
-  type TokenResponse,
-} from './token-response.ts'
-import {
-  isWebAuthChallenge,
-  type WebAuthChallenge,
-} from './web-auth-challenge.ts'
-export {
-  type JSONObj,
-  type CacheEntry,
-  type Token,
-  type WebAuthChallenge,
-  type TokenResponse,
-}
-export { keychains, getKC, setToken, deleteToken, isToken }
+import type { TokenResponse } from './token-response.ts'
+import { getTokenResponse } from './token-response.ts'
+import type { WebAuthChallenge } from './web-auth-challenge.ts'
+import { getWebAuthChallenge } from './web-auth-challenge.ts'
+import { collectHeaders, readBody } from './response.ts'
+import { retry } from './retry.ts'
+import { storeRoot } from './store-root.ts'
+import { oidc } from './oidc.ts'
+import type { OidcOptions } from './oidc.ts'
 
-export type RegistryClientOptions = {
+// eslint-disable-next-line no-console
+const log = (msg: string) => console.error(msg)
+
+export {
+  assertOk,
+  CacheEntry,
+  clearRuntimeTokens,
+  deleteToken,
+  getKC,
+  getToken,
+  getTokenByURL,
+  isToken,
+  keychains,
+  normalizeRegistryKey,
+  oidc,
+  registryBase,
+  registryErrorMessage,
+  registryKeys,
+  requestError,
+  runtimeTokens,
+  setRuntimeToken,
+  setToken,
+  storeRoot,
+  type ErrorResponse,
+  type JSONObj,
+  type OidcOptions,
+  type RegistryURLs,
+  type Token,
+  type TokenResponse,
+  type WebAuthChallenge,
+}
+
+/** A response body read straight out of the cache file. */
+export type CachedBody = {
+  /** the cache file it came from */
+  path: string
+  /** the cache key of the request */
+  key: string
+  /** the body, a view into the file's bytes */
+  body: Buffer
+  /** the hash the entry was stored under, if it has one */
+  integrity?: Integrity
+  /** the body on disk is gzipped (`body` may be un-gzipped) */
+  gzip: boolean
+}
+
+export type CacheableMethod = 'GET' | 'HEAD'
+export const isCacheableMethod = (m: unknown): m is CacheableMethod =>
+  m === 'GET' || m === 'HEAD'
+
+// A head is about a kilobyte. This limit exists only so that a corrupt
+// length cannot make us allocate something enormous.
+const maxHeadSize = 1024 * 1024
+
+export const cacheKey = (method: string, url: URL | string): string =>
+  `${method !== 'GET' ? method + ' ' : ''}${url}`
+
+export type RegistryClientOptions = RegistryURLs & {
   /**
    * Path on disk where the cache should be stored
-   * @default `$HOME/.config/nrz/cache`
+   *
+   * Defaults to the XDG cache folder for `nrz/registry-client`
    */
   cache?: string
+  /** Global store root. Defaults to {@link storeRoot} of `cache`. */
+  storeRoot?: string
   /**
    * Number of retries to perform when encountering network errors or
    * likely-transient errors from git hosts.
@@ -61,6 +141,26 @@ export type RegistryClientOptions = {
 
   /** the identity to use for storing auth tokens */
   identity?: string
+
+  /**
+   * If the server does not serve a `stale-while-revalidate` value in the
+   * `cache-control` header, then this multiplier is applied to the `max-age`
+   * or `s-maxage` values.
+   *
+   * By default, this is `60`, so for example a response that is cacheable for
+   * 5 minutes will allow a stale response while revalidating for up to 5
+   * hours.
+   *
+   * If the server *does* provide a `stale-while-revalidate` value, then that
+   * is always used.
+   *
+   * Set to 0 to prevent any `stale-while-revalidate` behavior unless
+   * explicitly allowed by the server's `cache-control` header.
+   */
+  'stale-while-revalidate-factor'?: number
+
+  /** aborts every request this client makes */
+  signal?: AbortSignal
 }
 
 export type RegistryClientRequestOptions = Omit<
@@ -88,6 +188,21 @@ export type RegistryClientRequestOptions = Omit<
   integrity?: Integrity
 
   /**
+   * Set to true if the integrity should be trusted implicitly without
+   * a recalculation, for example if it comes from a trusted registry that
+   * also serves the tarball itself.
+   */
+  trustIntegrity?: boolean
+
+  /**
+   * With no `integrity` to expect, check the body against the RFC 9530
+   * `Repr-Digest` the server sent with it. `'required'` also rejects a
+   * response that carries no digest. Runs before the response is cached,
+   * so a body that fails is never served from the cache later.
+   */
+  verifyDigest?: boolean | 'required'
+
+  /**
    * Follow up to 10 redirections by default. Set this to 0 to just return
    * the 3xx response. If the max redirections are expired, and we still get
    * a redirection response, then fail the request. Redirection cycles are
@@ -106,7 +221,20 @@ export type RegistryClientRequestOptions = Omit<
    * Set to `false` to suppress ANY lookups from cache. This will also
    * prevent storing the result to the cache.
    */
-  cache?: false
+  useCache?: false
+
+  /**
+   * Set to `false` to fetch from the network without looking in the
+   * cache first, on this url and on every url it redirects to, while
+   * still storing the result. No cached entry is served, stale or
+   * not, or revalidated, so nothing is sent conditionally either.
+   *
+   * Meant for an entry that cannot be trusted any more:
+   * `forceRevalidate` would still hand it back on a 304, and evicting
+   * it does not stop a redirect from reading the entry under the final
+   * url back instead.
+   */
+  readCache?: false
 
   /**
    * Set to pass an `npm-otp` header on the request.
@@ -116,65 +244,141 @@ export type RegistryClientRequestOptions = Omit<
    * @internal
    */
   otp?: string
+
+  /**
+   * Set to false to explicitly prevent `stale-while-revalidate` behavior,
+   * for use in revalidating while stale.
+   * @internal
+   */
+  staleWhileRevalidate?: false
+
+  /**
+   * Revalidate a cached response even when it is still within max-age.
+   * Conditional request headers are still sent when available.
+   * `'background'`: serve an entry still within max-age and revalidate
+   * it after exit; older entries revalidate first.
+   * @internal
+   */
+  forceRevalidate?: boolean | 'background'
 }
 
-const { version } = loadPackageJson(import.meta.filename) as {
-  version: string
-}
-const nua =
-  (globalThis.navigator as Navigator | undefined)?.userAgent ??
-  (bun ? `Bun/${bun}`
-  : deno ? `Deno/${deno}`
-  : node ? `Node.js/${node}`
-  : '(unknown platform)')
-export const userAgent = `@nrz/registry-client/${version} ${nua}`
+/**
+ * The `User-Agent` header sent with every request. Re-exported from
+ * `@nrz/user-agent`, which is where the value is defined, so that
+ * existing importers of this package keep working.
+ */
+export { userAgent }
 
+// Agent-level knobs only. Do not spread these onto per-request options —
+// connections/pipelining/keepAlive/connect are ignored at dispatch time,
+// and bodyTimeout/headersTimeout would clobber caller overrides.
+//
+// Keep undici (not globalThis.fetch): fetch measured +56% user CPU and
+// +90–140MB RSS on the same 753-body install workload.
+// pipelining:1 is intentional — pipelining:10 had no measured CPU benefit
+// and HOL-blocks packuments behind large tarballs; some CDNs drop pipelined
+// requests.
+// connections scales with reify's in-flight cap ((cores-1)*8, see
+// src/graph/src/reify/index.ts) so tarball fetches don't queue behind
+// the pool on many-core machines. The floor of 64 bounds cold-start TLS
+// on small machines; the ceiling of 128 avoids connection storms and
+// CDN throttling beyond what reify can consume.
+// HTTP/2 (allowH2) is untested and unjustified while transport CPU is ~1/4
+// of body handling.
+// keepAliveTimeoutThreshold: undici default. Values >= the server's
+// Keep-Alive hint (Node http: timeout=5) reset the socket every response.
 const agentOptions: Agent.Options = {
   bodyTimeout: 600_000,
   headersTimeout: 600_000,
   keepAliveMaxTimeout: 1_200_000,
   keepAliveTimeout: 600_000,
-  keepAliveTimeoutThreshold: 30_000,
   connect: {
     timeout: 600_000,
     keepAlive: true,
     keepAliveInitialDelay: 30_000,
     sessionTimeout: 600,
   },
-  connections: 128,
-  pipelining: 10,
+  connections: Math.min(
+    128,
+    Math.max(64, (availableParallelism() - 1) * 8),
+  ),
+  pipelining: 1,
 }
 
 const xdg = new XDG('nrz')
+
+const defaultCacheMaxSize = 256 * 1024 * 1024
+
+const parseCacheMaxSize = (raw: string | undefined): number => {
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 1 ?
+      Math.floor(n)
+    : defaultCacheMaxSize
+}
 
 export class RegistryClient {
   agent: RetryAgent
   cache: Cache
   identity: string
+  /** configured registry keys; `NRZ_TOKEN_<key>` applies under each */
+  readonly registryKeys: readonly string[]
+  staleWhileRevalidateFactor: number
+  #session = randomUUID()
+  #decoded = new WeakMap<Uint8Array, CacheEntry>()
+  // request() calls not settled yet, awaited by drain()
+  #inFlight = new Set<Promise<void>>()
+  #signal?: AbortSignal
+
+  /** the request's own signal joined with the client's */
+  #withSignal<S>(
+    own: S | null | undefined,
+  ): S | AbortSignal | undefined {
+    const c = this.#signal
+    return !c || own === c || !(own instanceof AbortSignal) ?
+        (own ?? c)
+      : AbortSignal.any([own, c])
+  }
 
   constructor(options: RegistryClientOptions) {
+    this.#signal = options.signal
+    // undici adds a listener per request in flight
+    if (options.signal) setMaxListeners(0, options.signal)
     const {
-      cache = xdg.cache('registry-client'),
+      cache = xdg.cache(),
       'fetch-retry-factor': timeoutFactor = 2,
       'fetch-retry-mintimeout': minTimeout = 0,
       'fetch-retry-maxtimeout': maxTimeout = 30_000,
       'fetch-retries': maxRetries = 3,
       identity = '',
+      'stale-while-revalidate-factor':
+        staleWhileRevalidateFactor = 576, // 48h for a 5min cache
     } = options
     this.identity = identity
+    this.registryKeys = registryKeys(options)
+    this.staleWhileRevalidateFactor = staleWhileRevalidateFactor
+    const path = resolve(cache, 'registry-client')
+    const store = options.storeRoot ?? storeRoot(cache)
     this.cache = new Cache({
-      path: cache,
+      path,
+      store,
+      maxSize: parseCacheMaxSize(process.env.NRZ_CACHE_MAX_SIZE),
       onDiskWrite(_path, key, data) {
-        if (CacheEntry.decode(data).isGzip) register(cache, key)
+        if (
+          CacheEntry.isGzipEntry(data) ||
+          CacheEntry.isTarballEntry(data)
+        ) {
+          cacheUnzipRegister(path, key, store)
+        }
       },
     })
-    const dispatch = new Agent(agentOptions)
+    const dispatch = getDispatcher(agentOptions)
     this.agent = new RetryAgent(dispatch, {
       maxRetries,
       timeoutFactor,
       minTimeout,
       maxTimeout,
       retryAfter: true,
+      retry,
       errorCodes: [
         'ECONNREFUSED',
         'ECONNRESET',
@@ -197,10 +401,56 @@ export class RegistryClient {
     seek?: (obj: T) => boolean,
   ): Promise<T[]> {
     const resp = await this.request(url, options)
-    const { objects, urls } = resp.json() as {
-      objects: T[]
-      urls: { next?: string }
+    const { statusCode } = resp
+    if (statusCode < 200 || statusCode >= 300) {
+      let detail: unknown
+      try {
+        const body: unknown = resp.json()
+        if (body && typeof body === 'object' && 'error' in body) {
+          detail = body.error
+        }
+      } catch {
+        // Registries and proxies can return plain text or HTML errors.
+      }
+      const status = statusText(statusCode)
+      throw error(
+        `Failed to fetch paginated results: ${statusCode}${
+          status ? ` ${status}` : ''
+        }${typeof detail === 'string' && detail ? `: ${detail}` : ''}`,
+        { code: 'EREQUEST', status: statusCode, url: String(url) },
+      )
     }
+    let body: unknown
+    try {
+      body = resp.json()
+    } catch (cause) {
+      throw error('Invalid JSON in paginated registry response', {
+        code: 'EREQUEST',
+        url: String(url),
+        cause,
+      })
+    }
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      !('objects' in body) ||
+      !Array.isArray(body.objects) ||
+      !('urls' in body) ||
+      !body.urls ||
+      typeof body.urls !== 'object' ||
+      Array.isArray(body.urls) ||
+      ('next' in body.urls &&
+        body.urls.next !== null &&
+        body.urls.next !== undefined &&
+        typeof body.urls.next !== 'string')
+    ) {
+      throw error('Invalid pagination in registry response', {
+        code: 'EREQUEST',
+        url: String(url),
+      })
+    }
+    const objects = body.objects as T[]
+    const urls = body.urls as { next?: string | null }
     // if we have more, and haven't found our target, fetch more
     return urls.next && !(seek && objects.some(seek)) ?
         objects.concat(await this.scroll<T>(urls.next, options, seek))
@@ -229,43 +479,91 @@ export class RegistryClient {
 
     const s = tok.replace(/^(Bearer|Basic) /i, '')
 
-    const tokensUrl = new URL('-/npm/v1/tokens', registry)
-    const record = await this.seek<{
-      key: string
-      token: string
-    }>(tokensUrl, ({ token }) => s.startsWith(token), {
-      cache: false,
-    }).catch(() => undefined)
+    const base = registryBase(registry)
+    const tokensUrl = new URL('-/npm/v1/tokens', base)
+    // Logging out must always drop the local credential -- a registry
+    // that will not talk to us cannot be allowed to strand a token on
+    // disk. But a token that outlives `nrz logout` server-side is
+    // security-relevant, so a failure is said out loud rather than
+    // swallowed.
+    const stillLive =
+      `Removing the local credential anyway; revoke the token in the ` +
+      `registry UI if it is still live.`
 
-    if (record) {
-      const { key } = record
-      await this.request(
-        new URL(`-/npm/v1/tokens/token/${key}`, registry),
-        { cache: false, method: 'DELETE' },
-      )
+    // the `finally` is the guarantee: `request()` rethrows a transport
+    // failure as EREQUEST, so without it a registry we cannot reach at
+    // all would take the local credential down with it.
+    try {
+      let record: { key: string; token: string } | undefined
+      try {
+        record = await this.seek<{
+          key: string
+          token: string
+        }>(tokensUrl, ({ token }) => s.startsWith(token), {
+          useCache: false,
+        })
+      } catch (er) {
+        log(
+          `Could not list tokens at ${tokensUrl}: ${asError(er).message}\n` +
+            stillLive,
+        )
+      }
+
+      if (record) {
+        const deleteUrl = new URL(
+          `-/npm/v1/tokens/token/${record.key}`,
+          base,
+        )
+        const failed = (detail: string) =>
+          log(
+            `Failed to revoke the token on the registry: ${detail}\n` +
+              stillLive,
+          )
+        try {
+          const response = await this.request(deleteUrl, {
+            useCache: false,
+            method: 'DELETE',
+          })
+          if (!response.ok) failed(registryErrorMessage(response))
+        } catch (er) {
+          failed(asError(er).message)
+        }
+      }
+    } finally {
+      await deleteToken(registry, this.identity, tok)
     }
-
-    await deleteToken(registry, this.identity)
   }
 
   /**
-   * Log into the registry specified
+   * Log into the registry specified.
+   *
+   * When a list of registries is provided, the web login flow runs once
+   * against the first of them, and the token it returns is saved for all
+   * of them. This is for registries that share credentials -- like the
+   * ones under a single nrz.io account -- where opening the browser once
+   * per registry would just be asking for the same token again.
    *
    * Does not return the token or expose it, just saves to the auth keychain
    * and returns void if it worked. Otherwise, error is raised.
    */
-  async login(registry: string) {
+  async login(registry: string | string[]) {
+    const registries = Array.isArray(registry) ? registry : [registry]
+    const [first] = registries
+    if (!first) {
+      throw error('No registry provided to log in against')
+    }
+
     // - make POST to '/-/v1/login'
     // - include a body of {} and npm-auth-type:web
-    // - get a {doneUrl, loginUrl}
-    // - open the loginUrl
+    // - get a {doneUrl, authUrl}
+    // - open the authUrl
     // - hang on the doneUrl until done
     //
     // if that fails: fall back to couchdb login
-    const webLoginURL = new URL('-/v1/login', registry)
+    const webLoginURL = new URL('-/v1/login', registryBase(first))
     const response = await this.request(webLoginURL, {
       method: 'POST',
-      cache: false,
+      useCache: false,
       headers: {
         'content-type': 'application/json',
         'npm-auth-type': 'web',
@@ -274,28 +572,37 @@ export class RegistryClient {
     })
 
     if (response.statusCode === 200) {
-      const challenge = response.json()
-      if (isWebAuthChallenge(challenge)) {
+      const challenge = getWebAuthChallenge(response.json())
+      if (challenge) {
         const result = await this.webAuthOpener(challenge)
-        await setToken(
-          registry,
-          `Bearer ${result.token}`,
-          this.identity,
-        )
+        // sequential, because they all write to the same keychain file
+        for (const reg of registries) {
+          await setToken(reg, `Bearer ${result.token}`, this.identity)
+        }
         return
       }
     }
-    /* c8 ignore start */
     // TODO: fall back to username/password login, and/or couchdb PUT login
-    throw error('Failed to perform web login', { response })
+    const { statusCode } = response
+    const status = statusText(statusCode)
+    throw error(
+      `Failed to perform web login: ${statusCode}${
+        status ? ` ${status}` : ''
+      }`,
+      {
+        code: 'EREQUEST',
+        url: webLoginURL,
+        status: statusCode,
+        response,
+      },
+    )
   }
-  /* c8 ignore stop */
 
   /**
-   * Given a {@link WebAuthChallenge}, open the `loginUrl` in a browser and
+   * Given a {@link WebAuthChallenge}, open the `authUrl` in a browser and
    * hang on the `doneUrl` until it returns a {@link TokenResponse} object.
    */
-  async webAuthOpener({ doneUrl, loginUrl }: WebAuthChallenge) {
+  async webAuthOpener({ doneUrl, authUrl }: WebAuthChallenge) {
     const ac = new AbortController()
     const { signal } = ac
     /* c8 ignore start - race condition */
@@ -304,14 +611,43 @@ export class RegistryClient {
         ac.abort()
         return result
       }),
-      urlOpen(loginUrl, { signal }).catch((er: unknown) => {
-        if ((er as Error).name === 'AbortError') return
-        ac.abort()
-        throw er
+      urlOpen(authUrl, { signal }).catch((er: unknown) => {
+        // an aborted spawn is not a failure, e.g: login completed
+        // before the browser process exited
+        if (asError(er).name === 'AbortError') return
+        // the opener may exist but still fail to launch a browser,
+        // e.g: xdg-open on a headless server. Keep polling doneUrl so
+        // the user can complete the login by opening the url manually.
+        log(
+          `Could not open a browser. Please open ${authUrl} manually.`,
+        )
       }),
     ])
     /* c8 ignore stop */
     return result
+  }
+
+  #decodeCached(buffer: Uint8Array): CacheEntry | undefined {
+    const hit = this.#decoded.get(buffer)
+    if (hit) return hit
+    const entry = CacheEntry.decode(buffer, {
+      'stale-while-revalidate-factor':
+        this.staleWhileRevalidateFactor,
+    })
+    // statusCode 0 == undecodable, and a cached JSON body that fails
+    // to parse is corrupt. Treat both as a total miss: the caller
+    // refetches without conditional headers, so a fresh response
+    // overwrites the bad entry rather than a 304 re-blessing it.
+    if (!entry.statusCode) return undefined
+    if (entry.isJSON) {
+      try {
+        entry.json()
+      } catch {
+        return undefined
+      }
+      this.#decoded.set(buffer, entry)
+    }
+    return entry
   }
 
   async #checkLogin(
@@ -320,32 +656,285 @@ export class RegistryClient {
   ): Promise<TokenResponse> {
     const response = await this.request(url, {
       ...options,
-      cache: false,
+      useCache: false,
     })
     const { signal } = options as { signal?: AbortSignal }
     if (response.statusCode === 202) {
-      const rt = response.getHeader('retry-after')
-      const retryAfter = rt ? Number(rt.toString()) : -1
+      const rt = response.getHeaderString('retry-after')
+      const retryAfter = rt ? Number(rt) : -1
       if (retryAfter > 0) {
         await setTimeout(retryAfter * 1000, null, { signal })
       }
       return await this.#checkLogin(url, options)
     }
+    assertOk(response, {
+      message: 'Web login failed',
+      url,
+      advice: statusCode =>
+        statusCode === 404 ?
+          'This registry does not implement the web login endpoint.'
+        : undefined,
+    })
     if (response.statusCode === 200) {
-      const body = response.json()
-      if (isTokenResponse(body)) return body
+      const token = getTokenResponse(response.json())
+      if (token) return token
     }
     throw error('Invalid response from web login endpoint', {
+      code: 'EREQUEST',
+      url,
+      status: response.statusCode,
       response,
     })
+  }
+
+  /**
+   * The hash the cache recorded for `url`. This reads only the entry's
+   * head, which is about a kilobyte, rather than the body, which can be a
+   * megabyte. A caller that is about to look the package up in the global
+   * store needs nothing else, and if the store misses it can still read
+   * the body afterwards.
+   *
+   * Returns undefined if there is no entry, or if the entry is not a
+   * tarball. This never reads the body, so if `cache-unzip` rewrote the
+   * entry underneath us the worst case is a stale hash. That misses in the
+   * store; it cannot return the wrong bytes.
+   */
+  cachedIntegrity(
+    url: URL | string,
+    options: { method?: CacheableMethod } = {},
+  ): Integrity | undefined {
+    const { method = 'GET' } = options
+    try {
+      const key = cacheKey(
+        method,
+        typeof url === 'string' ? new URL(url) : url,
+      )
+      // The in-memory copy can be newer than the file on disk, so let
+      // request() serve those. Same rule as cachedBody.
+      if (this.cache.peek(key)) return undefined
+      const fd = openSync(this.cache.path(key), 'r')
+      try {
+        const size = Buffer.allocUnsafe(4)
+        if (readSync(fd, size, 0, 4, 0) < 4) return undefined
+        const headSize = size.readUInt32BE(0)
+        // Reject a length we do not believe, so a corrupt file cannot
+        // make us allocate a huge buffer.
+        if (headSize < 7 || headSize > maxHeadSize) return undefined
+        const head = Buffer.allocUnsafe(headSize)
+        if (readSync(fd, head, 0, headSize, 0) < headSize) {
+          return undefined
+        }
+        return CacheEntry.tarballIntegrity(head)
+      } finally {
+        closeSync(fd)
+      }
+      /* c8 ignore next */
+    } catch {}
+    return undefined
+  }
+
+  /**
+   * Read a valid cached non-JSON body straight off disk, bypassing the
+   * in-memory cache LRU so that a tarball is never held in it.
+   *
+   * One read: the head is decoded from the same bytes the body comes
+   * from, so `cache-unzip` rewriting the head cannot land between the
+   * two and hand back a body at a stale offset.
+   *
+   * Does not log a cache hit -- the caller may still reject the body
+   * and fall back to {@link request}, which logs its own.
+   *
+   * Returns undefined on anything unexpected; callers fall back to
+   * {@link request}.
+   */
+  cachedBody(
+    url: URL | string,
+    options: {
+      integrity?: Integrity
+      method?: CacheableMethod
+    } = {},
+  ): CachedBody | undefined {
+    const { integrity, method = 'GET' } = options
+    try {
+      // normalize like request() does, or a url that is not already in
+      // canonical form (an explicit :443, say) keys a different file
+      // and the fast path silently never hits.
+      const key = cacheKey(
+        method,
+        typeof url === 'string' ? new URL(url) : url,
+      )
+
+      // an in-memory value can be newer than disk, since cache.set
+      // writes to disk asynchronously. let request() serve those.
+      // (an in-flight fetch() peeks as undefined, so the probe reads
+      // disk underneath it -- benign, tarball urls are immutable.)
+      if (this.cache.peek(key)) return undefined
+
+      // a pin reads only the integrity path: cache.set hardlinks every
+      // artifact under its hash, while the key holds whatever was last
+      // fetched from that url. nothing here hashes the body, so a miss
+      // -- which sends the caller to request(), which verifies -- is
+      // the safe answer.
+      const paths = new Set<string>()
+      try {
+        const i = this.cache.integrityPath(integrity)
+        if (i) paths.add(i)
+      } catch {}
+      if (!integrity) paths.add(this.cache.path(key))
+
+      for (const path of paths) {
+        let buf: Buffer
+        try {
+          buf = readFileSync(path)
+        } catch {
+          continue
+        }
+        const entry = CacheEntry.decode(buf)
+        // statusCode must stay first: an unparseable buffer decodes to
+        // the module-level emptyCacheEntry singleton, and valid/isJSON
+        // memoize onto `this`, so reading them off it would poison the
+        // singleton process-wide.
+        if (
+          entry.statusCode !== 200 ||
+          !entry.valid ||
+          entry.isJSON
+        ) {
+          continue
+        }
+        return {
+          path,
+          key,
+          body: entry.buffer(),
+          integrity: entry.integrity,
+          gzip: CacheEntry.isGzipEntry(buf),
+        }
+      }
+      /* c8 ignore next */
+    } catch {}
+    return undefined
+  }
+
+  /**
+   * Queue the cached tarball at `key` (a {@link CachedBody} key) for the
+   * background child: exploded into the global store when that is on,
+   * else un-gzipped. `integrity` finds it when only the integrity path
+   * holds it.
+   */
+  queueForStore(key: string, integrity?: Integrity) {
+    cacheUnzipRegister(
+      this.cache.path(),
+      key,
+      this.cache.store,
+      integrity,
+    )
+  }
+
+  /**
+   * Make a request and hand back the response body as it arrives, instead of
+   * buffering it into a {@link CacheEntry}. For a body a caller acts on line
+   * by line — the NDJSON the batch endpoints stream — waiting for the last
+   * byte is the difference between using the first record now and using it
+   * once the server has finished computing the last one.
+   *
+   * The body is gunzipped here when the registry compressed it, so a caller
+   * always reads what the server serialized. Nothing is cached and nothing is
+   * retried: a caller that loses the stream falls back to the requests it was
+   * avoiding.
+   */
+  async requestStream(
+    url: URL | string,
+    options: RegistryClientRequestOptions = {},
+  ): Promise<{ statusCode: number; body: Readable }> {
+    const u = typeof url === 'string' ? new URL(url) : url
+    const o = {
+      ...options,
+      signal: this.#withSignal(options.signal),
+      method: options.method ?? 'GET',
+      path: u.pathname.replace(/\/+$/, '') + u.search,
+      origin: u.origin,
+      headers: addHeader(
+        addHeader(
+          addHeader(
+            options.headers,
+            'accept-encoding',
+            'gzip;q=1.0, identity;q=0.5',
+          ),
+          'user-agent',
+          userAgent,
+        ),
+        'npm-session',
+        this.#session,
+      ),
+    }
+    o.headers = addHeader(
+      o.headers,
+      'authorization',
+      await getTokenByURL(
+        String(u),
+        this.identity,
+        this.registryKeys,
+      ),
+    )
+
+    logRequest(url, 'start', { method: o.method })
+    const requestStart = Date.now()
+    const response = await this.agent.request(
+      o as Dispatcher.RequestOptions,
+    )
+    logRequest(url, 'complete', {
+      method: o.method,
+      statusCode: response.statusCode,
+      durationMs: Date.now() - requestStart,
+    })
+    const encoding = response.headers['content-encoding']
+    const gzipped =
+      typeof encoding === 'string' && /\bgzip\b/.test(encoding)
+    let body: Readable = response.body
+    if (gzipped) {
+      // a pipeline, so an error on the connection reaches whoever is
+      // reading the gunzipped body
+      const gunzip = createGunzip()
+      pipeline(response.body, gunzip, () => {})
+      body = gunzip
+    }
+    return { statusCode: response.statusCode, body }
+  }
+
+  /**
+   * Settle in-flight requests and their cache writes. Await before
+   * removing the cache dir.
+   */
+  async drain(): Promise<void> {
+    do {
+      await Promise.all(this.#inFlight)
+      await this.cache.promise()
+    } while (this.#inFlight.size)
   }
 
   async request(
     url: URL | string,
     options: RegistryClientRequestOptions = {},
   ): Promise<CacheEntry> {
-    logRequest(url, 'start')
+    options.signal = this.#withSignal(options.signal)
+    // tracked apart from the #request() promise: a second reaction on
+    // that one would make V8 drop the caller's async frames from the
+    // stack of any error #request() throws. redirect and otp hops call
+    // #request() directly, this call already tracks them
+    let settle!: () => void
+    const tracked = new Promise<void>(res => (settle = res))
+    this.#inFlight.add(tracked)
+    try {
+      return await this.#request(url, options)
+    } finally {
+      this.#inFlight.delete(tracked)
+      settle()
+    }
+  }
 
+  async #request(
+    url: URL | string,
+    options: RegistryClientRequestOptions,
+  ): Promise<CacheEntry> {
     const u = typeof url === 'string' ? new URL(url) : url
     const {
       method = 'GET',
@@ -353,66 +942,239 @@ export class RegistryClient {
       redirections = new Set(),
       signal,
       otp = (process.env.NRZ_OTP ?? '').trim(),
+      staleWhileRevalidate = true,
+      forceRevalidate = false,
     } = options
+    const { trustIntegrity, verifyDigest } = options
 
-    const { cache = method === 'GET' || method === 'HEAD' } = options
+    const m = isCacheableMethod(method) ? method : undefined
+    const { useCache = !!m, readCache = true } = options
 
     ;(signal as AbortSignal | null)?.throwIfAborted()
 
-    // first, try to get from the cache before making any request.
-    const { origin, pathname } = u
-    const key = JSON.stringify([origin, method, pathname])
+    // Method + URL only. Headers (including accept) are not part of the
+    // key and there is no Vary handling — callers must not vary the
+    // response representation for the same URL.
+    const key = cacheKey(method, u)
     const buffer =
-      cache ?
+      useCache && readCache ?
         await this.cache.fetch(key, { context: { integrity } })
       : undefined
 
-    const entry = buffer ? CacheEntry.decode(buffer) : undefined
-    if (entry?.valid) return entry
-    // TODO: stale-while-revalidate timeout, say 1 day, where we'll
-    // use the cached response even if it's invalid, and validate
-    // in the background without waiting for it.
+    const entry = buffer ? this.#decodeCached(buffer) : undefined
+    if (entry?.valid && forceRevalidate !== true) {
+      // 'background': serve it, revalidate after exit
+      if (forceRevalidate === 'background' && m) {
+        register(
+          dirname(this.cache.path()),
+          m,
+          url,
+          getHeader(options.headers, 'accept'),
+        )
+      }
+      logRequest(url, 'cache', { method })
+      return entry
+    }
 
-    // either no cache entry, or need to revalidate it.
+    // what the two early returns below would have served had
+    // forceRevalidate not skipped them. read once: staleWhileRevalidate
+    // memoizes a deadline, not an answer, so an entry can expire during
+    // a slow failure and the fallback would silently miss.
+    const forcedFallback =
+      forceRevalidate && entry?.staleWhileRevalidate ?
+        entry
+      : undefined
+
+    if (
+      !forceRevalidate &&
+      staleWhileRevalidate &&
+      entry?.staleWhileRevalidate &&
+      m
+    ) {
+      // revalidate while returning the stale entry, re-requesting the
+      // same representation since the cache key does not include accept
+      register(
+        dirname(this.cache.path()),
+        m,
+        url,
+        getHeader(options.headers, 'accept'),
+      )
+      logRequest(url, 'stale', { method })
+      return entry
+    }
+
+    logRequest(url, 'start', { method })
+    const requestStart = Date.now()
+
+    // either no cache entry, or need to revalidate before use.
     setCacheHeaders(options, entry)
 
+    const redirected = redirections.size > 0
     redirections.add(String(url))
 
-    Object.assign(options, {
-      path: u.pathname.replace(/\/+$/, '') + u.search,
-      ...agentOptions,
-    })
-
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- deprecated for callers; this is the one place that sets it
+    options.path = u.pathname.replace(/\/+$/, '') + u.search
     options.origin = u.origin
     options.headers = addHeader(
       addHeader(
-        options.headers,
-        'accept-encoding',
-        'gzip;q=1.0, identity;q=0.5',
+        addHeader(
+          options.headers,
+          'accept-encoding',
+          'gzip;q=1.0, identity;q=0.5',
+        ),
+        'user-agent',
+        userAgent,
       ),
-      'user-agent',
-      userAgent,
+      'npm-session',
+      this.#session,
     )
     if (otp) {
       options.headers = addHeader(options.headers, 'npm-otp', otp)
     }
+    if (integrity) {
+      options.headers = addHeader(
+        options.headers,
+        'accept-integrity',
+        integrity,
+      )
+    }
     options.method = options.method ?? 'GET'
 
-    // will remove if we don't have a token.
-    options.headers = addHeader(
-      options.headers,
-      'authorization',
-      await getToken(origin, this.identity),
-    )
+    // a same-origin redirect keeps the credential of the hop that led
+    // here, since path-scoped keys may not match the new path.
+    // redirect() strips it when the origin changes.
+    if (!redirected || !getHeader(options.headers, 'authorization')) {
+      // will remove if we don't have a token.
+      options.headers = addHeader(
+        options.headers,
+        'authorization',
+        await getTokenByURL(
+          String(u),
+          this.identity,
+          this.registryKeys,
+        ),
+      )
+    }
+
+    let response: Dispatcher.ResponseData | null = null
+    try {
+      response = await this.agent.request(
+        options as Dispatcher.RequestOptions,
+      )
+      /* c8 ignore start */
+    } catch (er) {
+      // a forced revalidation that can't reach the registry must be no
+      // worse than the entry it skipped past. also covers 5xx/429, which
+      // land here once RetryAgent gives up. an abort is the caller's own
+      // doing, so it still rejects.
+      if (
+        forcedFallback &&
+        !(signal as AbortSignal | null)?.aborted
+      ) {
+        // 'stale', not 'cache': a 'start' was already logged, and unlike
+        // the swr path above nothing revalidates in the background.
+        logRequest(url, 'stale', { method })
+        return forcedFallback
+      }
+      // Rethrow so we get a better stack trace
+      throw error('Request failed', {
+        code: 'EREQUEST',
+        cause: er,
+        url,
+        method,
+      })
+    }
+    /* c8 ignore stop */
 
     const result = await this.#handleResponse(
       u,
       options,
-      await this.agent.request(options as Dispatcher.RequestOptions),
+      response,
       entry,
     )
 
-    if (cache) this.cache.set(key, result.encode())
+    logRequest(
+      url,
+      response.statusCode === 304 ? '304' : 'complete',
+      {
+        method,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - requestStart,
+      },
+    )
+
+    // the check has to happen here, before the cache write below, or a
+    // body that fails it is still stored under the hash it was supposed
+    // to have -- and served from there, unverified, on the next run.
+    // `!fromCache` is the whole precondition: only a cached entry can
+    // have been rewritten (cache-unzip un-gzips in place), so anything
+    // else is the bytes as they came off the wire and hashes as such.
+    // this used to also require `isGzip`, which was a proxy for that
+    // and silently exempted every artifact that is not gzip -- a
+    // `.tar.br` among them. 200 only: an error body is not the artifact
+    // and was never supposed to hash to it; it is the caller's to report
+    // by status. the server-sent integrity header is already gone, see
+    // #handleResponse.
+    if (
+      !trustIntegrity &&
+      !result.fromCache &&
+      result.statusCode === 200
+    ) {
+      result.checkIntegrity({ url })
+    }
+    // same for the digest the server labels an unlabelled artifact with.
+    // before the cache write below, or a rejected body would be served
+    // from the cache on the next run, unverified.
+    if (
+      verifyDigest &&
+      !integrity &&
+      !result.fromCache &&
+      result.statusCode === 200
+    ) {
+      result.checkDigest(verifyDigest === 'required', { url })
+    }
+    // a forced revalidation must never replace a cached entry with an
+    // error response -- the flat 200-only rule revalidate-entry.ts has.
+    // keyed on entry existing at all, not on validity: staleWhileRevalidate
+    // is true forever for an entry with no date header, which would make
+    // one permanently unreplaceable.
+    // safe on the 304 path: handleCacheHitResponse returns the cached
+    // entry, whose statusCode is the original 200, so the date refresh
+    // still gets written back.
+    const clobbersCachedEntry =
+      forceRevalidate && !!entry && result.statusCode !== 200
+    if (useCache && !clobbersCachedEntry) {
+      // content-address an artifact the caller had no expected hash for,
+      // so a later lookup by hash still finds it; packuments are not
+      // worth hashing. never a body read back from the cache -- a 304,
+      // or the entry a redirect's nested request() served -- which
+      // cache-unzip may have rewritten un-gzipped: its hash is of bytes
+      // only this cache holds, and recorded here it would be trusted
+      // as the entry's from then on. integrityActual also records the
+      // hash in the entry's headers, so it runs before encode().
+      const artifact =
+        !result.fromCache &&
+        result.statusCode === 200 &&
+        !result.isJSON
+      const integrity =
+        result.integrity ??
+        (artifact ? result.integrityActual : undefined)
+      // the hash an artifact is stored under was checked or recorded
+      // just now, as the hash of its bytes as served. label one that
+      // came with no content-type to say so, see
+      // CacheEntry#labelArtifact.
+      if (artifact) result.labelArtifact()
+      const encoded = result.encode()
+      const stored = Buffer.from(
+        encoded.buffer,
+        encoded.byteOffset,
+        encoded.byteLength,
+      )
+      this.cache.set(key, stored, { integrity })
+      // a 304 keeps the parsed entry
+      if (result === entry && entry.isJSON)
+        this.#decoded.set(stored, entry)
+    }
     return result
   }
 
@@ -422,53 +1184,71 @@ export class RegistryClient {
     response: Dispatcher.ResponseData,
     entry?: CacheEntry,
   ): Promise<CacheEntry> {
-    if (handle304Response(response, entry)) return entry
+    if (handleCacheHitResponse(response, entry)) return entry
 
+    let consumedBody: string | undefined
     if (response.statusCode === 401) {
-      const repeatRequest = await otplease(this, options, response)
-      if (repeatRequest) return await this.request(url, repeatRequest)
-    }
-
-    const h: Buffer[] = []
-    for (const [key, value] of Object.entries(response.headers)) {
-      /* c8 ignore start - theoretical */
-      if (Array.isArray(value)) {
-        h.push(Buffer.from(key), Buffer.from(value.join(', ')))
-        /* c8 ignore stop */
-      } else if (typeof value === 'string') {
-        h.push(Buffer.from(key), Buffer.from(value))
+      const otpResult = await otplease(this, options, response)
+      if (otpResult && 'retry' in otpResult) {
+        return await this.#request(url, otpResult.retry)
+      }
+      if (otpResult && 'bodyConsumed' in otpResult) {
+        consumedBody = otpResult.bodyConsumed
       }
     }
+
+    const h = collectHeaders(response)
+
+    const { integrity, trustIntegrity } = options
+
+    // When otplease already consumed the body, use its length
+    // instead of the Content-Length header to size the CacheEntry
+    // buffer correctly.
+    const contentLength =
+      consumedBody !== undefined ? consumedBody.length
+      : response.headers['content-length'] ?
+        Number(response.headers['content-length'])
+      : /* c8 ignore next */ undefined
 
     const result = new CacheEntry(
       /* c8 ignore next - should always have a status code */
       response.statusCode || 200,
       h,
-      options.integrity,
+      {
+        integrity,
+        trustIntegrity,
+        'stale-while-revalidate-factor':
+          this.staleWhileRevalidateFactor,
+        contentLength,
+      },
     )
+
+    // a server-sent integrity header is not evidence: only the caller's
+    // expectation, or a body read back from the cache, is trusted. the
+    // header is dropped before the body is read so it can never be
+    // stored as the entry's hash, and so a nested request() for a
+    // redirect hands back an entry whose recorded hash survives.
+    if (!trustIntegrity) result.deleteHeader('integrity')
 
     if (isRedirect(result)) {
       response.body.resume()
-      // remove the try/catch once rebasing onto main with Luke's error-cause stuff
-      try {
-        const [nextURL, nextOptions] = redirect(options, result, url)
-        if (nextOptions && nextURL) {
-          return await this.request(nextURL, nextOptions)
-        }
-        return result
-      } catch (er) {
-        /* c8 ignore start */
-        throw er instanceof Error ? er : (
-            new Error(typeof er === 'string' ? er : 'Unknown error')
-          )
-        /* c8 ignore stop */
+      const [nextURL, nextOptions] = redirect(options, result, url)
+      if (nextOptions && nextURL) {
+        return await this.#request(nextURL, nextOptions)
       }
+      return result
     }
 
-    response.body.on('data', (chunk: Buffer) => result.addBody(chunk))
-    return await new Promise<CacheEntry>((res, rej) => {
-      response.body.on('error', rej)
-      response.body.on('end', () => res(result))
-    })
+    // If otplease already consumed the body (e.g. checking for OTP
+    // prompt on a plain 401), use the text it read rather than trying
+    // to re-read from the already-drained stream.
+    if (consumedBody !== undefined) {
+      if (consumedBody.length > 0) {
+        result.addBody(new TextEncoder().encode(consumedBody))
+      }
+      return result
+    }
+
+    return await readBody(response, result)
   }
 }

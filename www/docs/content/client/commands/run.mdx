@@ -1,0 +1,301 @@
+---
+title: nrz run
+sidebar:
+  label: run
+---
+
+Run a script defined in your `package.json` file. Scripts are the
+commands you define to automate common tasks like building, testing,
+or starting your application.
+
+## Usage
+
+<Code
+  code="nrz run <script> [args ...]"
+  title="Terminal"
+  lang="bash"
+/>
+
+## Aliases
+
+```
+r, run-script
+```
+
+## Description
+
+The `nrz run` command executes scripts from the `scripts` section of
+your `package.json` file. If you don't specify a script name, it lists
+all available scripts in the current package.
+
+### Basic Example
+
+```json title="package.json"
+{
+  "scripts": {
+    "build": "tsc",
+    "test": "tap",
+    "dev": "tsx watch src/index.ts"
+  }
+}
+```
+
+```bash
+# Run the build script
+nrz run build
+
+# Run the tap binary with arguments (note the -- separator)
+nrz run test -- --grep="pattern"
+
+# List all available scripts
+nrz run
+```
+
+### How it Works
+
+When you run a script, nrz:
+
+1. **Adds `node_modules/.bin` to PATH** - All locally-installed
+   binaries become available without the `node_modules/.bin/` prefix
+2. **Runs pre/post scripts** - Automatically executes `pre<script>`
+   before and `post<script>` after your main script
+3. **Sets environment variables** - Provides useful variables like
+   `npm_lifecycle_event`, `npm_lifecycle_script`, and
+   `npm_package_json`
+4. **Executes in the package root** - Scripts always run from your
+   package.json directory, regardless of your current working
+   directory
+
+## Passing Arguments
+
+Arguments after the script name are passed directly to your script.
+Use `--` to separate nrz options from script arguments:
+
+```bash
+# Pass --grep to the test script
+nrz run test -- --grep="my-test"
+
+# nrz options come BEFORE the script name
+nrz run --if-present test
+```
+
+## Lifecycle Scripts
+
+nrz automatically runs `pre` and `post` scripts if they exist:
+
+```json title="package.json"
+{
+  "scripts": {
+    "prebuild": "rm -rf dist",
+    "build": "tsc",
+    "postbuild": "cp package.json dist/"
+  }
+}
+```
+
+Running `nrz run build` executes all three scripts in order:
+`prebuild` → `build` → `postbuild`.
+
+## node-gyp Support
+
+nrz automatically provides `node-gyp` support for packages that need
+to compile native addons. When a script references `node-gyp`, nrz
+creates a shim that redirects those calls to `nrx node-gyp@latest`, so
+you don't need to manually install node-gyp globally.
+
+This works transparently for:
+
+- Direct calls: `"install": "node-gyp rebuild"`
+- Complex commands:
+  `"build": "echo 'start' && node-gyp configure && echo 'done'"`
+- All platforms: Unix/Linux/macOS and Windows
+
+## Workspaces
+
+Run scripts across multiple workspaces in a monorepo:
+
+### Run in Specific Workspaces
+
+```bash
+# Run in a single workspace a using a query scope
+nrz run --scope="#a:workspace" lint
+
+# Run in multiple workspaces using CLI args
+nrz run test -w packages/app -w packages/lib
+```
+
+### Run in All Workspaces
+
+```bash
+# Run across all workspaces using a query scope
+nrz run lint --scope=":workspace"
+
+# Run across all workspaces using CLI args
+nrz run build --recursive
+
+# Or use workspace groups
+nrz run test --workspace-group=frontend
+```
+
+### Advanced filtering with Queries
+
+Use [DSS queries](/client/selectors) to target specific packages:
+
+```bash
+# Run tests only for packages matching a pattern
+nrz run --scope=":has([name^='@myapp/'])" test
+```
+
+## Options
+
+### `--workspace`, `-w`
+
+Run the script in specific workspace(s). Can be a path or glob pattern
+matching workspace directories.
+
+```bash
+nrz run build -w packages/app -w packages/lib
+```
+
+### `--workspace-group`, `-g`
+
+Run the script in named workspace groups defined in your project
+configuration.
+
+```bash
+nrz run test -g frontend -g api
+```
+
+### `--recursive`, `-r`
+
+Run the script across all workspaces. Implied when using `--workspace`
+or `--workspace-group`.
+
+```bash
+nrz run build --recursive
+```
+
+### `--if-present`
+
+Don't fail if the script doesn't exist. Useful when running scripts
+across workspaces where not all packages have the same scripts.
+
+```bash
+nrz run build --recursive --if-present
+```
+
+Defaults to `true` when using `--scope`, `--workspace`,
+`--workspace-group`, or `--recursive`.
+
+### `--scope`, `-s`
+
+Filter packages using a [DSS query](/client/selectors) selector.
+
+```bash
+nrz run test --scope=":root > *"  # Direct dependencies only
+```
+
+Matched workspaces run in dependency order (a workspace runs after the
+workspaces it depends on), like `--workspace`/`--recursive`. Otherwise
+query order is kept where possible (a dependency may move ahead of
+unrelated matches); non-workspace matches (e.g. `:root`) keep their
+position.
+
+### `--bail`, `-b` / `--no-bail`, `-B`
+
+Control whether to stop on first failure when running across multiple
+workspaces. Defaults to `true` (stop on failure).
+
+```bash
+# Continue running even if some packages fail
+nrz run test --recursive --no-bail
+```
+
+### `--script-shell`
+
+Override the shell used to run scripts. By default, uses `/bin/sh` on
+Unix-like systems and `cmd.exe` on Windows.
+
+```bash
+nrz run build --script-shell=/bin/bash
+```
+
+### `--dry-run`
+
+Show what would be executed without actually running the scripts.
+
+```bash
+nrz run build --dry-run
+```
+
+## Environment Variables
+
+nrz sets several environment variables that your scripts can access:
+
+- `npm_lifecycle_event` - The name of the script being run (e.g.,
+  "build")
+- `npm_lifecycle_script` - The actual command from package.json
+- `npm_package_json` - Full path to the package.json file
+- `NODE` - Path to the node executable
+- `INIT_CWD` - The directory where you ran `nrz run` from
+- `NRZ_*` - All nrz configuration values
+
+## Configuration
+
+Script behavior can be configured in your `nrz.json` file:
+
+```json title="nrz.json"
+{
+  "script-shell": "/bin/bash",
+  "if-present": true,
+  "command": {
+    "run": {
+      "bail": false
+    }
+  }
+}
+```
+
+## Examples
+
+### Run tests with coverage
+
+```bash
+nrz run test -- --coverage
+```
+
+### Build all workspace packages
+
+```bash
+nrz run build --recursive
+```
+
+### Run a script only where it exists
+
+```bash
+nrz run lint --recursive --if-present
+```
+
+### Run with custom shell
+
+```bash
+nrz run build --script-shell=/usr/bin/fish
+```
+
+### Preview what will run
+
+```bash
+nrz run deploy --dry-run --recursive
+```
+
+## See Also
+
+- [`nrz exec`](/client/commands/exec) - Run arbitrary commands with
+  enhanced PATH
+- [`nrz run-exec`](/client/commands/run-exec) - Intelligently choose
+  between run and exec
+- [Workspaces](/client/selectors) - Dependency Selector Syntax query
+  language reference
+- [Workspaces](/client/workspaces) - Working with monorepos
+- [Affected Dependencies](/client/affected) - Scoping a run to what a
+  change could have broken

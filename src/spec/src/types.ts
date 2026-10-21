@@ -1,4 +1,4 @@
-import { type Range } from '@nrz/semver'
+import type { Range } from '@nrz/semver'
 
 export type SpecOptions = {
   [k in keyof SpecOptionsFilled]?: SpecOptionsFilled[k]
@@ -7,8 +7,30 @@ export type SpecOptions = {
 export type Scope = `@${string}`
 
 export type SpecOptionsFilled = {
-  /** the registry where a spec should be resolved against */
-  registry: string
+  /**
+   * The registry where a spec should be resolved against.
+   *
+   * There is **no default**. If no registry is configured, registry-type
+   * specs parsed without one will have `spec.registry === undefined`, and
+   * anything that needs to build a registry URL will fail. Named registry
+   * aliases (`gh:`, `jsr:`) and `scoped-registries` are unaffected.
+   *
+   * For bare specs, this takes precedence over the
+   * `default-registry-alias` lookup but not over a matching
+   * `scoped-registries` entry.
+   */
+  registry?: string
+  /**
+   * The name of the registry alias (a key in `registries`) that bare specs
+   * (e.g. `foo@latest`) and transitive deps without an explicit registry
+   * protocol resolve through, when no `registry` or `scoped-registries`
+   * entry applies.
+   *
+   * Defaults to `'npm'`. The `npm` alias itself has **no** built-in URL --
+   * it must be configured (e.g. via `nrz setup`), otherwise bare specs
+   * resolve with `spec.registry === undefined`.
+   */
+  'default-registry-alias': string
   /** shorthand prefix names for known registries */
   registries: Record<string, string>
   /** shorthand prefix names for known git hosts */
@@ -16,7 +38,11 @@ export type SpecOptionsFilled = {
   /** tarball hosting services for hosts listed in git-hosts */
   'git-host-archives': Record<string, string>
   /** registries mapped to a `@scope` */
-  'scope-registries': Record<Scope, string>
+  'scoped-registries': Record<Scope, string>
+  /** registries that work like https://npm.jsr.io */
+  'jsr-registries': Record<string, string>
+  catalog: Record<string, string>
+  catalogs?: Record<string, Record<string, string>>
 }
 
 export type GitSelectorParsed = {
@@ -24,9 +50,12 @@ export type GitSelectorParsed = {
   semver?: string
 }
 
+export type SpecType =
+  'file' | 'git' | 'registry' | 'remote' | 'workspace' | 'catalog'
+
 export type SpecLikeBase = {
   /** the type of spec that this is, ultimately */
-  type: 'file' | 'git' | 'registry' | 'remote' | 'workspace'
+  type: SpecType
 
   /** the full named specifier passed to the constructor */
   spec: string
@@ -126,6 +155,8 @@ export type SpecLikeBase = {
    * getter that retrieves the actual spec value to be used
    */
   final: SpecLikeBase
+  /** Is this a spec that overrides another spec? */
+  overridden: boolean
 
   toString(): string
 }

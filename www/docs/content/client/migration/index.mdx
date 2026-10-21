@@ -1,0 +1,48 @@
+---
+title: Migrating to nrz
+sidebar:
+  label: Overview
+  order: 0
+---
+
+## Migrating to nrz from Other Package Managers
+
+This section covers how to switch from npm, yarn, or pnpm to nrz. Each
+guide walks through the concrete steps: configuration, commands,
+lockfiles, workspaces, and the key differences to be aware of.
+
+### Choose Your Migration Path
+
+- [**From npm**](/client/migration/from-npm) — Migrate from npm to nrz
+- [**From yarn**](/client/migration/from-yarn) — Migrate from yarn (v1
+  classic or v2+ berry) to nrz
+- [**From pnpm**](/client/migration/from-pnpm) — Migrate from pnpm to
+  nrz
+
+### What Changes
+
+Regardless of which package manager you're coming from, the core
+changes are:
+
+1. **Configuration moves to `nrz.json`** — A single JSON file replaces
+   `.npmrc`, `.yarnrc.yml`, or `.npmrc` + `pnpm-workspace.yaml`
+2. **Lockfile format changes** — nrz uses `nrz-lock.json` instead of
+   `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`
+3. **Install scripts don't run by default** — nrz separates
+   installation from build. `nrz install` downloads packages without
+   executing any lifecycle scripts. Use `nrz build` to selectively run
+   scripts afterward
+4. **Security is built in** — nrz integrates with
+   [Socket](https://socket.dev/) for malware detection, and the query
+   system lets you audit your dependency graph before any code runs
+
+### What Stays the Same
+
+- Your `package.json` files don't change (dependencies, scripts, etc.)
+- Workspaces declared in the root `package.json` (npm, yarn) or in
+  `pnpm-workspace.yaml` `packages` (pnpm) are read, and `nrz install`
+  copies them to `nrz.json` (commit it; `nrz ci` reads `nrz.json`
+  only)
+- `node_modules` structure is compatible — your code runs the same way
+- Registry authentication uses tokens, just stored differently
+- Workspace packages still use `workspace:` protocol references

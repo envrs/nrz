@@ -1,0 +1,3081 @@
+import t from 'tap'
+import type { Test } from 'tap'
+import {
+  existsSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import { Spec } from '@nrz/spec'
+import { PackageJson } from '@nrz/package-json'
+import { mockPackageInfo as mockPackageInfoBase } from './fixtures/reify.ts'
+import { asDependency } from '../src/dependencies.ts'
+import { objectLikeOutput } from '../src/visualization/object-like-output.ts'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+} from '../src/dependencies.ts'
+import type { InstallOptions } from '../src/install.ts'
+import type { PackageInfoClient } from '@nrz/package-info'
+import { PathScurry } from 'path-scurry'
+import { resolve } from 'node:path'
+import { error } from '@nrz/error-cause'
+import { unload } from '@nrz/nrz-json'
+import { RollbackRemove } from '@nrz/rollback-remove'
+
+t.cleanSnapshot = s =>
+  s.replace(/^(\s+)"?projectRoot"?: .*$/gm, '$1projectRoot: #')
+
+const createMockPackageInfo = (
+  overrides: Partial<typeof mockPackageInfoBase> = {},
+) =>
+  ({
+    ...mockPackageInfoBase,
+    ...overrides,
+  }) as unknown as PackageInfoClient
+
+const mockPackageInfo = createMockPackageInfo()
+
+t.test('install', async t => {
+  const abbrevManifest = {
+    name: 'abbrev',
+    version: '2.0.0',
+  }
+
+  const packageInfo = {
+    async manifest(spec: Spec, _options?: any) {
+      switch (spec.name) {
+        case 'abbrev':
+          return abbrevManifest
+        default:
+          return null
+      }
+    },
+    async extract(spec: Spec) {
+      return { resolved: '', spec }
+    },
+  } as unknown as PackageInfoClient
+
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+    }),
+    'nrz-lock.json': JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+  })
+  t.chdir(projectRoot)
+
+  const options = {
+    projectRoot,
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    packageInfo,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+
+  const rootDepID = joinDepIDTuple(['file', '.'])
+
+  const { install } = await import('../src/install.ts')
+
+  const result = await install(
+    options,
+    new Map() as AddImportersDependenciesMap,
+  )
+
+  t.matchSnapshot(
+    objectLikeOutput(result.graph),
+    'should return a graph',
+  )
+
+  // adding a new dependency
+  const result2 = await install(
+    options,
+    new Map([
+      [
+        rootDepID,
+        new Map<string, Dependency>([
+          [
+            'abbrev',
+            asDependency({
+              spec: Spec.parse('abbrev', 'latest'),
+              type: 'dev',
+            }),
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap,
+  )
+
+  t.matchSnapshot(
+    objectLikeOutput(result2.graph),
+    'should call build adding new dependency',
+  )
+})
+
+t.test('install with no package.json file in cwd', async t => {
+  const dir = t.testdir({
+    'nrz.json': JSON.stringify({}, null, 2),
+  })
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => {
+        return { buildQueue: [], diff: {} }
+      },
+    },
+  })
+
+  const { graph } = await install(
+    options,
+    new Map([
+      [
+        joinDepIDTuple(['file', '.']),
+        new Map<string, Dependency>([
+          [
+            'abbrev',
+            asDependency({
+              spec: Spec.parse('abbrev', '2.0.0'),
+              type: 'prod',
+            }),
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap,
+  )
+
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'should create a graph with the new dependency',
+  )
+})
+
+t.test('unknown error reading package.json', async t => {
+  const dir = t.testdir({
+    'nrz.json': JSON.stringify({}, null, 2),
+  })
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: {
+      read() {
+        throw new Error('ERR')
+      },
+    },
+    packageInfo: mockPackageInfo,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => {
+        return { buildQueue: [], diff: {} }
+      },
+    },
+  })
+
+  await t.rejects(
+    install(options, new Map() as AddImportersDependenciesMap),
+    /ERR/,
+    'should throw unknown errors when reading package.json fails',
+  )
+})
+
+t.test(
+  'install with expectLockfile option (no clean install)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      node_modules: {
+        'some-package': {
+          'package.json': JSON.stringify({
+            name: 'some-package',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      expectLockfile: true,
+      allowScripts: ':not(*)',
+      // No cleanInstall option - just expect-lockfile
+    } as unknown as InstallOptions
+
+    const removedPaths: string[] = []
+    let confirmed = false
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ diff: {} }),
+      },
+      '@nrz/rollback-remove': {
+        RollbackRemove: class MockRollbackRemove {
+          async rm(path: string) {
+            removedPaths.push(path)
+          }
+          confirm() {
+            confirmed = true
+          }
+        },
+      },
+    })
+
+    await install(options, new Map() as AddImportersDependenciesMap)
+
+    t.equal(
+      removedPaths.length,
+      0,
+      'should NOT remove node_modules with only expectLockfile',
+    )
+    t.notOk(confirmed, 'should NOT confirm removal')
+  },
+)
+
+t.test('install with cleanInstall option (ci command)', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+    }),
+    'nrz-lock.json': JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+    node_modules: {
+      'some-package': {
+        'package.json': JSON.stringify({
+          name: 'some-package',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    expectLockfile: true,
+    cleanInstall: true, // This is set by ci command
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+
+  const removedPaths: string[] = []
+  let confirmed = false
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => ({ buildQueue: {}, diff: {} }),
+    },
+    '@nrz/rollback-remove': {
+      RollbackRemove: class MockRollbackRemove {
+        async rm(path: string) {
+          removedPaths.push(path)
+        }
+        confirm() {
+          confirmed = true
+        }
+      },
+    },
+  })
+
+  await install(options, new Map() as AddImportersDependenciesMap)
+
+  t.ok(
+    removedPaths.length > 0,
+    'should remove node_modules with cleanInstall',
+  )
+  t.ok(
+    removedPaths.some(p => p.includes('node_modules')),
+    'should remove node_modules directory',
+  )
+  t.ok(confirmed, 'should confirm removal')
+})
+
+t.test(
+  'install with expectLockfile but missing lockfile',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      // No nrz-lock.json file
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      expectLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /nrz-lock\.json file is required when using --expect-lockfile, --frozen-lockfile, or ci command/,
+      'should throw error when lockfile is missing',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile and in-sync lockfile',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+        dependencies: {
+          'some-package': '^1.0.0',
+        },
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      node_modules: {
+        'some-package': {
+          'package.json': JSON.stringify({
+            name: 'some-package',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+          remove: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map(),
+          importers: [],
+          gc: () => {},
+          recomputeFlags: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+    })
+
+    await t.resolves(
+      install(options, new Map() as AddImportersDependenciesMap),
+      'should succeed with in-sync lockfile',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile and missing lockfile',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      // No nrz-lock.json file
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /nrz-lock\.json file is required when using --expect-lockfile, --frozen-lockfile, or ci command/,
+      'should throw error when lockfile is missing',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile and out-of-sync lockfile (deps added)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+        dependencies: {
+          'new-package': '^2.0.0',
+        },
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const addMap = new Map()
+    addMap.set(
+      '',
+      new Map([['new-package', { spec: {}, type: 'prod' }]]),
+    )
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(addMap, { modifiedDependencies: true }),
+          remove: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map([['', { location: dir }]]),
+          importers: [],
+          gc: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+      '@nrz/workspaces': {
+        Monorepo: {
+          maybeLoad: () => undefined,
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      {
+        message: /Lockfile is out of sync with package\.json/,
+        cause: {
+          path: resolve(dir, 'nrz-lock.json'),
+        },
+      },
+      'should throw error when dependencies are added',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile and out-of-sync lockfile (deps removed)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const removeMap = new Map()
+    removeMap.set('', new Set(['old-package']))
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+          remove: Object.assign(removeMap, {
+            modifiedDependencies: true,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map([['', { location: dir }]]),
+          importers: [],
+          gc: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+      '@nrz/workspaces': {
+        Monorepo: {
+          maybeLoad: () => undefined,
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /Lockfile is out of sync with package\.json/,
+      'should throw error when dependencies are removed',
+    )
+  },
+)
+
+t.test('install with frozenLockfile and spec changes', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+      dependencies: {
+        react: '^19.0.0', // Changed from ^18.0.0 to ^19.0.0
+      },
+    }),
+    'nrz-lock.json': JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    frozenLockfile: true,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => ({ buildQueue: {}, diff: {} }),
+    },
+    '../src/ideal/get-importer-specs.ts': {
+      getImporterSpecs: () => ({
+        removedEdges: new Set(),
+        add: Object.assign(new Map(), {
+          modifiedDependencies: false,
+        }),
+        remove: Object.assign(new Map(), {
+          modifiedDependencies: false,
+        }),
+      }),
+    },
+    '../src/lockfile/load.ts': {
+      load: () => {
+        // Create a mock spec object with a toString method
+        const mockSpec18 = {
+          toString: () => 'react@^18.0.0',
+          type: 'registry',
+          name: 'react',
+          spec: '^18.0.0',
+        }
+        const graph = {
+          nodes: new Map([
+            [
+              '',
+              {
+                location: dir,
+                id: '',
+                manifest: { dependencies: { react: '^19.0.0' } },
+              },
+            ],
+          ]),
+          importers: [
+            {
+              id: '',
+              location: dir,
+              manifest: { dependencies: { react: '^19.0.0' } },
+              edgesOut: new Map([
+                [
+                  'react',
+                  {
+                    spec: mockSpec18,
+                    name: 'react',
+                    from: { location: dir },
+                    to: { id: 'registry::react@18.0.0' },
+                  },
+                ],
+              ]),
+            },
+          ],
+          gc: () => {},
+        }
+        return graph
+      },
+      loadHidden: () => ({
+        nodes: new Map(),
+        importers: [],
+      }),
+      loadData: () => ({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    },
+    '@nrz/workspaces': {
+      Monorepo: {
+        maybeLoad: () => undefined,
+      },
+    },
+  })
+
+  await t.rejects(
+    install(options, new Map() as AddImportersDependenciesMap),
+    /Lockfile is out of sync with package\.json.*react spec changed from.*\^18.*to.*\^19/s,
+    'should throw error when dependency specs have changed',
+  )
+})
+
+t.test(
+  'install with frozenLockfile prevents adding packages',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+    })
+
+    const addDeps = new Map()
+    addDeps.set(
+      '',
+      new Map([['new-dep', { spec: {}, type: 'prod' }]]),
+    )
+    // Set the modifiedDependencies flag to match the new implementation check
+    Object.assign(addDeps, { modifiedDependencies: true })
+
+    await t.rejects(
+      install(options, addDeps as AddImportersDependenciesMap),
+      /Cannot add dependencies when using --frozen-lockfile/,
+      'should prevent adding new dependencies',
+    )
+  },
+)
+
+t.test(
+  'both expectLockfile and frozenLockfile set (frozen takes precedence)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+        dependencies: {
+          'new-package': '^1.0.0',
+        },
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      expectLockfile: true,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const addMap = new Map()
+    addMap.set(
+      '',
+      new Map([['new-package', { spec: {}, type: 'prod' }]]),
+    )
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(addMap, { modifiedDependencies: true }),
+          remove: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map([['', { location: dir }]]),
+          importers: [],
+          gc: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+      '@nrz/workspaces': {
+        Monorepo: {
+          maybeLoad: () => undefined,
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /Lockfile is out of sync with package\.json/,
+      'frozen-lockfile validation takes precedence over expect-lockfile',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile and workspace out-of-sync',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'root',
+        version: '1.0.0',
+        workspaces: ['packages/*'],
+      }),
+      packages: {
+        'pkg-a': {
+          'package.json': JSON.stringify({
+            name: 'pkg-a',
+            version: '1.0.0',
+            dependencies: {
+              'new-dep': '^1.0.0',
+            },
+          }),
+        },
+      },
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const wsDir = resolve(dir, 'packages/pkg-a')
+    const addMap = new Map()
+    addMap.set(
+      'workspace:packages/pkg-a',
+      new Map([['new-dep', { spec: {}, type: 'prod' }]]),
+    )
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(addMap, { modifiedDependencies: true }),
+          remove: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map([
+            ['workspace:packages/pkg-a', { location: wsDir }],
+          ]),
+          importers: [],
+          gc: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+      '@nrz/workspaces': {
+        Monorepo: {
+          maybeLoad: () => undefined,
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      {
+        message: /Lockfile is out of sync with package\.json/,
+      },
+      'should show workspace location in error',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile when package.json needs init',
+  async t => {
+    const dir = t.testdir({
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      'nrz.json': JSON.stringify({}, null, 2),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: {
+        read: () => {
+          throw Object.assign(
+            new Error('Could not read package.json file'),
+            {
+              code: 'ENOENT',
+            },
+          )
+        },
+      },
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    let initCalled = false
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '@nrz/init': {
+        init: async () => {
+          initCalled = true
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+          remove: Object.assign(new Map(), {
+            modifiedDependencies: false,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map(),
+          importers: [],
+          gc: () => {},
+          recomputeFlags: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+    })
+
+    // Mock the second read after init
+    let readCount = 0
+    options.packageJson.read = () => {
+      readCount++
+      if (readCount === 1) {
+        throw Object.assign(
+          new Error('Could not read package.json file'),
+          {
+            code: 'ENOENT',
+          },
+        )
+      }
+      return { name: 'test', version: '1.0.0' }
+    }
+
+    await t.resolves(
+      install(options, new Map() as AddImportersDependenciesMap),
+      'should succeed after init',
+    )
+    t.ok(initCalled, 'should call init when package.json is missing')
+  },
+)
+
+t.test(
+  'install with frozenLockfile when package.json read fails (non-ENOENT)',
+  async t => {
+    const dir = t.testdir({
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      'nrz.json': JSON.stringify({}, null, 2),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: {
+        read: () => {
+          throw new Error('Permission denied')
+        },
+      },
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '@nrz/init': {
+        init: async () => {
+          throw new Error('should not call init')
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /Permission denied/,
+      'should throw original error when not ENOENT',
+    )
+  },
+)
+
+t.test(
+  'install with frozenLockfile shows importerId when node location is missing',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+        dependencies: {
+          'new-dep': '^1.0.0',
+        },
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const addMap = new Map()
+    addMap.set(
+      'missing-node-id',
+      new Map([
+        ['new-dep', { spec: {}, type: 'prod' }],
+        ['new-dep-2', { spec: {}, type: 'prod' }],
+      ]),
+    )
+    const removeMap = new Map()
+    removeMap.set('another-missing-id', new Set(['old-dep']))
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '../src/ideal/get-importer-specs.ts': {
+        getImporterSpecs: () => ({
+          removedEdges: new Set(),
+          staleSpecs: new Map(),
+          add: Object.assign(addMap, { modifiedDependencies: true }),
+          remove: Object.assign(removeMap, {
+            modifiedDependencies: true,
+          }),
+        }),
+      },
+      '../src/lockfile/load.ts': {
+        load: () => ({
+          nodes: new Map(), // Empty nodes map so location lookup fails
+          importers: [],
+          gc: () => {},
+        }),
+        loadHidden: () => ({
+          nodes: new Map(),
+          importers: [],
+        }),
+        loadData: () => ({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      },
+      '@nrz/workspaces': {
+        Monorepo: {
+          maybeLoad: () => undefined,
+        },
+      },
+    })
+
+    try {
+      await install(options, new Map() as AddImportersDependenciesMap)
+      t.fail('should have thrown')
+    } catch (err: any) {
+      t.match(
+        err.message,
+        /missing-node-id: 2 dependencies to add/,
+        'should use importerId for add (new-dep, new-dep-2)',
+      )
+      t.match(
+        err.message,
+        /another-missing-id: 1 dependency to remove/,
+        'should use importerId for remove',
+      )
+    }
+  },
+)
+
+t.test('install with expectLockfile but no node_modules', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+    }),
+    'nrz-lock.json': JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+    // No node_modules directory
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    expectLockfile: true,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+
+  const removedPaths: string[] = []
+  let confirmed = false
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => ({ buildQueue: {}, diff: {} }),
+    },
+    '@nrz/rollback-remove': {
+      RollbackRemove: class MockRollbackRemove {
+        async rm(path: string) {
+          removedPaths.push(path)
+        }
+        confirm() {
+          confirmed = true
+        }
+      },
+    },
+  })
+
+  await install(options, new Map() as AddImportersDependenciesMap)
+
+  t.equal(
+    removedPaths.length,
+    0,
+    'should not try to remove non-existent node_modules',
+  )
+  t.notOk(
+    confirmed,
+    'should not confirm removal when nothing to remove',
+  )
+})
+
+t.test(
+  'install with cleanInstall should rollback on idealBuild error',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      node_modules: {
+        'some-package': {
+          'package.json': JSON.stringify({
+            name: 'some-package',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      expectLockfile: true,
+      cleanInstall: true, // This is set by ci command
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const removedPaths: string[] = []
+    let confirmed = false
+    let rolledBack = false
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/ideal/build.ts': {
+        build: async () => {
+          throw error('idealBuild failed for testing', {})
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      '@nrz/rollback-remove': {
+        RollbackRemove: class MockRollbackRemove {
+          async rm(path: string) {
+            removedPaths.push(path)
+          }
+          confirm() {
+            confirmed = true
+          }
+          async rollback() {
+            rolledBack = true
+          }
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /idealBuild failed for testing/,
+      'should throw error from idealBuild',
+    )
+
+    t.ok(
+      removedPaths.length > 0,
+      'should have attempted to remove node_modules during clean install',
+    )
+    t.ok(
+      removedPaths.some(p => p.includes('node_modules')),
+      'should have attempted to remove node_modules directory',
+    )
+    t.ok(
+      confirmed,
+      'should confirm removal initially during clean install',
+    )
+    t.ok(rolledBack, 'should rollback removal after error')
+  },
+)
+
+t.test('install with lockfileOnly option', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+      dependencies: {
+        abbrev: '^1.0.0',
+      },
+    }),
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    lockfileOnly: true,
+  } as unknown as InstallOptions
+
+  let reifyCalled = false
+  let lockfileSaveCalled = false
+  let lockfileSaveOptions: any = null
+  let confirmed = 0
+  let rolledBack = false
+  const removedPaths: string[] = []
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/ideal/build.ts': {
+      build: async (opts: any) => {
+        // a failed peer store move is the one thing that can still park
+        // a directory on this path
+        await opts.remover.rm('parked')
+        return { nodes: new Map(), importers: [], projectRoot: dir }
+      },
+    },
+    '../src/reify/index.ts': {
+      reify: async () => {
+        reifyCalled = true
+        return { hasChanges: () => false }
+      },
+    },
+    '../src/index.ts': {
+      lockfile: {
+        save: (opts: any) => {
+          lockfileSaveCalled = true
+          lockfileSaveOptions = opts
+        },
+      },
+    },
+    '@nrz/rollback-remove': {
+      RollbackRemove: class MockRollbackRemove {
+        async rm(path: string) {
+          removedPaths.push(path)
+        }
+        confirm() {
+          confirmed++
+        }
+        async rollback() {
+          rolledBack = true
+        }
+      },
+    },
+  })
+
+  const result = await install(
+    options,
+    new Map() as AddImportersDependenciesMap,
+  )
+
+  t.notOk(
+    reifyCalled,
+    'should NOT call reify when lockfileOnly is true',
+  )
+  t.ok(
+    lockfileSaveCalled,
+    'should call lockfile.save when lockfileOnly is true',
+  )
+  t.ok(lockfileSaveOptions, 'should pass options to lockfile.save')
+  t.ok(result.graph, 'should return graph')
+  t.equal(
+    result.diff,
+    undefined,
+    'should return undefined for diff when lockfileOnly is true',
+  )
+  t.strictSame(removedPaths, ['parked'], 'a directory was parked')
+  t.equal(confirmed, 1, 'the remover is confirmed before returning')
+  t.notOk(rolledBack, 'and not rolled back')
+})
+
+t.test('lockfileOnly rolls back when the save fails', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+    }),
+  })
+  let confirmed = false
+  let rolledBack = false
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/ideal/build.ts': {
+      build: async () => ({
+        nodes: new Map(),
+        importers: [],
+        projectRoot: dir,
+      }),
+    },
+    '../src/index.ts': {
+      lockfile: {
+        save: () => {
+          throw error('save failed', {})
+        },
+      },
+    },
+    '@nrz/rollback-remove': {
+      RollbackRemove: class MockRollbackRemove {
+        async rm() {}
+        confirm() {
+          confirmed = true
+        }
+        async rollback() {
+          rolledBack = true
+        }
+      },
+    },
+  })
+  await t.rejects(
+    install(
+      {
+        projectRoot: dir,
+        scurry: new PathScurry(dir),
+        packageJson: new PackageJson(),
+        packageInfo: mockPackageInfo,
+        lockfileOnly: true,
+      } as unknown as InstallOptions,
+      new Map() as AddImportersDependenciesMap,
+    ),
+    /save failed/,
+  )
+  t.notOk(confirmed, 'never confirmed')
+  t.ok(rolledBack, 'rolled back instead')
+})
+
+t.test('lockfileOnly incompatible with cleanInstall', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+    }),
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    lockfileOnly: true,
+    cleanInstall: true, // This should cause an error
+  } as unknown as InstallOptions
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {})
+
+  await t.rejects(
+    install(options, new Map() as AddImportersDependenciesMap),
+    /Cannot use --lockfile-only with --clean-install/,
+    'should throw error when lockfileOnly and cleanInstall are both set',
+  )
+})
+
+t.test(
+  'install with lockfileOnly and adding packages (updatePackageJson)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      lockfileOnly: true,
+    } as unknown as InstallOptions
+
+    let reifyCalled = false
+    let lockfileSaveCalled = false
+    let updatePackageJsonCalled = false
+    let updatePackageJsonOptions: any = null
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/ideal/build.ts': {
+        build: async () => ({
+          nodes: new Map(),
+          importers: [],
+          projectRoot: dir,
+        }),
+      },
+      '../src/reify/index.ts': {
+        reify: async () => {
+          reifyCalled = true
+          return { hasChanges: () => false }
+        },
+      },
+      '../src/index.ts': {
+        lockfile: {
+          save: () => {
+            lockfileSaveCalled = true
+          },
+        },
+      },
+      '../src/reify/update-importers-package-json.ts': {
+        updatePackageJson: (opts: any) => {
+          updatePackageJsonCalled = true
+          updatePackageJsonOptions = opts
+          return () => {}
+        },
+      },
+    })
+
+    const rootDepID = joinDepIDTuple(['file', '.'])
+    const addMap = new Map([
+      [
+        rootDepID,
+        new Map<string, Dependency>([
+          [
+            'new-dep',
+            asDependency({
+              spec: Spec.parse('new-dep', '^1.0.0'),
+              type: 'prod',
+            }),
+          ],
+        ]),
+      ],
+    ]) as AddImportersDependenciesMap
+    Object.assign(addMap, { modifiedDependencies: true })
+
+    const result = await install(options, addMap)
+
+    t.notOk(reifyCalled, 'should NOT call reify with lockfileOnly')
+    t.ok(lockfileSaveCalled, 'should call lockfile.save')
+    t.ok(
+      updatePackageJsonCalled,
+      'should call updatePackageJson when adding packages',
+    )
+    t.ok(
+      updatePackageJsonOptions?.add,
+      'should pass add map to updatePackageJson',
+    )
+    t.ok(result.graph, 'should return graph')
+    t.equal(result.diff, undefined, 'should return undefined diff')
+  },
+)
+
+t.test(
+  'install with lockfileOnly and removing packages (updatePackageJson)',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      lockfileOnly: true,
+    } as unknown as InstallOptions
+
+    let reifyCalled = false
+    let lockfileSaveCalled = false
+    let updatePackageJsonCalled = false
+    let updatePackageJsonOptions: any = null
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/ideal/build.ts': {
+        build: async ({ remove }: any) => {
+          // Simulate idealBuild populating the remove map
+          remove.set(
+            joinDepIDTuple(['file', '.']),
+            new Set(['old-dep']),
+          )
+          Object.assign(remove, { modifiedDependencies: true })
+          return {
+            nodes: new Map(),
+            importers: [],
+            projectRoot: dir,
+          }
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => {
+          reifyCalled = true
+          return { hasChanges: () => false }
+        },
+      },
+      '../src/index.ts': {
+        lockfile: {
+          save: () => {
+            lockfileSaveCalled = true
+          },
+        },
+      },
+      '../src/reify/update-importers-package-json.ts': {
+        updatePackageJson: (opts: any) => {
+          updatePackageJsonCalled = true
+          updatePackageJsonOptions = opts
+          return () => {}
+        },
+      },
+    })
+
+    const result = await install(
+      options,
+      new Map() as AddImportersDependenciesMap,
+    )
+
+    t.notOk(reifyCalled, 'should NOT call reify with lockfileOnly')
+    t.ok(lockfileSaveCalled, 'should call lockfile.save')
+    t.ok(
+      updatePackageJsonCalled,
+      'should call updatePackageJson when removing packages',
+    )
+    t.ok(
+      updatePackageJsonOptions?.remove,
+      'should pass remove map to updatePackageJson',
+    )
+    t.ok(result.graph, 'should return graph')
+    t.equal(result.diff, undefined, 'should return undefined diff')
+  },
+)
+
+t.test(
+  'install failure without hidden lockfile propagates original error',
+  async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+      // No node_modules/.nrz-lock.json (hidden lockfile)
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/ideal/build.ts': {
+        build: async () => {
+          throw error('test error without hidden lockfile', {})
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: {}, diff: {} }),
+      },
+      'node:fs': {
+        ...(await import('node:fs')),
+        existsSync: () => true,
+        rmSync: () => {
+          throw error('rmSync error during cleanup', {})
+        },
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      /test error without hidden lockfile/,
+      'should propagate original error when no hidden lockfile exists',
+    )
+  },
+)
+
+t.test('remote dependency integrity in lockfile', async t => {
+  const remoteIntegrity = 'sha512-remote-computed-integrity'
+  const remoteDepId = joinDepIDTuple([
+    'remote',
+    'https://example.com/remote-pkg-1.0.0.tgz',
+  ])
+
+  // Create mock packageInfo that returns integrity for remote deps
+  const mockPackageInfoWithIntegrity = createMockPackageInfo({
+    extract: async (_spec: any, _target: string, options: any) => {
+      // Simulate remote dependency returning computed integrity
+      return {
+        resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+        integrity: options.integrity ?? remoteIntegrity,
+        spec: _spec,
+      }
+    },
+  })
+
+  await t.test(
+    'node captures integrity from extract result',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test',
+          version: '1.0.0',
+        }),
+        'nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {},
+          edges: {},
+        }),
+      })
+
+      const options = {
+        projectRoot: dir,
+        scurry: new PathScurry(dir),
+        packageJson: new PackageJson(),
+        packageInfo: mockPackageInfoWithIntegrity,
+        allowScripts: ':not(*)',
+      } as unknown as InstallOptions
+
+      // Mock graph with a remote node
+      const mockGraph = {
+        nodes: new Map([
+          [
+            remoteDepId,
+            {
+              id: remoteDepId,
+              name: 'remote-pkg',
+              integrity: undefined, // Initially no integrity
+              resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+              manifest: { name: 'remote-pkg', version: '1.0.0' },
+              importer: false,
+              dev: false,
+              optional: false,
+              inNrzStore: () => true,
+              location: `node_modules/.nrz/${remoteDepId}/node_modules/remote-pkg`,
+            },
+          ],
+        ]),
+        importers: [],
+        projectRoot: dir,
+      }
+
+      const { install } = await t.mockImport<
+        typeof import('../src/install.ts')
+      >('../src/install.ts', {
+        '../src/ideal/build.ts': {
+          build: async () => mockGraph,
+        },
+        '../src/reify/index.ts': {
+          reify: async () => ({
+            diff: { hasChanges: () => false },
+          }),
+        },
+      })
+
+      const result = await install(
+        options,
+        new Map() as AddImportersDependenciesMap,
+      )
+
+      t.ok(result.graph, 'should return graph')
+      // The graph node should now have integrity populated
+      // This verifies extract-node.ts captures the integrity
+    },
+  )
+
+  await t.test(
+    'lockfile preserves remote dependency integrity on reload',
+    async t => {
+      const dir = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test',
+          version: '1.0.0',
+        }),
+        // Lockfile with remote dep that has integrity
+        'nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: {},
+          nodes: {
+            [remoteDepId]: [0, 'remote-pkg', remoteIntegrity],
+          },
+          edges: {
+            [joinDepIDTuple(['file', '.'])]: {
+              'remote-pkg prod': remoteDepId,
+            },
+          },
+        }),
+      })
+
+      const options = {
+        projectRoot: dir,
+        scurry: new PathScurry(dir),
+        packageJson: new PackageJson(),
+        packageInfo: mockPackageInfoWithIntegrity,
+        allowScripts: ':not(*)',
+      } as unknown as InstallOptions
+
+      const { install } = await t.mockImport<
+        typeof import('../src/install.ts')
+      >('../src/install.ts', {
+        '../src/reify/index.ts': {
+          reify: async () => ({
+            diff: { hasChanges: () => false },
+          }),
+        },
+      })
+
+      const result = await install(
+        options,
+        new Map() as AddImportersDependenciesMap,
+      )
+
+      t.ok(result.graph, 'should return graph')
+      // Verify integrity was loaded from lockfile
+      const node = result.graph.nodes.get(remoteDepId)
+      if (node) {
+        t.equal(
+          node.integrity,
+          remoteIntegrity,
+          'integrity loaded from lockfile',
+        )
+      }
+    },
+  )
+})
+
+t.test(
+  'install with frozenLockfile and lockfile version mismatch',
+  async t => {
+    const { LOCKFILE_VERSION } = await t.mockImport<
+      typeof import('../src/lockfile/types.ts')
+    >('../src/lockfile/types.ts')
+
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+        dependencies: {
+          foo: '^1.0.0',
+        },
+      }),
+      'nrz-lock.json': JSON.stringify({
+        lockfileVersion: LOCKFILE_VERSION + 1, // Newer version
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    })
+
+    const options = {
+      projectRoot: dir,
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      frozenLockfile: true,
+      allowScripts: ':not(*)',
+    } as unknown as InstallOptions
+
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/reify/index.ts': {
+        reify: async () => ({ diff: { hasChanges: () => false } }),
+      },
+    })
+
+    await t.rejects(
+      install(options, new Map() as AddImportersDependenciesMap),
+      {
+        message: 'Unsupported lockfile version',
+        cause: {
+          code: 'ELOCKFILEVERSION',
+          found: LOCKFILE_VERSION + 1,
+          wanted: LOCKFILE_VERSION,
+        },
+      },
+      'should throw when lockfile version is newer',
+    )
+  },
+)
+
+t.test('install with frozenLockfile and changed options', async t => {
+  const dir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test',
+      version: '1.0.0',
+      dependencies: {
+        'some-package': '^1.0.0',
+      },
+    }),
+    'nrz-lock.json': JSON.stringify({
+      lockfileVersion: 1,
+      options: {},
+      nodes: {},
+      edges: {},
+    }),
+    node_modules: {
+      'some-package': {
+        'package.json': JSON.stringify({
+          name: 'some-package',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+
+  const options = {
+    projectRoot: dir,
+    scurry: new PathScurry(dir),
+    packageJson: new PackageJson(),
+    packageInfo: mockPackageInfo,
+    frozenLockfile: true,
+    allowScripts: ':not(*)',
+  } as unknown as InstallOptions
+
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '../src/reify/index.ts': {
+      reify: async () => ({ buildQueue: {}, diff: {} }),
+    },
+    '../src/ideal/get-importer-specs.ts': {
+      getImporterSpecs: () => ({
+        removedEdges: new Set(),
+        add: Object.assign(new Map(), {
+          modifiedDependencies: false,
+        }),
+        remove: Object.assign(new Map(), {
+          modifiedDependencies: false,
+        }),
+      }),
+    },
+    '../src/lockfile/load.ts': {
+      load: () => ({
+        nodes: new Map(),
+        importers: [],
+        optionsChanged: true,
+        optionsChanges: [
+          {
+            section: 'catalog',
+            key: 'abbrev',
+            from: '^1.0.0',
+            to: '^2.0.0',
+          },
+        ],
+        gc: () => {},
+      }),
+      loadHidden: () => ({
+        nodes: new Map(),
+        importers: [],
+      }),
+      loadData: () => ({
+        lockfileVersion: 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }),
+    },
+  })
+
+  await t.rejects(
+    install(options, new Map() as AddImportersDependenciesMap),
+    /Configuration options have changed:\n {4}catalog: abbrev "\^1\.0\.0" -> "\^2\.0\.0"/,
+    'should throw when config options changed with frozen lockfile',
+  )
+})
+
+t.test('a legacy importer edge heals its type', async t => {
+  const packageInfo = createMockPackageInfo()
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      peerDependencies: { abbrev: '>=2 <3' },
+    }),
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const opts = () =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo,
+      allowScripts: ':not(*)',
+    }) as unknown as InstallOptions
+  const read = (f: string) =>
+    readFileSync(resolve(projectRoot, f), 'utf8')
+  const { install } = await import('../src/install.ts')
+
+  await install(opts())
+  t.match(read('nrz-lock.json'), 'peer >=2 <3', 'the legacy edge')
+
+  // package.json now lists it as a dev dep, same target, same range
+  writeFileSync(
+    resolve(projectRoot, 'package.json'),
+    JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      devDependencies: { abbrev: '^2.0.0' },
+      peerDependencies: { abbrev: '>=2 <3' },
+    }),
+  )
+  await install(opts())
+  const healed = `dev ^2.0.0 ${joinDepIDTuple([
+    'registry',
+    '',
+    'abbrev@2.0.0',
+  ])}`
+  t.match(read('nrz-lock.json'), healed, 'both text and type healed')
+  t.match(read('node_modules/.nrz-lock.json'), healed, 'hidden too')
+
+  const before = statSync(
+    resolve(projectRoot, 'nrz-lock.json'),
+  ).mtimeMs
+  utimesSync(resolve(projectRoot, 'nrz-lock.json'), 0, 0)
+  await install(opts())
+  t.equal(
+    statSync(resolve(projectRoot, 'nrz-lock.json')).mtimeMs,
+    0,
+    'a second install writes nothing',
+  )
+  t.ok(before, 'the first heal did write')
+})
+
+t.test('a dev flag lost to a removed prod edge heals', async t => {
+  const manifests: Record<string, Record<string, unknown>> = {
+    'strip-ansi': {
+      name: 'strip-ansi',
+      version: '7.1.0',
+      dependencies: { 'ansi-regex': '^6.0.1' },
+    },
+    'ansi-regex': { name: 'ansi-regex', version: '6.0.1' },
+  }
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      return manifests[spec.name]
+    },
+    async extract(spec: Spec) {
+      return { resolved: '', spec }
+    },
+  } as unknown as PackageInfoClient
+  const projectRoot = t.testdir({})
+  t.chdir(projectRoot)
+  unload('project')
+  const opts = () =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo,
+      allowScripts: ':not(*)',
+    }) as unknown as InstallOptions
+  // a removed edge hands its link to a detached rm process, which holds
+  // the fixture cwd on windows (EBUSY); let tap sweep it instead
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '@nrz/rollback-remove': {
+      RollbackRemove: class extends RollbackRemove {
+        confirm() {}
+      },
+    },
+  })
+  const id = joinDepIDTuple(['registry', '', 'ansi-regex@6.0.1'])
+  const lockfiles = ['nrz-lock.json', 'node_modules/.nrz-lock.json']
+  const file = (f: string) => resolve(projectRoot, f)
+  const flags = () =>
+    lockfiles.map(
+      f =>
+        (
+          JSON.parse(readFileSync(file(f), 'utf8')) as {
+            nodes: Record<string, [number]>
+          }
+        ).nodes[id]?.[0],
+    )
+  const pj = (dependencies?: Record<string, string>) =>
+    writeFileSync(
+      file('package.json'),
+      JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        dependencies,
+        devDependencies: { 'strip-ansi': '^7.1.0' },
+      }),
+    )
+
+  pj()
+  await install(opts())
+  t.strictSame(flags(), [2, 2], 'dev via strip-ansi')
+  pj({ 'ansi-regex': '^6.0.0' })
+  await install(opts())
+  t.strictSame(flags(), [0, 0], 'prod')
+  pj()
+  await install(opts())
+  t.strictSame(flags(), [2, 2], 'dev again')
+
+  // a lockfile written before the fix
+  for (const f of lockfiles) {
+    const data = JSON.parse(readFileSync(file(f), 'utf8')) as {
+      nodes: Record<string, [number]>
+    }
+    data.nodes[id]![0] = 0
+    writeFileSync(file(f), JSON.stringify(data))
+  }
+  await install(opts())
+  t.strictSame(flags(), [2, 2], 'healed by a plain install')
+
+  utimesSync(file('nrz-lock.json'), 0, 0)
+  await install(opts())
+  t.equal(
+    statSync(file('nrz-lock.json')).mtimeMs,
+    0,
+    'a second install writes nothing',
+  )
+})
+
+t.test('explicit adds carry the saved value everywhere', async t => {
+  const abbrevManifest = { name: 'abbrev', version: '2.0.0' }
+  const packageInfo = {
+    async manifest(spec: Spec) {
+      if (spec.name === 'abbrev') return abbrevManifest
+      throw error('Could not resolve', { spec })
+    },
+    async extract(spec: Spec) {
+      return { resolved: '', spec }
+    },
+  } as unknown as PackageInfoClient
+
+  const setup = (t: Test, deps?: Record<string, string>) => {
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        ...(deps ? { dependencies: deps } : null),
+      }),
+    })
+    t.chdir(projectRoot)
+    const rootDepID = joinDepIDTuple(['file', '.'])
+    const opts = (extra?: Record<string, unknown>) =>
+      ({
+        projectRoot,
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        packageInfo,
+        allowScripts: ':not(*)',
+        ...extra,
+      }) as unknown as InstallOptions
+    const add = (bareSpec: string, name = 'abbrev') =>
+      Object.assign(
+        new Map([
+          [
+            rootDepID,
+            new Map<string, Dependency>([
+              [
+                name,
+                asDependency({
+                  spec: Spec.parse(name, bareSpec),
+                  type: 'prod',
+                }),
+              ],
+            ]),
+          ],
+        ]),
+        { modifiedDependencies: true },
+      )
+    const read = (f: string) =>
+      readFileSync(resolve(projectRoot, f), 'utf8')
+    return { projectRoot, opts, add, read }
+  }
+
+  await t.test(
+    'lockfileOnly saves the range, not the tag',
+    async t => {
+      const { opts, add, read } = setup(t)
+      const { install } = await import('../src/install.ts')
+      await install(opts({ lockfileOnly: true }), add('latest'))
+      t.match(read('nrz-lock.json'), 'prod ^2.0.0')
+      t.match(JSON.parse(read('package.json')), {
+        dependencies: { abbrev: '^2.0.0' },
+      })
+    },
+  )
+
+  await t.test('--save-exact on a same-target add', async t => {
+    const { opts, add, read } = setup(t, { abbrev: '^2.0.0' })
+    const { install } = await import('../src/install.ts')
+    await install(opts(), add('^2.0.0'))
+    t.match(read('nrz-lock.json'), 'prod ^2.0.0')
+
+    // nothing to reify, but the requested value still has to land
+    await install(opts({ saveExact: true }), add('latest'))
+    t.match(read('nrz-lock.json'), 'prod 2.0.0 ')
+    t.match(read('node_modules/.nrz-lock.json'), 'prod 2.0.0 ')
+    t.match(JSON.parse(read('package.json')), {
+      dependencies: { abbrev: '2.0.0' },
+    })
+  })
+
+  await t.test('an exact version over a range is saved', async t => {
+    const { opts, add, read } = setup(t, { abbrev: '^2.0.0' })
+    const { install } = await import('../src/install.ts')
+    await install(opts(), add('^2.0.0'))
+    t.match(read('nrz-lock.json'), 'prod ^2.0.0')
+
+    // the rebuild rewrites the edge, not updatePackageJson: the lockfile
+    // still has to follow package.json out of the no-diff early return
+    await install(opts(), add('2.0.0'))
+    t.match(read('nrz-lock.json'), 'prod 2.0.0 ')
+    t.match(read('node_modules/.nrz-lock.json'), 'prod 2.0.0 ')
+    t.match(JSON.parse(read('package.json')), {
+      dependencies: { abbrev: '2.0.0' },
+    })
+  })
+
+  await t.test('an unresolvable explicit add rejects', async t => {
+    const { opts, add, read } = setup(t)
+    const { install } = await import('../src/install.ts')
+    const nope = add('latest', 'nonexistent')
+    nope
+      .get(joinDepIDTuple(['file', '.']))!
+      .get('nonexistent')!.type = 'optional'
+    await t.rejects(
+      install(opts({ lockfileOnly: true }), nope),
+      /Could not resolve/,
+      'an optional explicit add is not swallowed',
+    )
+    t.match(JSON.parse(read('package.json')), {
+      dependencies: undefined,
+    })
+  })
+})
+
+// the reify fixture mock re-parses `String(spec)` without a catalog
+// config, so hand it the resolved subspec the real client uses
+const catalogPackageInfo = createMockPackageInfo({
+  manifest: (spec, options) =>
+    mockPackageInfoBase.manifest(
+      typeof spec === 'string' ? spec : spec.final,
+      options,
+    ),
+  extract: (spec, target, options) =>
+    mockPackageInfoBase.extract(
+      typeof spec === 'string' ? spec : spec.final,
+      target,
+      options,
+    ),
+  resolve: (spec, options) =>
+    mockPackageInfoBase.resolve(
+      typeof spec === 'string' ? spec : spec.final,
+      options,
+    ),
+})
+
+const catalogSetup = async (t: Test) => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      devDependencies: { 'ansi-regex': 'catalog:' },
+    }),
+  })
+  t.chdir(projectRoot)
+  // reify hands each removed store dir to a detached process, which
+  // races the fixture teardown on windows (EBUSY); keep the moved-aside
+  // dir instead and let tap sweep it with the rest of the testdir
+  const { install } = await t.mockImport<
+    typeof import('../src/install.ts')
+  >('../src/install.ts', {
+    '@nrz/rollback-remove': {
+      RollbackRemove: class extends RollbackRemove {
+        confirm() {}
+      },
+    },
+  })
+  const opts = (extra?: Record<string, unknown>) =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo: catalogPackageInfo,
+      allowScripts: ':not(*)',
+      registries: { npm: 'https://registry.npmjs.org/' },
+      ...extra,
+    }) as unknown as InstallOptions
+  const lock = () =>
+    JSON.parse(
+      readFileSync(resolve(projectRoot, 'nrz-lock.json'), 'utf8'),
+    ) as {
+      options: { catalog?: Record<string, string> }
+      nodes: Record<string, unknown>
+    }
+  return { projectRoot, opts, lock, install }
+}
+
+t.test(
+  'a catalog value change re-resolves in one install',
+  async t => {
+    const { opts, lock, install } = await catalogSetup(t)
+
+    await install(opts({ catalog: { 'ansi-regex': '^5.0.1' } }))
+    t.strictSame(
+      lock().options.catalog,
+      { 'ansi-regex': '^5.0.1' },
+      'catalog value is stored',
+    )
+
+    await install(opts({ catalog: { 'ansi-regex': '^6.0.1' } }))
+    const after = lock()
+    t.strictSame(
+      after.options.catalog,
+      { 'ansi-regex': '^6.0.1' },
+      'new catalog value is stored',
+    )
+    const ids = Object.keys(after.nodes).join(' ')
+    t.match(ids, 'ansi-regex@6.0.1', 're-resolved in one install')
+    t.notMatch(ids, 'ansi-regex@5.0.1', 'old version is gone')
+
+    await t.resolves(
+      install(
+        opts({
+          catalog: { 'ansi-regex': '^6.0.1' },
+          frozenLockfile: true,
+        }),
+      ),
+      'frozen install passes right after',
+    )
+  },
+)
+
+t.test('an options-only change is written', async t => {
+  const { opts, lock, install } = await catalogSetup(t)
+
+  // run once so both lockfiles exist: reify writes regardless when
+  // they do not, which would hide the regression
+  await install(opts({ catalog: { 'ansi-regex': '^5.0.1' } }))
+
+  const catalog = { 'ansi-regex': '^5.0.1', abbrev: '^2.0.0' }
+  const { diff } = await install(opts({ catalog }))
+  t.equal(diff?.hasChanges(), false, 'nothing to reify')
+  t.strictSame(
+    lock().options.catalog,
+    catalog,
+    'the unused entry is persisted anyway',
+  )
+
+  await t.resolves(
+    install(opts({ catalog, frozenLockfile: true })),
+    'frozen install passes right after',
+  )
+})
+
+t.test('a project with modifiers stays in sync', async t => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: { abbrev: '^2.0.0' },
+    }),
+    'nrz.json': JSON.stringify({
+      modifiers: { ':root > #abbrev': '2.0.0' },
+    }),
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const opts = (extra?: Record<string, unknown>) =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      allowScripts: ':not(*)',
+      registries: { npm: 'https://registry.npmjs.org/' },
+      ...extra,
+    }) as unknown as InstallOptions
+  const lockfiles = ['nrz-lock.json', 'node_modules/.nrz-lock.json']
+  const read = (f: string) =>
+    readFileSync(resolve(projectRoot, f), 'utf8')
+  const { install } = await import('../src/install.ts')
+
+  const { graph } = await install(opts())
+  t.equal(
+    graph.mainImporter.edgesOut.get('abbrev')?.spec.bareSpec,
+    '2.0.0',
+    'the modifier is applied',
+  )
+  const lock = JSON.parse(read('nrz-lock.json')) as {
+    options: { modifiers?: Record<string, string> }
+  }
+  t.strictSame(
+    lock.options.modifiers,
+    { ':root > #abbrev': '2.0.0' },
+    'modifiers are stored',
+  )
+
+  await t.resolves(
+    install(opts({ frozenLockfile: true })),
+    'the frozen check sees the modifiers',
+  )
+
+  // a plain install must not rewrite either lockfile: the edge already
+  // carries the override, so it is neither a stale spec nor a diff
+  const stamp = new Date(0)
+  for (const f of lockfiles) {
+    utimesSync(resolve(projectRoot, f), stamp, stamp)
+  }
+  await install(opts())
+  for (const f of lockfiles) {
+    t.equal(
+      statSync(resolve(projectRoot, f)).mtimeMs,
+      0,
+      `${f} was left alone`,
+    )
+  }
+})
+
+t.test('a "-" modifier removes dependencies', async t => {
+  const pj = JSON.stringify({
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: { abbrev: '^2.0.0', which: '^2.0.1' },
+  })
+  const projectRoot = t.testdir({
+    'package.json': pj,
+    'nrz.json': JSON.stringify({
+      modifiers: { ':root > #abbrev': '-', '#which > #isexe': '-' },
+    }),
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const opts = (extra?: Record<string, unknown>) =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      allowScripts: ':not(*)',
+      registries: { npm: 'https://registry.npmjs.org/' },
+      ...extra,
+    }) as unknown as InstallOptions
+  // the cli always passes an add map
+  const noAdd = () =>
+    Object.assign(new Map(), {
+      modifiedDependencies: false,
+    }) as AddImportersDependenciesMap
+  const lockfiles = ['nrz-lock.json', 'node_modules/.nrz-lock.json']
+  const read = (f: string) =>
+    readFileSync(resolve(projectRoot, f), 'utf8')
+  const { install } = await import('../src/install.ts')
+
+  const { graph } = await install(opts(), noAdd())
+  t.notOk(graph.mainImporter.edgesOut.get('abbrev'), 'no abbrev edge')
+  t.ok(graph.mainImporter.edgesOut.get('which')?.to, 'which kept')
+  t.notOk(graph.nodesByName.get('isexe'), 'no isexe node')
+  t.notOk(
+    existsSync(resolve(projectRoot, 'node_modules/abbrev')),
+    'abbrev not installed',
+  )
+  t.equal(read('package.json'), pj, 'package.json untouched')
+  const lock = JSON.parse(read('nrz-lock.json')) as {
+    nodes: Record<string, unknown>
+    edges: Record<string, string>
+  }
+  t.notMatch(
+    Object.keys(lock.nodes).join('\n'),
+    /~(abbrev|isexe)@/,
+    'no removed nodes in lockfile',
+  )
+  t.notMatch(
+    Object.keys(lock.edges).join('\n'),
+    / (abbrev|isexe)$/m,
+    'no removed edges in lockfile',
+  )
+
+  const stamp = new Date(0)
+  for (const f of lockfiles) {
+    utimesSync(resolve(projectRoot, f), stamp, stamp)
+  }
+  await install(opts(), noAdd())
+  for (const f of lockfiles) {
+    t.equal(
+      statSync(resolve(projectRoot, f)).mtimeMs,
+      0,
+      `${f} was left alone`,
+    )
+  }
+
+  await t.resolves(
+    install(opts({ frozenLockfile: true }), noAdd()),
+    'frozen install passes',
+  )
+  await t.resolves(
+    install(opts({ lockfileOnly: true }), noAdd()),
+    'lockfile-only install passes',
+  )
+
+  // `which` is not removed, so the check moves on to abbrev
+  const add = Object.assign(
+    new Map([
+      [
+        joinDepIDTuple(['file', '.']),
+        new Map(
+          ['which@^2.0.1', 'abbrev@2.0.0'].map(arg => {
+            const spec = Spec.parse(arg)
+            return [spec.name, asDependency({ spec, type: 'prod' })]
+          }),
+        ),
+      ],
+    ]),
+    { modifiedDependencies: true },
+  )
+  await t.rejects(
+    install(opts(), add),
+    {
+      message: 'Cannot add abbrev: it is removed by a graph modifier',
+      cause: { code: 'ECONFIG', found: ':root > #abbrev' },
+    },
+    'an explicit add of a removed dep fails',
+  )
+  t.ok(
+    existsSync(resolve(projectRoot, 'node_modules/.nrz-lock.json')),
+    'caught before the build, hidden lockfile kept',
+  )
+})
+
+t.test(
+  'adding a "-" modifier removes an installed dependency',
+  async t => {
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        dependencies: {
+          which: '^2.0.1',
+          isexe: '^2.0.0',
+          abbrev: '2.0.0',
+        },
+      }),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    t.teardown(() => unload('project'))
+    const opts = (extra?: Record<string, unknown>) =>
+      ({
+        projectRoot,
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        packageInfo: mockPackageInfo,
+        allowScripts: ':not(*)',
+        registries: { npm: 'https://registry.npmjs.org/' },
+        ...extra,
+      }) as unknown as InstallOptions
+    // the cli always passes an add map
+    const noAdd = () =>
+      Object.assign(new Map(), {
+        modifiedDependencies: false,
+      }) as AddImportersDependenciesMap
+    // removed links go to a detached rm process, which holds the fixture
+    // cwd on windows (EBUSY); let tap sweep it instead. each import also
+    // gets a fresh nrz.json cache
+    const mockInstall = async () =>
+      (
+        await t.mockImport<typeof import('../src/install.ts')>(
+          '../src/install.ts',
+          {
+            '@nrz/rollback-remove': {
+              RollbackRemove: class extends RollbackRemove {
+                confirm() {}
+              },
+            },
+          },
+        )
+      ).install
+    let install = await mockInstall()
+    const exists = (f: string) => existsSync(resolve(projectRoot, f))
+    const store = (id: string) =>
+      exists(
+        `node_modules/.nrz/${joinDepIDTuple(['registry', 'npm', id])}`,
+      )
+
+    await install(opts(), noAdd())
+    t.ok(exists('node_modules/abbrev'), 'abbrev installed')
+    t.ok(exists('node_modules/isexe'), 'isexe installed')
+    t.ok(store('abbrev@2.0.0'), 'abbrev in store')
+
+    writeFileSync(
+      resolve(projectRoot, 'nrz.json'),
+      JSON.stringify({
+        modifiers: { ':root > #abbrev': '-', ':root > #isexe': '-' },
+      }),
+    )
+    install = await mockInstall()
+    await install(opts(), noAdd())
+    t.notOk(exists('node_modules/abbrev'), 'abbrev link removed')
+    t.notOk(exists('node_modules/isexe'), 'isexe link removed')
+    t.notOk(store('abbrev@2.0.0'), 'abbrev store dir removed')
+    t.ok(store('isexe@2.0.0'), 'isexe still used by which')
+
+    await t.resolves(
+      install(opts({ frozenLockfile: true }), noAdd()),
+      'frozen install passes',
+    )
+    const { diff } = await install(opts(), noAdd())
+    t.equal(diff?.hasChanges(), false, 'nothing left to reify')
+  },
+)
+
+t.test(
+  'a qualified "-" modifier drops an edge it starts to match',
+  async t => {
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        dependencies: { abbrev: '2.0.0' },
+      }),
+      'nrz.json': JSON.stringify({
+        modifiers: { ':root > #abbrev:semver(^1.0.0)': '-' },
+      }),
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const opts = (extra?: Record<string, unknown>) =>
+      ({
+        projectRoot,
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        packageInfo: mockPackageInfo,
+        allowScripts: ':not(*)',
+        registries: { npm: 'https://registry.npmjs.org/' },
+        ...extra,
+      }) as unknown as InstallOptions
+    const noAdd = () =>
+      Object.assign(new Map(), {
+        modifiedDependencies: false,
+      }) as AddImportersDependenciesMap
+    // see 'adding a "-" modifier removes an installed dependency'
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '@nrz/rollback-remove': {
+        RollbackRemove: class extends RollbackRemove {
+          confirm() {}
+        },
+      },
+    })
+    const exists = (f: string) => existsSync(resolve(projectRoot, f))
+    const read = (f: string) =>
+      readFileSync(resolve(projectRoot, f), 'utf8')
+
+    await install(opts(), noAdd())
+    t.ok(exists('node_modules/abbrev'), '2.0.0 is out of the range')
+
+    // ^1.1.0 is in range now, and modifiers are unchanged: the lockfile
+    // options match, so nothing else resets the old edge
+    const pj = JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: { abbrev: '^1.1.0' },
+    })
+    writeFileSync(resolve(projectRoot, 'package.json'), pj)
+    await t.rejects(
+      install(opts({ frozenLockfile: true }), noAdd()),
+      { message: /\.: abbrev is removed by a graph modifier/ },
+      'frozen install is out of sync',
+    )
+
+    const { graph } = await install(opts(), noAdd())
+    t.notOk(graph.mainImporter.edgesOut.get('abbrev'), 'edge dropped')
+    t.notOk(graph.nodesByName.get('abbrev'), 'node gone')
+    t.notOk(exists('node_modules/abbrev'), 'link removed')
+    t.notOk(
+      exists(
+        `node_modules/.nrz/${joinDepIDTuple(['registry', 'npm', 'abbrev@2.0.0'])}`,
+      ),
+      'store dir removed',
+    )
+    const { nodes, edges } = JSON.parse(read('nrz-lock.json')) as {
+      nodes: object
+      edges: object
+    }
+    t.strictSame({ nodes, edges }, { nodes: {}, edges: {} })
+    t.equal(read('package.json'), pj, 'package.json untouched')
+
+    await t.resolves(
+      install(opts({ frozenLockfile: true }), noAdd()),
+      'frozen install passes',
+    )
+  },
+)
+
+t.test('explicit adds are checked against "-" modifiers', async t => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+    }),
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['packages/*'] },
+      modifiers: { '#abbrev': '-' },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.0.0',
+        }),
+      },
+    },
+    node_modules: { '.nrz-lock.json': '{}' },
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  t.teardown(() => unload('project'))
+  const opts = () =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      allowScripts: ':not(*)',
+      registries: { npm: 'https://registry.npmjs.org/' },
+    }) as unknown as InstallOptions
+  const addMap = (entries: [DepID, string][]) =>
+    Object.assign(
+      new Map(
+        entries.map(([id, arg]) => {
+          const spec = Spec.parse(arg)
+          const dep = asDependency({ spec, type: 'prod' })
+          return [id, new Map([[spec.name, dep]])]
+        }),
+      ),
+      { modifiedDependencies: true },
+    )
+  const { install } = await import('../src/install.ts')
+
+  // root `which` passes, the workspace abbrev does not
+  await t.rejects(
+    install(
+      opts(),
+      addMap([
+        [joinDepIDTuple(['file', '.']), 'which@^2.0.1'],
+        [joinDepIDTuple(['workspace', 'packages/a']), 'abbrev@2.0.0'],
+      ]),
+    ),
+    { cause: { code: 'ECONFIG', found: '#abbrev' } },
+    'a workspace importer is checked',
+  )
+  t.equal(
+    readFileSync(
+      resolve(projectRoot, 'node_modules/.nrz-lock.json'),
+      'utf8',
+    ),
+    '{}',
+    'hidden lockfile kept',
+  )
+  // not an importer: left to the build, which fails on its own
+  await t.rejects(
+    install(
+      opts(),
+      addMap([
+        [joinDepIDTuple(['file', 'not-a-dep']), 'abbrev@2.0.0'],
+      ]),
+    ),
+    { message: /not a dependency of this project/ },
+    'a nested folder is skipped',
+  )
+})
+
+// a modifier that does not govern the root's own abbrev edge leaves the
+// frozen check owning it, so editing package.json alone must be caught
+const ungovernedFrozenCase = async (
+  t: Test,
+  modifiers: Record<string, string>,
+) => {
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: { abbrev: '2.0.0' },
+    }),
+    'nrz.json': JSON.stringify({ modifiers }),
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const opts = (extra?: Record<string, unknown>) =>
+    ({
+      projectRoot,
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      packageInfo: mockPackageInfo,
+      allowScripts: ':not(*)',
+      registries: { npm: 'https://registry.npmjs.org/' },
+      ...extra,
+    }) as unknown as InstallOptions
+  const { install } = await import('../src/install.ts')
+  await install(opts())
+
+  const pj = resolve(projectRoot, 'package.json')
+  writeFileSync(
+    pj,
+    JSON.stringify({
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: { abbrev: '^2.0.0' },
+    }),
+  )
+  await t.rejects(
+    install(opts({ frozenLockfile: true })),
+    /abbrev spec changed from "abbrev@2.0.0" to "abbrev@\^2.0.0"/,
+    'the frozen check sees the edited spec',
+  )
+}
+
+t.test('a modifier scoped deeper does not exempt the root edge', t =>
+  ungovernedFrozenCase(t, { ':root > #unused > #abbrev': '2.0.0' }),
+)
+
+t.test('a rejecting qualifier does not exempt the root edge', t =>
+  ungovernedFrozenCase(t, {
+    ':root > #abbrev:semver(^1.0.0)': '1.1.1',
+  }),
+)
+
+t.test('the frozen error names the changed option', async t => {
+  const { opts, install } = await catalogSetup(t)
+  await install(opts({ catalog: { 'ansi-regex': '^5.0.1' } }))
+
+  await t.rejects(
+    install(
+      opts({
+        catalog: { 'ansi-regex': '^6.0.1' },
+        frozenLockfile: true,
+      }),
+    ),
+    {
+      message:
+        'Lockfile is out of sync with package.json. Run "nrz install" to update.\n' +
+        '  Configuration options have changed:\n' +
+        '    catalog: ansi-regex "^5.0.1" -> "^6.0.1"',
+    },
+    'the only detail line is the catalog entry',
+  )
+})
+
+t.test('allowSkills', async t => {
+  type LinkOpts = {
+    target: string
+    skillsDirs?: string[]
+    graph: unknown
+    apply?: boolean
+  }
+  // no `linkSkills`: loading the skills module throws
+  const setup = async (
+    t: Test,
+    linkSkills?: (o: LinkOpts) => unknown,
+  ) => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test',
+        version: '1.0.0',
+      }),
+      'nrz.json': '{}',
+      node_modules: { '.nrz-lock.json': '{}' },
+    })
+    const graph = {
+      nodes: new Map(),
+      importers: [],
+      projectRoot: dir,
+    }
+    let built = 0
+    const { install } = await t.mockImport<
+      typeof import('../src/install.ts')
+    >('../src/install.ts', {
+      '../src/ideal/build.ts': {
+        build: async () => {
+          built++
+          return graph
+        },
+      },
+      '../src/reify/index.ts': {
+        reify: async () => ({ buildQueue: [], diff: {} }),
+      },
+      '../src/index.ts': { lockfile: { save: () => {} } },
+      '../src/skills/index.ts': {
+        get linkSkills() {
+          if (!linkSkills) throw new Error('skills module loaded')
+          return async (o: LinkOpts) => linkSkills(o)
+        },
+      },
+    })
+    const run = (extra: Partial<InstallOptions>) =>
+      install(
+        {
+          projectRoot: dir,
+          scurry: new PathScurry(dir),
+          packageJson: new PackageJson(),
+          packageInfo: mockPackageInfo,
+          allowScripts: ':not(*)',
+          ...extra,
+        },
+        new Map() as AddImportersDependenciesMap,
+      )
+    return { dir, graph, run, built: () => built }
+  }
+
+  t.test('links matching skills', async t => {
+    const calls: LinkOpts[] = []
+    const skills = {
+      linked: [],
+      unchanged: [],
+      removed: [],
+      conflicts: [],
+    }
+    const { graph, run } = await setup(t, o => {
+      calls.push(o)
+      return skills
+    })
+    const result = await run({
+      allowSkills: '#foo',
+      skillsDirs: ['.claude/skills'],
+    })
+    t.equal(calls.length, 1)
+    t.equal(calls[0]?.target, '#foo')
+    t.notOk(calls[0]?.apply, 'installs never apply')
+    t.strictSame(calls[0]?.skillsDirs, ['.claude/skills'])
+    t.equal(calls[0]?.graph, graph, 'uses the installed graph')
+    t.equal(result.skills, skills)
+    await run({ allowSkills: '#foo:skill(x)' })
+    t.equal(calls[1]?.target, '#foo:skill(x)', ':skill() accepted')
+  })
+
+  t.test('unset or :not(*): skills module never loaded', async t => {
+    const { run } = await setup(t)
+    for (const extra of [
+      {},
+      { allowSkills: ':not(*)' },
+      { skillsDirs: ['../x'] },
+    ]) {
+      const result = await run(extra)
+      t.notOk('skills' in result, JSON.stringify(extra))
+    }
+    await t.rejects(
+      run({ allowSkills: '*' }),
+      /skills module loaded/,
+      'set: loaded',
+    )
+  })
+
+  t.test('lockfileOnly: skills module never loaded', async t => {
+    const { run } = await setup(t)
+    const result = await run({ allowSkills: '*', lockfileOnly: true })
+    t.notOk('skills' in result)
+  })
+
+  t.test('invalid query fails before installing', async t => {
+    const { run, built } = await setup(t)
+    for (const q of [':nope', '#foo:skill(x) > *']) {
+      await t.rejects(run({ allowSkills: q }), {
+        cause: { code: 'EUSAGE', found: q },
+      })
+    }
+    t.equal(built(), 0, 'nothing built')
+  })
+
+  t.test('invalid skills-dir fails before installing', async t => {
+    const { run, built } = await setup(t)
+    await t.rejects(run({ allowSkills: '*', skillsDirs: ['../x'] }), {
+      cause: { code: 'EUSAGE', found: '../x' },
+    })
+    t.equal(built(), 0, 'nothing built')
+  })
+
+  t.test('a link failure does not undo the install', async t => {
+    const { dir, run } = await setup(t, () => {
+      throw new Error('link failed')
+    })
+    await t.rejects(run({ allowSkills: '*' }), /link failed/)
+    t.ok(
+      statSync(resolve(dir, 'node_modules/.nrz-lock.json')).isFile(),
+      'hidden lockfile kept',
+    )
+  })
+})

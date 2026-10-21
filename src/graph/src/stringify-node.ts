@@ -1,5 +1,6 @@
 import { splitDepID } from '@nrz/dep-id/browser'
-import { type NodeLike } from './types.ts'
+import { defaultRegistryName } from '@nrz/spec/browser'
+import type { NodeLike } from '@nrz/types'
 
 export const stringifyNode = (node?: NodeLike) => {
   if (!node) return ''
@@ -7,7 +8,14 @@ export const stringifyNode = (node?: NodeLike) => {
   const [type, ref, nameVersion] = splitDepID(node.id)
 
   if (type === 'registry') {
-    const prefix = ref ? `${ref}:` : 'npm:'
+    let prefix = `${defaultRegistryName}:`
+    if (ref) {
+      if (/^https?:\/\//.test(ref)) {
+        prefix = `registry:${ref}#`
+      } else {
+        prefix = `${ref}:`
+      }
+    }
     return `${prefix}${nameVersion}`
   } else if (type === 'workspace') {
     return `workspace:${node.name}`

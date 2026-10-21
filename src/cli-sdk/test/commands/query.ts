@@ -1,0 +1,1333 @@
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import t from 'tap'
+import { PathScurry } from 'path-scurry'
+import * as Graph from '@nrz/graph'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import { PackageJson } from '@nrz/package-json'
+import { Spec } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
+import { Monorepo } from '@nrz/workspaces'
+import type { SpecOptions } from '@nrz/spec'
+import type { Test } from 'tap'
+import type { LoadedConfig } from '../../src/config/index.ts'
+
+t.cleanSnapshot = s =>
+  s.replace(
+    /^(\s+)"projectRoot": ".*"/gm,
+    '$1"projectRoot": "{ROOT}"',
+  )
+
+const specOptions = {
+  registry: 'https://registry.npmjs.org/',
+  registries: {
+    npm: 'https://registry.npmjs.org/',
+    custom: 'https://example.com',
+  },
+} satisfies SpecOptions
+
+const sharedOptions = {
+  scurry: new PathScurry(),
+  packageJson: new PackageJson(),
+}
+
+const graph = new Graph.Graph({
+  projectRoot: t.testdirName,
+  ...specOptions,
+  mainManifest: {
+    name: 'my-project',
+    version: '1.0.0',
+    dependencies: {
+      foo: '^1.0.0',
+      bar: '^1.0.0',
+      missing: '^1.0.0',
+    },
+  },
+})
+graph.placePackage(
+  graph.mainImporter,
+  'prod',
+  Spec.parse('foo', '^1.0.0', specOptions),
+  {
+    name: 'foo',
+    version: '1.0.0',
+  },
+)
+const bar = graph.placePackage(
+  graph.mainImporter,
+  'prod',
+  Spec.parse('bar', '^1.0.0', specOptions),
+  {
+    name: 'bar',
+    version: '1.0.0',
+    dependencies: {
+      baz: '^1.0.0',
+    },
+  },
+)!
+const baz = graph.placePackage(
+  bar,
+  'prod',
+  Spec.parse('baz', 'custom:baz@^1.0.0', specOptions),
+  {
+    name: 'baz',
+    version: '1.0.0',
+    dist: {
+      tarball: 'https://registry.nrz.khulnasoft.com/baz',
+    },
+  },
+)!
+graph.placePackage(
+  graph.mainImporter,
+  'prod',
+  Spec.parse('missing', '^1.0.0', specOptions),
+)
+graph.placePackage(
+  baz,
+  'prod',
+  Spec.parse('foo', '^1.0.0', specOptions),
+  {
+    name: 'foo',
+    version: '1.0.0',
+  },
+)
+
+const mockQuery = async (
+  t: Test,
+  { graph: g = graph, ...mocks }: Record<string, any> = {},
+) =>
+  t.mockImport<typeof import('../../src/commands/query.ts')>(
+    '../../src/commands/query.ts',
+    {
+      '@nrz/graph': t.createMock(Graph, {
+        actual: {
+          load: () => g,
+        },
+        install: () => {},
+        uninstall: () => {},
+        reify: {},
+        ideal: {},
+        asDependency: () => {},
+      }),
+      '@nrz/security-archive': {
+        SecurityArchive: {
+          async start() {
+            return {
+              ok: false,
+              get: () => undefined,
+            }
+          },
+        },
+      },
+      ...mocks,
+    },
+  )
+
+const Command = await mockQuery(t)
+
+const runCommand = async (
+  {
+    options = {},
+    positionals = [],
+    values,
+  }: {
+    options?: object
+    positionals?: string[]
+    values: Partial<LoadedConfig['values']> & {
+      view: Exclude<LoadedConfig['values']['view'], 'inspect'>
+      target?: string
+    }
+  },
+  cmd = Command,
+) => {
+  const config = {
+    options,
+    positionals,
+    values,
+    get: (key: string) => (values as any)[key],
+  } as LoadedConfig
+  const res = await cmd.command(config)
+  const output =
+    values.view === 'silent' ? undefined
+    : values.view === 'human' ?
+      cmd.views.human(res, { colors: values.color })
+    : values.view === 'mermaid' ? cmd.views.mermaid(res)
+    : values.view === 'count' ? cmd.views.count(res)
+    : cmd.views.json(res)
+  return values.view === 'json' ?
+      JSON.stringify(output, null, 2)
+    : output
+}
+
+t.test('query', async t => {
+  t.matchSnapshot(Command.usage().usage(), 'should have usage')
+
+  sharedOptions.packageJson.read = () => graph.mainImporter.manifest!
+  const options = {
+    ...sharedOptions,
+    // the query command requires a nrz install
+    projectRoot: t.testdir({
+      node_modules: { '.nrz-lock.json': '{}' },
+    }),
+  }
+
+  t.matchSnapshot(
+    await runCommand({
+      positionals: [],
+      values: {
+        view: 'human',
+      },
+      options,
+    }),
+    'should list pkgs in human readable format',
+  )
+
+  t.matchSnapshot(
+    await runCommand({
+      positionals: [],
+      values: {
+        view: 'json',
+      },
+      options,
+    }),
+    'should list pkgs in json format',
+  )
+
+  t.matchSnapshot(
+    await runCommand({
+      positionals: [],
+      values: {
+        view: 'mermaid',
+      },
+      options,
+    }),
+    'should list mermaid in json format',
+  )
+
+  t.equal(
+    await runCommand({
+      positionals: [],
+      values: {
+        view: 'count',
+      },
+      options,
+    }),
+    5,
+    'should list pkgs count',
+  )
+
+  await t.test('expect-results option', async t => {
+    t.matchSnapshot(
+      await runCommand({
+        positionals: ['*'],
+        values: {
+          'expect-results': '>0',
+          view: 'human',
+        },
+        options,
+      }),
+      'should return items when expect-results check passes',
+    )
+
+    t.ok(
+      await runCommand({
+        positionals: ['*'],
+        values: {
+          'expect-results': '>=  5',
+          view: 'human',
+        },
+        options,
+      }),
+      'should pass gte checks',
+    )
+
+    await t.rejects(
+      Command.command({
+        positionals: ['[version="2.0.0"]'],
+        values: {
+          'expect-results': '>1',
+          view: 'human',
+        },
+        options,
+        get: () => undefined,
+      } as unknown as LoadedConfig),
+      /Unexpected number of items/,
+      'should fail validation for gt check',
+    )
+
+    await t.rejects(
+      Command.command({
+        positionals: ['*'],
+        values: {
+          'expect-results': '>=1000',
+          view: 'human',
+        },
+        options,
+        get: () => undefined,
+      } as unknown as LoadedConfig),
+      /Unexpected number of items/,
+      'should fail validation for gte check',
+    )
+
+    await t.rejects(
+      Command.command({
+        positionals: ['*'],
+        values: {
+          'expect-results': '<3',
+          view: 'human',
+        },
+        options,
+        get: () => undefined,
+      } as unknown as LoadedConfig),
+      /Unexpected number of items/,
+      'should fail validation for lt check',
+    )
+
+    await t.rejects(
+      Command.command({
+        positionals: ['*'],
+        values: {
+          'expect-results': '<=1',
+          view: 'human',
+        },
+        options,
+        get: () => undefined,
+      } as unknown as LoadedConfig),
+      /Unexpected number of items/,
+      'should fail validation for lte check',
+    )
+
+    await t.rejects(
+      Command.command({
+        positionals: ['*'],
+        values: {
+          'expect-results': '500',
+          view: 'human',
+        },
+        options,
+        get: () => undefined,
+      } as unknown as LoadedConfig),
+      /Unexpected number of items/,
+      'should fail validation for exact numeric value check',
+    )
+  })
+
+  await t.test('workspaces', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const dir = t.testdir({
+      // the query command requires a nrz install
+      node_modules: { '.nrz-lock.json': '{}' },
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        workspaces: { packages: ['./packages/*'] },
+      }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+          }),
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'b',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+    t.chdir(dir)
+    unload()
+
+    const monorepo = Monorepo.load(dir)
+    const graph = new Graph.Graph({
+      ...specOptions,
+      projectRoot: dir,
+      mainManifest,
+      monorepo,
+    })
+
+    sharedOptions.packageJson.read = () => mainManifest
+    const options = {
+      ...sharedOptions,
+      projectRoot: dir,
+      monorepo,
+    }
+
+    const Command = await mockQuery(t, { graph })
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [],
+          values: {
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should list workspaces in human readable format',
+    )
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [],
+          values: {
+            view: 'json',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should list workspaces in json format',
+    )
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [],
+          values: {
+            workspace: ['a'],
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should list single workspace',
+    )
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [':scope'],
+          values: {
+            workspace: ['a'],
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should use specified workspace as scope selector',
+    )
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: ['*'],
+          values: {
+            scope: ':workspace#a',
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should add scope nodes as importers',
+    )
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: ['*'],
+          values: {
+            scope: ':workspace',
+            view: 'json',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should add all scope nodes as importers',
+    )
+  })
+
+  await t.test('running from homedir', async t => {
+    const dir = t.testdir({
+      // the query command requires a nrz install
+      node_modules: { '.nrz-lock.json': '{}' },
+      projects: {
+        'my-project': {
+          node_modules: {
+            '.nrz': {},
+          },
+          'package.json': JSON.stringify({
+            name: 'my-project',
+            version: '1.0.0',
+          }),
+          'nrz.json': JSON.stringify({
+            workspaces: { packages: ['./packages/*'] },
+          }),
+          packages: {
+            a: {
+              'package.json': JSON.stringify({
+                name: 'a',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+      },
+    })
+    t.chdir(dir)
+    unload()
+
+    const Command = await t.mockImport<
+      typeof import('../../src/commands/query.ts')
+    >('../../src/commands/query.ts')
+    const options = {
+      ['dashboard-root']: [resolve(dir, 'projects')],
+      scurry: new PathScurry(dir),
+      packageJson: new PackageJson(),
+      projectRoot: dir,
+      monorepo: Monorepo.maybeLoad(
+        resolve(dir, 'projects/my-project'),
+      ),
+    }
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [],
+          values: {
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should list all projects deps',
+    )
+
+    const projectFolder = options.scurry.resolvePosix(
+      resolve(dir, 'projects/my-project'),
+    )
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [`:host("file:${projectFolder}")`],
+          values: {
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should read project from host context',
+    )
+  })
+
+  await t.test('colors', async t => {
+    const Command = await mockQuery(t)
+
+    t.matchSnapshot(
+      await runCommand(
+        {
+          positionals: [],
+          values: {
+            color: true,
+            view: 'human',
+          },
+          options,
+        },
+        Command,
+      ),
+      'should use colors when set in human readable format',
+    )
+  })
+
+  await t.test('default query string selection logic', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const dir = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        workspaces: { packages: ['./packages/*'] },
+      }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'workspace-a',
+            version: '1.0.0',
+          }),
+        },
+        b: {
+          'package.json': JSON.stringify({
+            name: 'workspace-b',
+            version: '1.0.0',
+          }),
+        },
+      },
+      node_modules: {
+        // the query command requires a nrz install
+        '.nrz-lock.json': '{}',
+        a: t.fixture('symlink', '../packages/a'),
+        b: t.fixture('symlink', '../packages/a'),
+      },
+    })
+    t.chdir(dir)
+    unload()
+
+    const monorepo = Monorepo.load(dir)
+    const graph = Graph.actual.load({
+      monorepo,
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(),
+      projectRoot: dir,
+      ...specOptions,
+    })
+
+    const Command = await mockQuery(t, { graph })
+    const result = await runCommand(
+      {
+        positionals: [], // No positionals to test default query logic
+        values: {
+          view: 'human',
+          scope: '#a', // Should trigger the default selection logic
+        },
+        options,
+      },
+      Command,
+    )
+
+    t.matchSnapshot(
+      result,
+      'should select the correct workspace based on default query logic',
+    )
+  })
+
+  await t.test('scope with workspaces', async t => {
+    // Create a more realistic test with actual graph nodes
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const dir = t.testdir({
+      // the query command requires a nrz install
+      node_modules: { '.nrz-lock.json': '{}' },
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        workspaces: { packages: ['./packages/*'] },
+      }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'workspace-a',
+            version: '1.0.0',
+          }),
+        },
+      },
+    })
+    t.chdir(dir)
+
+    const monorepo = Monorepo.load(dir)
+    const graph = Graph.actual.load({
+      monorepo,
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(),
+      projectRoot: dir,
+      ...specOptions,
+    })
+
+    const Command = await mockQuery(t, { graph })
+
+    const result = await runCommand(
+      {
+        positionals: ['*'],
+        values: {
+          scope: ':workspace',
+          view: 'human',
+        },
+        options,
+      },
+      Command,
+    )
+
+    t.matchSnapshot(
+      result,
+      'should handle scope with workspaces correctly',
+    )
+  })
+
+  await t.test('scope with a transitive dependency', async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+    }
+    const dir = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': JSON.stringify({
+        workspaces: { packages: ['./packages/*'] },
+      }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'workspace-a',
+            version: '1.0.0',
+            dependencies: {
+              foo: '^1.0.0',
+            },
+          }),
+        },
+      },
+      node_modules: {
+        // the query command requires a nrz install
+        '.nrz-lock.json': '{}',
+        '.nrz': {
+          [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: {
+            node_modules: {
+              foo: {
+                'package.json': JSON.stringify({
+                  name: 'foo',
+                  version: '1.0.0',
+                  dependencies: {
+                    bar: '^1.0.0',
+                  },
+                }),
+              },
+              bar: t.fixture(
+                'symlink',
+                join(
+                  '../../',
+                  joinDepIDTuple(['registry', '', 'bar@1.0.0']),
+                  'node_modules/bar',
+                ),
+              ),
+            },
+          },
+          [joinDepIDTuple(['registry', '', 'bar@1.0.0'])]: {
+            node_modules: {
+              bar: {
+                'package.json': JSON.stringify({
+                  name: 'bar',
+                  version: '1.0.0',
+                }),
+              },
+            },
+          },
+        },
+        foo: t.fixture(
+          'symlink',
+          join(
+            '.nrz',
+            joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+            'node_modules',
+            'foo',
+          ),
+        ),
+        bar: t.fixture(
+          'symlink',
+          join(
+            '.nrz',
+            joinDepIDTuple(['registry', '', 'bar@1.0.0']),
+            'node_modules',
+            'bar',
+          ),
+        ),
+      },
+    })
+    t.chdir(dir)
+
+    const monorepo = Monorepo.load(dir)
+    const graph = Graph.actual.load({
+      monorepo,
+      packageJson: new PackageJson(),
+      scurry: new PathScurry(),
+      projectRoot: dir,
+      ...specOptions,
+    })
+
+    const Command = await mockQuery(t, { graph })
+
+    const result = await runCommand(
+      {
+        positionals: ['*'],
+        values: {
+          scope: '#foo',
+          view: 'human',
+        },
+        options,
+      },
+      Command,
+    )
+
+    t.matchSnapshot(
+      result,
+      'should handle scope with a transitive dependency',
+    )
+  })
+
+  // Test --target option functionality
+  await t.test('--target option', async t => {
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: '*' },
+        options,
+      }),
+      'should accept wildcard selector',
+    )
+
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: '#foo' },
+        options,
+      }),
+      'should accept ID selector',
+    )
+
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: '[name="foo"]' },
+        options,
+      }),
+      'should accept attribute selector',
+    )
+
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: ':project > *' },
+        options,
+      }),
+      'should accept combinator selectors',
+    )
+
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: ':root > :prod' },
+        options,
+      }),
+      'should accept pseudo-element selectors',
+    )
+
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'json', target: ':project' },
+        options,
+      }),
+      'should work with json output',
+    )
+
+    // Test that --target takes precedence over positional arguments
+    t.matchSnapshot(
+      await runCommand({
+        positionals: ['#bar'],
+        values: { view: 'human', target: '*' },
+        options,
+      }),
+      'should use --target over positional arguments',
+    )
+
+    // Test complex queries
+    t.matchSnapshot(
+      await runCommand({
+        positionals: [],
+        values: { view: 'human', target: ':project, :project > *' },
+        options,
+      }),
+      'should handle complex query string',
+    )
+  })
+
+  await t.test('empty result messages', async t => {
+    const logged: unknown[][] = []
+    const stdout = (...a: unknown[]) => logged.push(a)
+    const stderr = (..._a: unknown[]) => {}
+
+    const mockQueryWithStdout = async (t: Test) =>
+      t.mockImport<typeof import('../../src/commands/query.ts')>(
+        '../../src/commands/query.ts',
+        {
+          '@nrz/graph': t.createMock(Graph, {
+            actual: {
+              load: () => graph,
+            },
+            install: () => {},
+            uninstall: () => {},
+            reify: {},
+            ideal: {},
+            asDependency: () => {},
+          }),
+          '@nrz/security-archive': {
+            SecurityArchive: {
+              async start() {
+                return {
+                  ok: false,
+                  get: () => undefined,
+                }
+              },
+            },
+          },
+          '../../src/output.ts': { stdout, stderr },
+        },
+      )
+
+    await t.test('scope query matches nothing', async t => {
+      logged.length = 0
+      const Command = await mockQueryWithStdout(t)
+
+      const values = {
+        scope: '[name="nonexistent"]',
+        view: 'human',
+      }
+      await Command.command({
+        positionals: [],
+        values,
+        options,
+        get: (key: string) => (values as any)[key],
+      } as unknown as LoadedConfig)
+
+      t.equal(logged.length, 1, 'should log one message')
+      t.match(
+        logged[0],
+        [/No packages found matching scope query/],
+        'should show scope query message',
+      )
+    })
+
+    await t.test(
+      'scope query matches nothing (non-human view)',
+      async t => {
+        logged.length = 0
+        const Command = await mockQueryWithStdout(t)
+
+        const values = {
+          scope: '[name="nonexistent"]',
+          view: 'json',
+        }
+        await Command.command({
+          positionals: [],
+          values,
+          options,
+          get: (key: string) => (values as any)[key],
+        } as unknown as LoadedConfig)
+
+        t.equal(
+          logged.length,
+          0,
+          'should not log message for json view',
+        )
+      },
+    )
+
+    const setupWorkspace = async (t: Test) => {
+      const mainManifest = {
+        name: 'my-project',
+        version: '1.0.0',
+      }
+      const dir = t.testdir({
+        // the query command requires a nrz install
+        node_modules: { '.nrz-lock.json': '{}' },
+        'package.json': JSON.stringify(mainManifest),
+        'nrz.json': JSON.stringify({
+          workspaces: { packages: ['./packages/*'] },
+        }),
+        packages: {
+          a: {
+            'package.json': JSON.stringify({
+              name: 'a',
+              version: '1.0.0',
+            }),
+          },
+        },
+      })
+      t.chdir(dir)
+      unload()
+
+      const monorepo = Monorepo.load(dir)
+      const graph = new Graph.Graph({
+        ...specOptions,
+        projectRoot: dir,
+        mainManifest,
+        monorepo,
+      })
+
+      const Command = await t.mockImport<
+        typeof import('../../src/commands/query.ts')
+      >('../../src/commands/query.ts', {
+        '@nrz/graph': t.createMock(Graph, {
+          actual: {
+            load: () => graph,
+          },
+          install: () => {},
+          uninstall: () => {},
+          reify: {},
+          ideal: {},
+          asDependency: () => {},
+        }),
+        '@nrz/security-archive': {
+          SecurityArchive: {
+            async start() {
+              return {
+                ok: false,
+                get: () => undefined,
+              }
+            },
+          },
+        },
+        '../../src/output.ts': { stdout, stderr },
+      })
+
+      return {
+        Command,
+        options: {
+          ...sharedOptions,
+          projectRoot: dir,
+          monorepo,
+        },
+      }
+    }
+
+    await t.test('workspace filter matches nothing', async t => {
+      logged.length = 0
+      const { Command: WorkspaceCmd, options: wsOptions } =
+        await setupWorkspace(t)
+      const values = {
+        workspace: ['nonexistent'],
+        view: 'human',
+      }
+      await WorkspaceCmd.command({
+        positionals: [],
+        values,
+        options: wsOptions,
+        get: (key: string) => (values as any)[key],
+      } as unknown as LoadedConfig)
+
+      t.equal(logged.length, 1, 'should log one message')
+      t.match(
+        logged[0],
+        [/No matching workspaces found/],
+        'should show workspace filter message',
+      )
+    })
+
+    await t.test(
+      'workspace filter matches nothing (non-human view)',
+      async t => {
+        logged.length = 0
+
+        const { Command: WorkspaceCmd, options: wsOptions } =
+          await setupWorkspace(t)
+        const values = {
+          workspace: ['nonexistent'],
+          view: 'count',
+        }
+        await WorkspaceCmd.command({
+          positionals: [],
+          values,
+          options: wsOptions,
+          get: (key: string) => (values as any)[key],
+        } as unknown as LoadedConfig)
+
+        t.equal(
+          logged.length,
+          0,
+          'should not log message for count view',
+        )
+      },
+    )
+
+    await t.test(
+      'main query matches nothing (with graph)',
+      async t => {
+        logged.length = 0
+        const Command = await mockQueryWithStdout(t)
+
+        const values = {
+          view: 'human',
+        }
+        await Command.command({
+          positionals: ['[name="nonexistent"]'],
+          values,
+          options,
+          get: (key: string) => (values as any)[key],
+        } as unknown as LoadedConfig)
+
+        t.equal(logged.length, 1, 'should log one message')
+        t.match(
+          logged[0],
+          [/No packages found matching query/],
+          'should show main query message',
+        )
+      },
+    )
+
+    await t.test(
+      'main query matches nothing (non-human view)',
+      async t => {
+        logged.length = 0
+        const Command = await mockQueryWithStdout(t)
+
+        const values = {
+          view: 'json',
+        }
+        await Command.command({
+          positionals: ['[name="nonexistent"]'],
+          values,
+          options,
+          get: (key: string) => (values as any)[key],
+        } as unknown as LoadedConfig)
+
+        t.equal(
+          logged.length,
+          0,
+          'should not log message for json view',
+        )
+      },
+    )
+
+    await t.test(
+      'expect-results overrides empty result message',
+      async t => {
+        logged.length = 0
+        const Command = await mockQueryWithStdout(t)
+
+        const values = {
+          'expect-results': '1',
+          view: 'human',
+        }
+        await t.rejects(
+          Command.command({
+            positionals: ['[name="nonexistent"]'],
+            values,
+            options,
+            get: (key: string) => (values as any)[key],
+          } as unknown as LoadedConfig),
+          /Unexpected number of items/,
+          'should throw validation error instead of empty message',
+        )
+
+        t.equal(logged.length, 0, 'should not log empty message')
+      },
+    )
+  })
+})
+
+t.test('install validation', async t => {
+  const mainManifest = { name: 'my-project', version: '1.0.0' }
+  const fixture = {
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': JSON.stringify({}),
+  }
+
+  const run = async (
+    t: Test,
+    dir: string,
+    values: Partial<LoadedConfig['values']> & { target?: string },
+    positionals: string[] = [],
+  ) => {
+    const Command = await mockQuery(t)
+    const packageJson = new PackageJson()
+    packageJson.read = () => mainManifest
+    return Command.command({
+      positionals,
+      values: { view: 'count', ...values },
+      options: { ...sharedOptions, packageJson, projectRoot: dir },
+      get: (key: string) => (values as any)[key],
+    } as unknown as LoadedConfig)
+  }
+
+  await t.test('node_modules not installed by nrz', async t => {
+    const dir = t.testdir({ ...fixture, node_modules: { foo: {} } })
+    await t.rejects(
+      run(t, dir, { view: 'count' }),
+      {
+        message: `No nrz install found in ${resolve(dir, 'node_modules')}\n\n  run \`nrz install\` to rebuild it before running \`nrz query\``,
+        cause: { code: 'EQUERY', path: join(dir, 'node_modules') },
+      },
+      'should refuse to query a node_modules nrz did not install',
+    )
+  })
+
+  await t.test('no node_modules at all', async t => {
+    const dir = t.testdir(fixture)
+    await t.rejects(
+      run(t, dir, { view: 'count' }),
+      {
+        message: `No nrz install found in ${resolve(dir, 'node_modules')}\n\n  run \`nrz install\` before running \`nrz query\``,
+        cause: { code: 'EQUERY', path: join(dir, 'node_modules') },
+      },
+      'should refuse to query a project that was never installed',
+    )
+  })
+
+  await t.test('nrz store present', async t => {
+    const dir = t.testdir({
+      ...fixture,
+      node_modules: { '.nrz': {} },
+    })
+    await t.resolves(
+      run(t, dir, { view: 'count' }),
+      'should accept a nrz install even without the hidden lockfile',
+    )
+  })
+
+  await t.test('hidden lockfile present', async t => {
+    const dir = t.testdir({
+      ...fixture,
+      node_modules: { '.nrz-lock.json': '{}' },
+    })
+    await t.resolves(
+      run(t, dir, { view: 'count' }),
+      'should accept a dependency-less nrz install',
+    )
+  })
+
+  await t.test('host context queries are exempt', async t => {
+    const dir = t.testdir(fixture)
+    for (const values of [
+      { target: ':host(local) *' },
+      { scope: ':host(local) *' },
+    ]) {
+      await t.resolves(
+        run(t, dir, values as Partial<LoadedConfig['values']>),
+        `should not require an install for ${JSON.stringify(values)}`,
+      )
+    }
+    await t.resolves(
+      run(t, dir, { view: 'count' }, [':host(local) *']),
+      'should not require an install for a positional host query',
+    )
+  })
+
+  await t.test(
+    '--target overrides a positional host query',
+    async t => {
+      const dir = t.testdir(fixture)
+      await t.rejects(
+        run(t, dir, { view: 'count', target: '*' }, [
+          ':host(local) *',
+        ]),
+        { cause: { code: 'EQUERY' } },
+        'should check the query that actually runs',
+      )
+    },
+  )
+
+  await t.test('real loader over foreign and nrz trees', async t => {
+    const fooId = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+    const foo = () => ({
+      'package.json': JSON.stringify({
+        name: 'foo',
+        version: '1.0.0',
+      }),
+    })
+    const dir = t.testdir({
+      npm: {
+        'package.json': JSON.stringify({
+          ...mainManifest,
+          dependencies: { foo: '^1.0.0' },
+        }),
+        'nrz.json': JSON.stringify({}),
+        node_modules: { foo: foo() },
+      },
+      nrz: {
+        'package.json': JSON.stringify({
+          ...mainManifest,
+          dependencies: { foo: '^1.0.0' },
+        }),
+        'nrz.json': JSON.stringify({}),
+        // the walk only follows symlinks into the store, so link foo
+        // the way reify does, otherwise it is reported as missing
+        node_modules: {
+          '.nrz': { [fooId]: { node_modules: { foo: foo() } } },
+          foo: t.fixture(
+            'symlink',
+            join('.nrz', fooId, 'node_modules', 'foo'),
+          ),
+        },
+      },
+      projects: {
+        other: {
+          'package.json': JSON.stringify({
+            name: 'other',
+            version: '1.0.0',
+          }),
+          'nrz.json': JSON.stringify({}),
+          node_modules: { '.nrz': {} },
+        },
+      },
+    })
+    const Command = await t.mockImport<
+      typeof import('../../src/commands/query.ts')
+    >('../../src/commands/query.ts')
+    const hiddenLockfile = (root: string) =>
+      join(root, 'node_modules', '.nrz-lock.json')
+    const run = (
+      root: string,
+      positionals: string[],
+      values: Record<string, unknown> = {},
+    ) => {
+      t.chdir(root)
+      unload()
+      return runCommand(
+        {
+          positionals,
+          values: { view: 'count', ...values } as any,
+          options: {
+            ['dashboard-root']: [resolve(dir, 'projects')],
+            scurry: new PathScurry(root),
+            packageJson: new PackageJson(),
+            projectRoot: root,
+            monorepo: Monorepo.maybeLoad(root),
+          },
+        },
+        Command,
+      )
+    }
+
+    const npm = resolve(dir, 'npm')
+    await t.rejects(
+      run(npm, ['*']),
+      { cause: { code: 'EQUERY' } },
+      'should reject a node_modules installed by another client',
+    )
+    t.notOk(
+      existsSync(hiddenLockfile(npm)),
+      'should not write a hidden lockfile on rejection',
+    )
+
+    await t.resolves(
+      run(npm, [':host(local) *']),
+      'host query should be answered from the other project',
+    )
+    t.notOk(
+      existsSync(hiddenLockfile(npm)),
+      'walking a foreign node_modules must not write a hidden lockfile',
+    )
+    await t.rejects(
+      run(npm, ['*']),
+      { cause: { code: 'EQUERY' } },
+      'should still reject after an exempt query ran',
+    )
+
+    const nrz = resolve(dir, 'nrz')
+    t.equal(
+      await run(nrz, ['*']),
+      1,
+      'should answer from the walk when the store exists',
+    )
+    t.equal(
+      await run(nrz, [':missing']),
+      0,
+      'should find the dependency linked from the store',
+    )
+    t.ok(
+      existsSync(hiddenLockfile(nrz)),
+      'walking a nrz node_modules caches the hidden lockfile',
+    )
+  })
+})

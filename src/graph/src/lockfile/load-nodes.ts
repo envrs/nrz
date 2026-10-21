@@ -1,47 +1,170 @@
-import { splitDepID } from '@nrz/dep-id/browser'
+import { error } from '@nrz/error-cause'
 import {
-  type LockfileData,
+  asDepID,
+  splitDepID,
+  splitExtra,
+} from '@nrz/dep-id/browser'
+import {
   getBooleanFlagsFromNum,
-  type LockfileNode,
+  getBuildStateFromNum,
 } from './types.ts'
-import { type DepID } from '@nrz/dep-id'
-import { type GraphLike } from '../types.ts'
+import type { LockfileData, LockfileNode } from './types.ts'
+import { tarballFormat } from '@nrz/types'
+import type { DepID } from '@nrz/dep-id'
+import type { GraphLike } from '@nrz/types'
+import type { SpecOptions } from '@nrz/spec/browser'
 
 export const loadNodes = (
   graph: GraphLike,
   nodes: LockfileData['nodes'],
+  options: SpecOptions,
+  actual?: GraphLike,
+  throwOnMissingManifest?: boolean,
 ) => {
   const entries = Object.entries(nodes) as [DepID, LockfileNode][]
+  const nodeCount = entries.length
+
+  // Batch process registry spec parsing (only for large graphs)
+  // Only used for non-trivial graphs
+  const registryVersionCache =
+    nodeCount > 50 ? new Map<string, string>() : null
+
   for (const [id, lockfileNode] of entries) {
+    // lockfile keys have never been through `encode`, so they can hold
+    // anything, and the id is the store directory name
+    asDepID(id)
+    const [
+      flags,
+      name,
+      integrity,
+      resolved,
+      location,
+      manifest,
+      rawManifest,
+      platform,
+      bins,
+      buildState,
+    ] = lockfileNode
     // workspace nodes and the project root node are already part of the
     // graph and it should not create new nodes if an existing one is there
     if (graph.nodes.has(id)) continue
 
-    const [flags, name, integrity, resolved, location, manifest] =
-      lockfileNode
-    const [type, , spec] = splitDepID(id)
+    const [type, filepath, maybeExtra, lastExtra] = splitDepID(id)
+    const extra =
+      type === 'registry' || type === 'git' ? lastExtra : maybeExtra
+    const registrySpec = maybeExtra
+
+    // The reference node is a node that matches the same id from the
+    // current iterating node in the provided `actual` graph, this allows
+    // for hydrating missing manifest, integrity, and resolved values
+    // that may be missing from the lockfile
+    const referenceNode = actual?.nodes.get(id)
+    const mani = manifest ?? referenceNode?.manifest
+
+    // Throw if manifest is missing and the option is enabled
+    if (!mani && throwOnMissingManifest) {
+      throw error(
+        `Missing manifest for node ${id} and no reference node found.`,
+      )
+    }
+
+    // Optimize registry version extraction with caching for large graphs
+    let version: string | undefined
+    // scoped names start with '@', so look for the version separator
+    // past the first character
+    if (
+      type === 'registry' &&
+      registrySpec &&
+      registrySpec.indexOf('@', 1) > 0
+    ) {
+      if (registryVersionCache) {
+        const seenVersion = registryVersionCache.get(registrySpec)
+        /* c8 ignore start */
+        if (seenVersion) {
+          version = seenVersion
+        } else {
+          version = registrySpec.split('@').slice(-1)[0] || undefined
+          /* c8 ignore stop */
+          if (version) {
+            registryVersionCache.set(registrySpec, version)
+          }
+        }
+      } else {
+        version = registrySpec.split('@').slice(-1)[0] || undefined
+      }
+    }
 
     // if the lockfile has manifest data then it should just use that
     // otherwise tries to infer name / version value from the lockfile node
     const node =
-      manifest ?
-        graph.addNode(id, manifest)
+      mani ?
+        graph.addNode(id, mani)
       : graph.addNode(
           id,
           undefined,
           undefined,
           name ?? undefined,
-          type === 'registry' && spec.indexOf('@') > 0 ?
-            spec.split('@').slice(-1)[0]
-          : undefined,
+          version,
         )
 
-    const { dev, optional } = getBooleanFlagsFromNum(flags)
+    if (extra) {
+      const { modifier, peerSetHash } = splitExtra(extra)
+      if (modifier) {
+        node.modifier = modifier
+      }
+      if (peerSetHash) {
+        node.peerSetHash = peerSetHash
+      }
+    }
+
+    const { dev, optional, brotli } = getBooleanFlagsFromNum(flags)
+    node.options = options
     node.dev = dev
     node.optional = optional
-    node.integrity = integrity ?? undefined
-    node.resolved = resolved ?? undefined
+    // before setResolved(), which needs it to pick the extension for a
+    // node whose `resolved` the lockfile left out
+    node.brotli = brotli
+    node.integrity = integrity ?? referenceNode?.integrity
+    // `integrity` is the hash of the artifact `resolved` points at, so a
+    // reference url only stands in for an elided one when it names the
+    // kind of tarball the flag bit says the lockfile's own hash is for
+    const refResolved = referenceNode?.resolved
+    const refResolvedUsable =
+      !integrity ||
+      !refResolved ||
+      (tarballFormat(refResolved) === 'brotli') === brotli
+    node.resolved =
+      type === 'remote' ? filepath : (
+        (resolved ?? (refResolvedUsable ? refResolved : undefined))
+      )
+    node.resolvedFromLockfile = !!(node.integrity && node.resolved)
+    node.projectRoot = graph.projectRoot
     if (!node.resolved) node.setResolved()
-    if (location) node.location = location
+    if (location) {
+      node.location = location
+    } else {
+      // set the location to file dependencies based on the id value
+      if (type === 'file') {
+        node.location = filepath
+      }
+    }
+    if (mani && rawManifest) {
+      node.setConfusedManifest(mani, rawManifest)
+    }
+
+    // Set platform data if provided
+    if (platform) {
+      node.platform = platform
+    }
+
+    // optionally set bin data if provided
+    if (bins) {
+      node.bins = bins
+    }
+
+    // Set build state if provided
+    if (buildState !== undefined && buildState !== null) {
+      node.buildState = getBuildStateFromNum(buildState)
+    }
   }
 }

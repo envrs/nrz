@@ -1,0 +1,453 @@
+import { error } from '@nrz/error-cause'
+import {
+  RegistryClient,
+  assertOk,
+  oidc,
+  registryBase,
+  requestError,
+} from '@nrz/registry-client'
+import type { CacheEntry } from '@nrz/registry-client'
+import { run } from '@nrz/run'
+import { commandUsage } from '../config/usage.ts'
+import type { CommandFn, CommandUsage } from '../index.ts'
+import { packTarball } from '../pack-tarball.ts'
+import type { Views } from '../view.ts'
+import assert from 'node:assert'
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import prettyBytes from 'pretty-bytes'
+import { actual } from '@nrz/graph'
+import { Query } from '@nrz/query'
+import type { LoadedConfig } from '../config/index.ts'
+import { createHostContextsMap } from '../query-host-contexts.ts'
+import { sortScopeLocations } from '../sort-scope-locations.ts'
+import { minimatch } from 'minimatch'
+import { resolveRegistry } from '../require-registry.ts'
+import { stderr } from '../output.ts'
+import { getPublishConfig } from '../publish-config.ts'
+
+export const usage: CommandUsage = () =>
+  commandUsage({
+    command: 'publish',
+    usage: '',
+    description: `Create a tarball from a package and publish it to the configured registry.
+    
+    This command will pack the package in the current directory or specified folder,
+    and then upload it to the configured registry.
+
+    The registry is the package's \`publishConfig.registry\` if set (no other
+    registry config needed), else \`--registry\`, else a configured alias.`,
+    options: {
+      tag: {
+        description: 'Publish the package with the given tag',
+        value: '<tag>',
+      },
+      access: {
+        description: 'Set access level (public or restricted)',
+        value: '<level>',
+      },
+      otp: {
+        description: `Provide an OTP to use when publishing a package.`,
+        value: '<otp>',
+      },
+      'publish-directory': {
+        description: `Directory to use for pack and publish operations instead of the current directory.
+                    The directory must exist and nothing will be copied to it.`,
+        value: '<path>',
+      },
+      'dry-run': {
+        description:
+          'Show what would be published without actually publishing.',
+      },
+      scope: {
+        value: '<query>',
+        description:
+          'Filter packages to publish using a DSS query selector.',
+      },
+      workspace: {
+        value: '<path|glob>',
+        description: 'Limit publish targets to matching workspaces.',
+      },
+      'workspace-group': {
+        value: '<name>',
+        description: 'Limit publish targets to workspace groups.',
+      },
+      recursive: {
+        description: 'Publish all workspaces in the monorepo.',
+      },
+    },
+  })
+
+export type CommandResultSingle = {
+  id: string
+  name: string
+  version: string
+  tag: string
+  registry: string
+  shasum?: string
+  integrity?: string
+  size: number
+  access?: string
+  unpackedSize: number
+  files: string[]
+}
+
+export type CommandResult =
+  CommandResultSingle | CommandResultSingle[]
+
+export const views = {
+  human: results => {
+    const item = (r: CommandResultSingle) => {
+      const lines = [
+        `📦 Package: ${r.id}`,
+        `🏷️ Tag: ${r.tag}`,
+        `📡 Registry: ${r.registry}`,
+        `📁 ${r.files.length} Files`,
+        ...r.files.map(f => `  - ${f}`),
+        `📊 Package Size: ${prettyBytes(r.size)}`,
+        `📂 Unpacked Size: ${prettyBytes(r.unpackedSize)}`,
+      ]
+      if (r.shasum) lines.push(`🔒 Shasum: ${r.shasum}`)
+      if (r.integrity) lines.push(`🔐 Integrity: ${r.integrity}`)
+      return lines.join('\n')
+    }
+    return Array.isArray(results) ?
+        results.map(item).join('\n\n')
+      : item(results)
+  },
+  json: r => r,
+} as const satisfies Views<CommandResult>
+
+export const command: CommandFn<CommandResult> = async conf => {
+  const { options, projectRoot } = conf
+  const queryString = conf.get('scope')
+  const paths = conf.get('workspace')
+  const groups = conf.get('workspace-group')
+  const recursive = conf.get('recursive')
+
+  const locations: string[] = []
+  let single: string | null = null
+
+  if (queryString) {
+    const mainManifest = options.packageJson.maybeRead(projectRoot)
+    let graph
+    if (mainManifest) {
+      graph = actual.load({
+        ...options,
+        mainManifest,
+        monorepo: options.monorepo,
+        loadManifests: false,
+      })
+    }
+    const hostContexts = await createHostContextsMap(conf)
+    const query = new Query({
+      /* c8 ignore next */
+      nodes: graph ? new Set(graph.nodes.values()) : new Set(),
+      edges: graph?.edges ?? new Set(),
+      importers: graph?.importers ?? new Set(),
+      securityArchive: undefined,
+      hostContexts,
+    })
+    const { nodes } = await query.search(queryString, {
+      signal: new AbortController().signal,
+    })
+    const found: string[] = []
+    for (const node of nodes) {
+      const { location } = node.toJSON()
+      assert(
+        location,
+        error(`node ${node.id} has no location`, {
+          found: node,
+        }),
+      )
+      found.push(resolve(projectRoot, location))
+    }
+    locations.push(...sortScopeLocations(found, options.monorepo))
+  } else if (paths?.length || groups?.length || recursive) {
+    for (const workspace of options.monorepo ?? []) {
+      if (paths?.length) {
+        const matches = paths.some(
+          (p: string) =>
+            workspace.path === p ||
+            workspace.name === p ||
+            workspace.fullpath === p ||
+            resolve(projectRoot, p) === workspace.fullpath ||
+            minimatch(workspace.path, p),
+        )
+        if (!matches) continue
+      }
+      locations.push(workspace.fullpath)
+    }
+  } else {
+    single = options.packageJson.find(process.cwd()) ?? projectRoot
+  }
+
+  if (single) {
+    const [target] = await resolveTargets([single], conf)
+    assert(target)
+    return commandSingle(target, conf)
+  }
+
+  assert(
+    locations.length > 0,
+    error('No workspaces or query results found'),
+  )
+
+  const results: CommandResultSingle[] = []
+  for (const target of await resolveTargets(locations, conf)) {
+    results.push(await commandSingle(target, conf))
+  }
+  return results
+}
+
+type Target = { manifestDir: string; registry: string }
+
+/**
+ * Registry of every target, before anything runs or publishes.
+ * The configured one is only resolved (or prompted for) once.
+ */
+const resolveTargets = async (
+  locations: string[],
+  conf: LoadedConfig,
+): Promise<Target[]> => {
+  let fallback: Promise<string> | undefined
+  const targets: Target[] = []
+  for (const location of locations) {
+    const manifestPath = conf.options.packageJson.find(location)
+    assert(manifestPath, 'No package.json found')
+    const manifestDir = dirname(manifestPath)
+    const manifest = conf.options.packageJson.read(manifestDir)
+    const registry =
+      getPublishConfig(manifest)?.registry ??
+      (await (fallback ??= resolveRegistry(conf)))
+    targets.push({ manifestDir, registry })
+  }
+  return targets
+}
+
+/** Of several readmes at the package root, npm prefers the markdown one. */
+const README_MARKDOWN_EXTENSION =
+  /\.(?:md|markdown|mdown|mdwn|mkd|mkdn)$/i
+
+/**
+ * The readme fields npm's CLI puts in a publish payload, read out of the
+ * files that were just packed. Registries serve this as the package's front
+ * page, so a payload without it leaves the page blank even though the readme
+ * is sitting inside the tarball.
+ *
+ * npm takes the readme at the package root and prefers the markdown one; a
+ * package without a readme gets no fields at all.
+ */
+const readPublishReadme = (
+  packDir: string,
+  files: string[],
+): { readme: string; readmeFilename: string } | undefined => {
+  const readmes = files.filter(file =>
+    /^readme(\.[^.]*)?$/i.test(file),
+  )
+  const readmeFilename =
+    readmes.find(file => README_MARKDOWN_EXTENSION.test(file)) ??
+    readmes[0]
+  if (!readmeFilename) return undefined
+  return {
+    readme: readFileSync(join(packDir, readmeFilename), 'utf8'),
+    readmeFilename,
+  }
+}
+
+const commandSingle = async (
+  { manifestDir, registry }: Target,
+  conf: LoadedConfig,
+) => {
+  const manifest = conf.options.packageJson.read(manifestDir)
+
+  assert(
+    !manifest.private,
+    error('Package has been marked as private'),
+  )
+
+  const { 'dry-run': dry = false, otp } = conf.options
+  const publishConfig = getPublishConfig(manifest)
+  const tag = publishConfig?.tag ?? conf.options.tag
+  const access = publishConfig?.access ?? conf.options.access
+  const registryUrl = new URL(registryBase(registry))
+
+  const runOptions = {
+    cwd: manifestDir,
+    projectRoot: conf.projectRoot,
+    packageJson: conf.options.packageJson,
+    manifest,
+    ignoreMissing: true,
+    ignorePrePost: true,
+  }
+
+  await run({
+    ...runOptions,
+    arg0: 'prepublishOnly',
+  })
+
+  await run({
+    ...runOptions,
+    arg0: 'prepublish',
+  })
+
+  await run({
+    ...runOptions,
+    arg0: 'prepack',
+  })
+
+  await run({
+    ...runOptions,
+    arg0: 'prepare',
+  })
+
+  // Re-read the manifest after lifecycle scripts, which may have modified package.json.
+  const updatedManifest = conf.options.packageJson.read(manifestDir, {
+    reload: true,
+  })
+
+  const {
+    name,
+    version,
+    tarballName,
+    tarballData,
+    unpackedSize,
+    files,
+    integrity,
+    shasum,
+    resolvedManifest,
+    packDir,
+  } = await packTarball(updatedManifest, manifestDir, conf)
+
+  await run({
+    ...runOptions,
+    arg0: 'postpack',
+  })
+
+  await run({
+    ...runOptions,
+    arg0: 'publish',
+  })
+
+  const publishMetadata = {
+    _id: name,
+    name,
+    description: resolvedManifest.description || '',
+    'dist-tags': {
+      [tag]: version,
+    },
+    versions: {
+      [version]: {
+        ...resolvedManifest,
+        ...readPublishReadme(packDir, files),
+        _id: `${name}@${version}`,
+        _nodeVersion: process.versions.node,
+        dist: {
+          ...resolvedManifest.dist,
+          integrity,
+          shasum,
+          tarball: new URL(`${name}/-/${tarballName}`, registryUrl)
+            .href,
+        },
+      },
+    },
+    ...(access ? { access } : {}),
+    _attachments: {
+      [tarballName]: {
+        content_type: 'application/octet-stream',
+        data: tarballData.toString('base64'),
+        length: tarballData.length,
+      },
+    },
+  }
+
+  const rc = new RegistryClient(conf.options)
+
+  // Attempt OIDC token exchange for CI environments (GitHub Actions, GitLab, CircleCI).
+  // This is always optional — failures are silent and won't affect local publishing.
+  await oidc({
+    packageName: name,
+    registry: registryUrl.href,
+  })
+
+  const publishUrl = new URL(
+    name.startsWith('@') ? name.replace('/', '%2F') : name,
+    registryUrl,
+  )
+
+  if (!dry) {
+    // the same guidance whether the registry refused the request or the
+    // client threw before a response came back (an expired token, say)
+    const publishAdvice = (statusCode: number) =>
+      statusCode === 409 ?
+        `${name}@${version} already exists in the registry. Bump the version and try again.`
+      : statusCode === 404 ?
+        "Make sure you're logged in and have access to publish the package."
+      : statusCode === 401 ?
+        `Not logged in to ${registryUrl.origin}. Run \`nrz login\` and try again.`
+      : statusCode === 403 ?
+        `${name} cannot be published by this account. Run \`nrz whoami\` to see who you are logged in as, and \`nrz login\` to switch accounts. A name already taken by someone else cannot be reused.`
+      : undefined
+
+    let response: CacheEntry
+    try {
+      response = await rc.request(publishUrl, {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          // These control what type of OTP auth flow is used
+          'npm-auth-type': 'web',
+          'npm-command': 'publish',
+        },
+        body: JSON.stringify(publishMetadata),
+        otp,
+      })
+    } catch (err) {
+      throw requestError(err, {
+        message: 'Failed to publish package',
+        url: publishUrl,
+        method: 'PUT',
+        advice: publishAdvice,
+      })
+    }
+
+    // Any 2xx response is a successful publish. The npm registry may
+    // respond with a 202 Accepted when processing is deferred (e.g. for
+    // publish-time malware scanning).
+    //
+    // assertOk tells a rejected credential (ENEEDAUTH) apart from a
+    // registry that is simply broken (EREQUEST): the former is the
+    // user's to fix, not a bug to report.
+    assertOk(response, {
+      message: 'Failed to publish package',
+      url: publishUrl,
+      method: 'PUT',
+      advice: publishAdvice,
+    })
+
+    // On deferred publishes the registry explains the delay in an
+    // npm-notice header, e.g. "Your package is being processed and may
+    // take a few minutes to become available."
+    const notice = response.getHeaderString('npm-notice')
+    if (notice) stderr(`⚠️ ${notice}`)
+  }
+
+  await run({
+    ...runOptions,
+    arg0: 'postpublish',
+  })
+
+  return {
+    id: `${name}@${version}`,
+    name,
+    version,
+    tag,
+    ...(access ? { access } : {}),
+    registry: registryUrl.origin,
+    integrity,
+    shasum,
+    size: tarballData.length,
+    unpackedSize,
+    files,
+  } as CommandResultSingle
+}

@@ -1,27 +1,41 @@
-import { error } from '@nrz/error-cause'
 import { longDependencyTypes } from '@nrz/types'
+import type { DependencyTypeLong } from '@nrz/types'
 import {
-  type AddImportersDependenciesMap,
-  type Dependency,
-  type RemoveImportersDependenciesMap,
   shorten,
   asDependency,
+  asDependencySpecError,
+} from '../dependencies.ts'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+  RemoveImportersDependenciesMap,
 } from '../dependencies.ts'
 import { removeSatisfiedSpecs } from './remove-satisfied-specs.ts'
-import {
-  type BuildIdealAddOptions,
-  type BuildIdealFromGraphOptions,
-  type BuildIdealRemoveOptions,
+import type {
+  BuildIdealAddOptions,
+  BuildIdealFromGraphOptions,
+  BuildIdealRemoveOptions,
+  TransientAddMap,
+  TransientRemoveMap,
 } from './types.ts'
-import { type Edge } from '../edge.ts'
-import { type Node } from '../node.ts'
-import { type Graph } from '../graph.ts'
-import { type DepID } from '@nrz/dep-id'
+import type { Edge } from '../edge.ts'
+import type { Node } from '../node.ts'
+import type { Graph } from '../graph.ts'
+import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import type { PackageJson } from '@nrz/package-json'
+import type { PathScurry } from 'path-scurry'
+import type { GraphModifier } from '../modifiers.ts'
 
 export type GetImporterSpecsOptions = BuildIdealAddOptions &
   BuildIdealFromGraphOptions &
-  BuildIdealRemoveOptions
+  BuildIdealRemoveOptions &
+  SpecOptions & {
+    scurry: PathScurry
+    packageJson: PackageJson
+    modifiers?: GraphModifier
+  }
 
 const hasDepName = (importer: Node, edge: Edge): boolean => {
   for (const depType of longDependencyTypes) {
@@ -51,15 +65,16 @@ class RemoveImportersDependenciesMapImpl
  * dependencies info found in the graph importers and returns the add & remove
  * results as a Map in which keys are {@link DepID} of each importer node.
  */
-export const getImporterSpecs = ({
-  add,
-  graph,
-  remove,
-}: GetImporterSpecsOptions) => {
+export const getImporterSpecs = (
+  options: GetImporterSpecsOptions,
+) => {
+  const { add, graph, remove } = options
   const addResult: AddImportersDependenciesMap =
     new AddImportersDependenciesMapImpl()
   const removeResult: RemoveImportersDependenciesMap =
     new RemoveImportersDependenciesMapImpl()
+  // importer edges a `-` modifier now removes, package.json keeps them
+  const removedEdges = new Set<Edge>()
 
   // traverse the list of importers in the starting graph
   for (const importer of graph.importers) {
@@ -78,32 +93,158 @@ export const getImporterSpecs = ({
         removeResult.modifiedDependencies = true
       }
     }
-    // if a dependency is listed in the manifest but not in the graph,
-    // add that dependency to the list of dependencies to be added
+    // which declaration each name is placed with, same rule as
+    // getRawDependencies: the last type listing it wins, except that a
+    // peer entry for a name already listed elsewhere only constrains
+    // the dependency, it is not its own dependency to place
+    const declared = new Map<string, [DependencyTypeLong, string]>()
     for (const depType of longDependencyTypes) {
       const deps = Object.entries(importer.manifest?.[depType] ?? {})
       for (const [depName, depSpec] of deps) {
-        const edge = importer.edgesOut.get(depName)
-        if (!edge?.to) {
-          addDeps.set(
-            depName,
-            asDependency({
-              spec: Spec.parse(depName, depSpec),
-              type: shorten(depType, depName, importer.manifest),
-            }),
-          )
+        if (depType === 'peerDependencies' && declared.has(depName)) {
+          continue
+        }
+        declared.set(depName, [depType, depSpec])
+      }
+    }
+
+    // if a dependency is listed in the manifest but not in the graph,
+    // add that dependency to the list of dependencies to be added
+    for (const [depName, [depType, depSpec]] of declared) {
+      const edge = importer.edgesOut.get(depName)
+
+      // skip if the edge exists and already uses the same spec and
+      // type. dangling (MISSING) targets still need to be queued so
+      // the ideal rebuild runs resetEdges() and places in traversal
+      // order. checked before parsing: the text parsed fine when the
+      // edge was loaded, and the workspace check below only fires on
+      // !edge?.to
+      const type = shorten(depType, depName, importer.manifest)
+      if (
+        edge?.to &&
+        edge.spec.bareSpec === depSpec &&
+        edge.type === type
+      ) {
+        continue
+      }
+
+      let spec: Spec
+      try {
+        spec = Spec.parse(depName, depSpec, options)
+      } catch (er) {
+        throw asDependencySpecError(er, importer, type)
+      }
+
+      // a `-` modifier removes this dependency, nothing to place; an
+      // edge from before (e.g. a qualifier now matching) has to go
+      if (options.modifiers?.removesImporterEdge(importer, spec)) {
+        if (edge) removedEdges.add(edge)
+        continue
+      }
+
+      // if a workspace dep references a workspace that no longer exists
+      // (folder was removed), mark it for removal instead of trying to
+      // resolve it — the workspace can't be satisfied
+      if (spec.type === 'workspace' && !edge?.to) {
+        const wsExists = [...graph.importers].some(
+          n => n.name === depName,
+        )
+        if (!wsExists) {
+          removeDeps.add(depName)
+          removeResult.modifiedDependencies = true
+          continue
         }
       }
+
+      addDeps.set(depName, asDependency({ spec, type }))
     }
     addResult.set(importer.id, addDeps)
     removeResult.set(importer.id, removeDeps)
+  }
+
+  // Maps to store dependencies targeting non-importer nodes (e.g., nested folders)
+  // These will be injected when the target node is placed in the graph
+  const transientAdd = new Map() as TransientAddMap
+  const transientRemove = new Map() as TransientRemoveMap
+
+  // Traverse all nodes in the graph to find file type dependencies that are directories
+  // and populate transientAdd/transientRemove with their manifest dependencies
+  // Only process when scurry and packageJson are available
+  for (const node of graph.nodes.values()) {
+    // Skip importers as they're already handled above and also skip
+    // any non-file type dependencies
+    if (graph.importers.has(node) || !node.id.startsWith('file'))
+      continue
+
+    // check if this is a file type dependency that is a directory
+    const nodePath = options.scurry.cwd.resolve(node.location)
+    const stat = nodePath.lstatSync()
+
+    if (stat?.isDirectory()) {
+      // load the manifest for this directory (throw if it does not exist)
+      const manifest = options.packageJson.read(nodePath.fullpath())
+
+      // should always set the manifest to the read manifest
+      node.manifest = manifest
+
+      // create a map of dependencies from the manifest
+      const addDeps = new Map<string, Dependency>()
+
+      // check for edges not in manifest (should be removed)
+      const removeDeps = new Set<string>()
+      for (const edge of node.edgesOut.values()) {
+        if (
+          !hasDepName(node, edge) &&
+          !add.get(node.id)?.has(edge.name)
+        ) {
+          removeDeps.add(edge.name)
+        }
+      }
+
+      // iterate over manifest dependencies to add them if
+      // they're missing from the graph
+      for (const depType of longDependencyTypes) {
+        const deps = Object.entries(manifest[depType] ?? {})
+        for (const [depName, depSpec] of deps) {
+          const edge = node.edgesOut.get(depName)
+
+          // skip if the edge exists and already uses the same spec.
+          // dangling targets still need to be queued for the ideal rebuild.
+          if (edge?.to && edge.spec.bareSpec === depSpec) continue
+
+          // add the dependency to the addDeps map
+          const type = shorten(depType, depName, manifest)
+          let spec: Spec
+          try {
+            spec = Spec.parse(depName, depSpec, options)
+          } catch (er) {
+            throw asDependencySpecError(er, node, type)
+          }
+          addDeps.set(depName, asDependency({ spec, type }))
+        }
+      }
+
+      // store in transientAdd if there are any dependencies
+      if (addDeps.size > 0) {
+        transientAdd.set(node.id, addDeps)
+      }
+
+      // store in transientRemove if there are any to remove
+      if (removeDeps.size > 0) {
+        transientRemove.set(node.id, removeDeps)
+      }
+    }
   }
 
   // merges any provided specs to add to the current found results
   for (const [id, addDeps] of add.entries()) {
     const deps = addResult.get(id)
     if (!deps) {
-      throw error('Not an importer', { found: id })
+      // Not an importer - only store file-type deps for later injection
+      if (id.startsWith('file')) {
+        transientAdd.set(id, addDeps)
+      }
+      continue
     }
     for (const [name, dep] of addDeps.entries()) {
       deps.set(name, dep)
@@ -118,6 +259,16 @@ export const getImporterSpecs = ({
       for (const depName of removeSet) {
         importerRemoveItem.add(depName)
       }
+    } else if (key.startsWith('file')) {
+      // Not an importer - only store file-type deps in transientRemove
+      const existing = transientRemove.get(key)
+      if (existing) {
+        for (const depName of removeSet) {
+          existing.add(depName)
+        }
+      } else {
+        transientRemove.set(key, new Set(removeSet))
+      }
     }
   }
 
@@ -129,10 +280,20 @@ export const getImporterSpecs = ({
   }
 
   // removes already satisfied dependencies from the dependencies list
-  removeSatisfiedSpecs({
+  const staleSpecs = removeSatisfiedSpecs({
     add: addResult,
     graph,
+    modifiers: options.modifiers,
   })
+
+  // a name the caller asked for is left to appendNodes and reify's
+  // package.json update: healing it here would put the request text in
+  // the lockfile without ever touching package.json
+  for (const edge of staleSpecs.keys()) {
+    if (add.get(edge.from.id)?.has(edge.name)) {
+      staleSpecs.delete(edge)
+    }
+  }
 
   // set the modifiedDependencies flag if any
   // of the importers have modified dependencies
@@ -146,5 +307,9 @@ export const getImporterSpecs = ({
   return {
     add: addResult,
     remove: removeResult,
+    removedEdges,
+    staleSpecs,
+    transientAdd,
+    transientRemove,
   }
 }

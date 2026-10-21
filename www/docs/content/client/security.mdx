@@ -1,0 +1,318 @@
+---
+title: Security & Malware Detection
+sidebar:
+  label: Security
+  order: 4
+---
+
+nrz provides powerful security analysis capabilities through
+integration with [Socket](https://socket.dev/), enabling you to
+identify and assess security risks in your dependencies. This guide
+covers how to use nrz's security-focused selectors to detect malware,
+vulnerabilities, and other security issues.
+
+## Quick Security Scan
+
+### Check for Any Malware
+
+The simplest way to check for malware in your dependencies is using
+the parameterless `:malware` selector:
+
+<Code code="$ nrz query ':malware'" title="Terminal" lang="bash" />
+
+This command finds packages with **medium or higher severity** malware
+alerts (critical, high, medium) but excludes low-severity alerts to
+focus on more serious threats.
+
+### Check for All Security Issues
+
+Get a comprehensive overview of all security-related packages:
+
+<Code code="$ nrz query ':scanned'" title="Terminal" lang="bash" />
+
+This shows all packages that have been analyzed by Socket's security
+scanning.
+
+## Malware Detection
+
+The `:malware` selector is **binary** — it takes no parameters. Any
+matching result may have alerts or CVEs assigned to it.
+
+<Code
+  code={`# Find any malware
+$ nrz query ':malware'
+
+# Find direct dependencies with malware
+
+$ nrz query ':root > :malware'
+
+# Find malware in production dependencies
+
+$ nrz query ':prod :malware'
+
+# Find malware in workspaces
+
+$ nrz query ':workspace :malware'`} title="Terminal" lang="bash" />
+
+## Vulnerability Detection
+
+### Severity-Based Filtering
+
+Use `:vuln` for severity-based vulnerability detection with four
+severity levels: **critical**, **high**, **medium**, and **low**.
+
+<Code
+  code={`# Find critical vulnerabilities only
+$ nrz query ':vuln(critical)'
+
+# Find high severity and above
+
+$ nrz query ':vuln(">=high")'
+
+# Find medium or lower vulnerabilities
+
+$ nrz query ':vuln(">=medium")'
+
+# Include low severity alerts
+
+$ nrz query ':vuln(low)'
+
+# Parameterless :vuln matches severity >= medium
+
+$ nrz query ':vuln'`} title="Terminal" lang="bash" />
+
+### CVE, CWE, and Severity-Based Searches
+
+<Code
+  code={`# Find packages affected by specific CVEs
+$ nrz query ':cve(CVE-2023-1234)'
+
+# Find packages with specific weakness types (CWE)
+
+$ nrz query ':cwe(CWE-79)'
+
+# Find packages based on CVE severity
+
+$ nrz query ':severity(critical)' $ nrz query ':severity(">medium")'`}
+title="Terminal" lang="bash" />
+
+## Behavioral Security Risks
+
+### Code Execution Risks
+
+<Code
+  code={`# Dynamic code execution
+$ nrz query ':eval'
+
+# Shell access
+
+$ nrz query ':shell'
+
+# Install scripts
+
+$ nrz query ':scripts'`} title="Terminal" lang="bash" />
+
+### Data Access Risks
+
+<Code
+  code={`# File system access
+$ nrz query ':fs'
+
+# Network access
+
+$ nrz query ':network'
+
+# Environment variables
+
+$ nrz query ':env'`} title="Terminal" lang="bash" />
+
+### Code Quality Concerns
+
+<Code
+  code={`# Obfuscated code
+$ nrz query ':obfuscated'
+
+# Minified code
+
+$ nrz query ':minified'
+
+# High entropy strings
+
+$ nrz query ':entropic'`} title="Terminal" lang="bash" />
+
+## Package Trust & Maintenance
+
+### Package Legitimacy
+
+<Code
+  code={`# Typosquatting detection
+$ nrz query ':squat(critical)'
+
+# Abandoned packages
+
+$ nrz query ':abandoned'
+
+# Manifest confusion
+
+$ nrz query ':confused'`} title="Terminal" lang="bash" />
+
+### Maintenance Status
+
+<Code
+  code={`# Deprecated packages
+$ nrz query ':deprecated'
+
+# Unmaintained packages
+
+$ nrz query ':unmaintained'
+
+# Unstable ownership
+
+$ nrz query ':unstable'`} title="Terminal" lang="bash" />
+
+## License Compliance
+
+### License Issues
+
+<Code
+  code={`# Unlicensed packages
+$ nrz query ':license(unlicensed)'
+
+# Restricted licenses
+
+$ nrz query ':license(restricted)'
+
+# Copyleft licenses
+
+$ nrz query ':license(copyleft)'`} title="Terminal" lang="bash" />
+
+## Security Scoring
+
+<Code
+  code={
+    '# Find packages with low overall security scores\n$ nrz query \':score("<0.5")\'\n\n# Find packages with low vulnerability scores\n$ nrz query \':score("<0.7", "vulnerability")\'\n\n# Find packages with low maintenance scores\n$ nrz query \':score("<0.6", "maintenance")\''
+  }
+  title="Terminal"
+  lang="bash"
+/>
+
+## Comprehensive Security Audit
+
+<Code
+  code={
+    "# Multi-criteria security check - combine multiple selectors\n$ nrz query ':malware, :eval, :shell, :obfuscated'\n\n# Production dependencies security audit\n$ nrz query ':prod (:malware, :cve(*), :deprecated, :abandoned)'\n\n# Workspace security overview\n$ nrz query ':workspace (:malware, :score(\"<0.5\"), :unmaintained)'"
+  }
+  title="Terminal"
+  lang="bash"
+/>
+
+## Cross-Project Security Analysis
+
+### Cross-Project Security Scanning
+
+<Code
+  code={
+    "# Scan multiple projects using host\n$ nrz query ':host(local) :malware'\n\n# Specific project security check\n$ nrz query ':host(\"file:~/my-project\") :malware'"
+  }
+  title="Terminal"
+  lang="bash"
+/>
+
+## Best Practices
+
+### Regular Security Audits
+
+1. **Daily Quick Check**: `nrz query ':malware'`
+2. **Weekly Comprehensive Scan**:
+   `nrz query ':host(local) :is(:malware, :not(:scanned))'`
+3. **Before Releasing Projects**:
+   `nrz query ':root :is(:malware, :score("<0.6"))'`
+
+### Automated Security Monitoring
+
+Consider integrating these queries into your CI/CD pipeline:
+
+<Code
+  code={`#!/bin/bash
+# Exit with error if any malware is found (using --expect-results)
+nrz query ':malware' --expect-results=0 || {
+  echo "WARNING: Malware detected in dependencies!"
+  nrz query ':malware'
+  exit 1
+}
+
+# Alternative: Traditional approach with jq
+
+if nrz query ':malware' --view=json | jq -e '.nodes | length > 0';
+then echo "WARNING: Malware detected in dependencies!" nrz query
+':malware' exit 1 fi`} title="security-check.sh" lang="bash" />
+
+### Automation with --expect-results
+
+The `--expect-results` flag is perfect for CI/CD pipelines and
+automated security checks:
+
+<Code
+  code={`# Security gates that fail builds if issues are found
+$ nrz query ':malware' --expect-results=0
+$ nrz query ':cwe(1333)' --expect-results=0 # CWE-1333 is a ReDoS vulnerability
+$ nrz query ':deprecated' --expect-results=0
+
+# Quality gates with thresholds
+
+$ nrz query ':score("<0.5")' --expect-results=0 $ nrz query
+':unmaintained' --expect-results="<3"
+
+# Ensure security scans are working
+
+$ nrz query ':workspace' --expect-results=">0"`} title="Terminal"
+lang="bash" />
+
+### Security-First Development
+
+- Always check new dependencies:
+  `nrz query '#<new-package>:malware, #<new-package> :malware'`
+- Monitor transitive dependencies: `nrz query ':root > * :malware'`
+- Regular maintenance updates:
+  `nrz query ':deprecated, :unmaintained'`
+
+## Understanding Security Data
+
+Security data is provided by [Socket](https://socket.dev/) and
+requires network access to fetch the latest threat intelligence. The
+first query may take longer as security metadata is downloaded and
+cached locally. Results are cached for 3 hours; stale data is used
+while it refreshes in the background.
+
+Requests to Socket time out after 30 seconds, retries included. Set
+`NRZ_SECURITY_ARCHIVE_TIMEOUT=<ms>` (a positive integer, other values
+are ignored) to wait longer. On timeout nrz prints a warning and
+continues, treating the affected packages as unscanned: `:scanned`
+excludes them and security selectors such as `:malware` don't match
+them, but `:not(:malware)` does. In `nrz ls` and `nrz query`, combine
+with `:scanned`, e.g. `:scanned:not(:malware)`.
+
+Scripts fail closed: when a `nrz build` target or `--allow-scripts`
+query uses security selectors, eligible packages (see below) with no
+security data never run their scripts, be it because the request timed
+out or because Socket has not scanned them yet, e.g. a version
+published minutes ago. `nrz build` reports them as not built along
+with the reason; run `nrz build` later to build them. `allow-skills`
+queries fail closed the same way: those packages' skills are reported
+and not linked, and [`nrz skills link`](/client/commands/skills)
+removes their links.
+
+Packages are eligible when their origin is the public npm registry
+(`https://registry.npmjs.org/`) or whatever URL is configured as
+`registries.npm` (for example a nrz.io npm mirror from
+[`nrz setup`](/client/commands/setup)). Packages from other registries
+have no security data.
+
+`nrz login --registry=<url>` writes only the scalar `registry` option.
+If that URL is not `https://registry.npmjs.org/` and `registries.npm`
+is unset, those packages are not scanned. Use `nrz setup` or
+`nrz config set registries=npm=<url>` instead.
+
+For more detailed information about specific security selectors, see
+the [Dependency Selector Syntax](/client/selectors/security-insights)
+reference.

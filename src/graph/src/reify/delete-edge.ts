@@ -1,7 +1,7 @@
-import { type RollbackRemove } from '@nrz/rollback-remove'
-import { type PathScurry } from 'path-scurry'
-import { type Edge } from '../edge.ts'
-import { binPaths } from './bin-paths.ts'
+import type { RollbackRemove } from '@nrz/rollback-remove'
+import { resolve } from 'node:path'
+import type { PathScurry } from 'path-scurry'
+import type { Edge } from '../edge.ts'
 
 const rmBinPosix = (remover: RollbackRemove, bin: string) => {
   return [remover.rm(bin)]
@@ -11,7 +11,7 @@ const rmBinWin32 = (remover: RollbackRemove, bin: string) => {
   return [
     remover.rm(bin),
     remover.rm(bin + '.cmd'),
-    remover.rm(bin + '.pwsh'),
+    remover.rm(bin + '.ps1'),
   ]
 }
 
@@ -26,15 +26,16 @@ export const deleteEdge = async (
     spec: { name },
     to,
   } = edge
+  const { sep } = scurry.cwd
   const nm = edge.from.nodeModules(scurry)
-  const path = scurry.resolve(nm, name)
-  const binRoot = scurry.cwd.resolve(`${nm}/.bin`)
+  const path = nm + sep + name.replace('/', sep)
+  const binRoot = nm + sep + '.bin'
   const promises: Promise<unknown>[] = []
   promises.push(remover.rm(path))
-  const manifest = to?.manifest
-  if (manifest) {
-    for (const key of Object.keys(binPaths(manifest))) {
-      const bin = binRoot.resolve(key).fullpath()
+  const bins = to?.bins
+  if (bins) {
+    for (const key of Object.keys(bins)) {
+      const bin = resolve(binRoot, key)
       promises.push(...rmBin(remover, bin))
     }
   }

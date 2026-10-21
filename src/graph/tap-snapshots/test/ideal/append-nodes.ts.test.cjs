@@ -40,10 +40,14 @@ Array [
 
 exports[`test/ideal/append-nodes.ts > TAP > append different type of dependencies > should install different type of deps on different conditions 1`] = `
 @nrz/graph.Graph {
-  options: { registries: {} },
+  lockfileVersion: 1,
+  options: {
+    registry: 'https://registry.npmjs.org/',
+    registries: { npm: 'https://registry.npmjs.org/' }
+  },
   nodes: {
-    '··bar@1.0.0': [ 1, 'bar', <3 empty items>, { name: 'bar', version: '1.0.0' } ],
-    '··foo@1.0.0': [
+    '~npm~bar@1.0.0': [ 1, 'bar', <3 empty items>, { name: 'bar', version: '1.0.0' } ],
+    '~npm~foo@1.0.0': [
       2,
       'foo',
       <3 empty items>,
@@ -55,8 +59,8 @@ exports[`test/ideal/append-nodes.ts > TAP > append different type of dependencie
     ]
   },
   edges: {
-    'file·. foo': 'dev ^1.0.0 ··foo@1.0.0',
-    'file·. bar': 'optional ^1.0.0 ··bar@1.0.0'
+    'file~_d foo': 'dev ^1.0.0 ~npm~foo@1.0.0',
+    'file~_d bar': 'optional ^1.0.0 ~npm~bar@1.0.0'
   }
 }
 `
@@ -64,25 +68,25 @@ exports[`test/ideal/append-nodes.ts > TAP > append different type of dependencie
 exports[`test/ideal/append-nodes.ts > TAP > append file type of nodes > should have a graph with file type dependencies 1`] = `
 [
   Node {
-    id: 'file·.',
+    id: 'file~_d',
     location: '.',
     importer: true,
     edgesOut: [
-      Edge spec(linked@file:./linked) -prod-> to: Node { id: 'file·linked', location: 'linked', resolved: 'linked' },
+      Edge spec(linked@file:./linked) -prod-> to: Node { id: 'file~linked', location: 'linked', resolved: 'linked' },
       Edge spec(foo@^1.0.0) -prod-> to: Node {
-        id: '··foo@1.0.0',
-        location: './node_modules/.nrz/··foo@1.0.0/node_modules/foo',
+        id: '~npm~foo@1.0.0',
+        location: './node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo',
         resolved: 'https://registry.npmjs.org/foo/-/foo-1.0.0.tgz',
         edgesOut: [
           Edge spec(bar@file:./bar) -prod-> to: Node {
-            id: 'file·node_modules§.nrz§%C2%B7%C2%B7foo@1.0.0§node_modules§foo§bar',
-            location: './node_modules/.nrz/file·node_modules§.nrz§%C2%B7%C2%B7foo@1.0.0§node_modules§foo§bar/node_modules/bar',
-            resolved: 'node_modules/.nrz/··foo@1.0.0/node_modules/foo/bar'
+            id: 'file~node__modules+.nrz+_tnpm_tfoo@1.0.0+node__modules+foo+bar',
+            location: './node_modules/.nrz/file~node__modules+.nrz+_tnpm_tfoo@1.0.0+node__modules+foo+bar/node_modules/bar',
+            resolved: 'node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo/bar'
           },
           Edge spec(baz@file:./baz.tgz) -prod-> to: Node {
-            id: 'file·node_modules§.nrz§%C2%B7%C2%B7foo@1.0.0§node_modules§foo§baz.tgz',
-            location: './node_modules/.nrz/file·node_modules§.nrz§%C2%B7%C2%B7foo@1.0.0§node_modules§foo§baz.tgz/node_modules/baz',
-            resolved: 'node_modules/.nrz/··foo@1.0.0/node_modules/foo/baz.tgz'
+            id: 'file~node__modules+.nrz+_tnpm_tfoo@1.0.0+node__modules+foo+baz.tgz',
+            location: './node_modules/.nrz/file~node__modules+.nrz+_tnpm_tfoo@1.0.0+node__modules+foo+baz.tgz/node_modules/baz',
+            resolved: 'node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo/baz.tgz'
           }
         ]
       }
@@ -91,26 +95,88 @@ exports[`test/ideal/append-nodes.ts > TAP > append file type of nodes > should h
 ]
 `
 
+exports[`test/ideal/append-nodes.ts > TAP > inject transient dependencies from transientAdd > graph should match snapshot 1`] = `
+flowchart TD
+a("root:my-project")
+a -->|"foo#64;file:./foo"| b("file(foo):foo#64;1.0.0")
+b -->|"bar#64;^1.0.0"| c("npm:bar#64;1.0.0")
+b -->|"baz#64;^2.0.0"| d("npm:baz#64;2.0.0")
+b -->|"lorem#64;^3.0.0 (peer)"| e("npm:lorem#64;3.0.0")
+`
+
 exports[`test/ideal/append-nodes.ts > TAP > resolve against the correct registries > must match snapshot 1`] = `
 @nrz/graph.Graph {
+  lockfileVersion: 1,
   options: {
     registries: { a: 'https://a.example.com/', b: 'https://b.example.com/' }
   },
   nodes: {
-    '·a·bar@1.2.3': [ 0, 'bar', <3 empty items>, [Object] ],
-    '·a·x@1.99.99': [ 0, 'x', <3 empty items>, [Object] ],
-    '·a·y@1.99.99': [ 0, 'y', <3 empty items>, [Object] ],
-    '·b·baz@1.2.3': [ 0, 'baz', <3 empty items>, [Object] ],
-    '·b·x@1.99.99': [ 0, 'x', <3 empty items>, [Object] ],
-    '·b·y@1000.0.0': [ 0, 'y', <3 empty items>, [Object] ]
+    '~a~bar@1.2.3': [
+      0,
+      'bar',
+      <1 empty item>,
+      'https://a.example.com/bar/-/bar-1.2.3.tgz',
+      <1 empty item>,
+      { name: 'bar', version: '1.2.3', dependencies: { x: '1.x' } }
+    ],
+    '~a~x@1.99.99': [
+      0,
+      'x',
+      <1 empty item>,
+      'https://a.example.com/x/-/x-1.99.99.tgz',
+      <1 empty item>,
+      {
+        name: 'x',
+        version: '1.99.99',
+        description: 'x on a',
+        dependencies: { y: '1' }
+      }
+    ],
+    '~a~y@1.99.99': [
+      0,
+      'y',
+      <1 empty item>,
+      'https://a.example.com/y/-/y-1.99.99.tgz',
+      <1 empty item>,
+      { name: 'y', version: '1.99.99' }
+    ],
+    '~b~baz@1.2.3': [
+      0,
+      'baz',
+      <1 empty item>,
+      'https://b.example.com/baz/-/baz-1.2.3.tgz',
+      <1 empty item>,
+      { name: 'baz', version: '1.2.3', dependencies: { x: '1.x' } }
+    ],
+    '~b~x@1.1.1': [
+      0,
+      'x',
+      <1 empty item>,
+      'https://b.example.com/x/-/x-1.1.1.tgz',
+      <1 empty item>,
+      {
+        name: 'x',
+        version: '1.1.1',
+        description: 'x on b',
+        dependencies: { y: '1000' }
+      }
+    ],
+    '~b~y@1000.0.0': [
+      0,
+      'y',
+      <1 empty item>,
+      'https://b.example.com/y/-/y-1000.0.0.tgz',
+      <1 empty item>,
+      { name: 'y', version: '1000.0.0' }
+    ]
   },
   edges: {
-    'file·. bar': 'prod a:bar@1.x ·a·bar@1.2.3',
-    'file·. baz': 'prod b:bar@1.x ·b·baz@1.2.3',
-    '·a·bar@1.2.3 x': 'prod 1.x ·a·x@1.99.99',
-    '·a·x@1.99.99 y': 'prod 1 ·a·y@1.99.99',
-    '·b·baz@1.2.3 x': 'prod 1.x ·b·x@1.99.99',
-    '·b·x@1.99.99 y': 'prod 1000 ·b·y@1000.0.0'
+    'file~_d bar': 'prod a:bar@1.x ~a~bar@1.2.3',
+    'file~_d baz': 'prod b:baz@1.x ~b~baz@1.2.3',
+    '~a~bar@1.2.3 x': 'prod 1.x ~a~x@1.99.99',
+    '~a~x@1.99.99 y': 'prod 1 ~a~y@1.99.99',
+    '~b~baz@1.2.3 x': 'prod 1.x ~b~x@1.1.1',
+    '~b~x@1.1.1 y': 'prod 1000 ~b~y@1000.0.0'
   }
 }
 `

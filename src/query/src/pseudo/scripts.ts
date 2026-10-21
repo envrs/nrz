@@ -1,0 +1,61 @@
+import type { NodeLike } from '@nrz/types'
+import type { ParserState } from '../types.ts'
+import { removeNode, removeDanglingEdges } from './helpers.ts'
+
+/**
+ * Checks if a node needs to be built based on the conditions from the reify build process:
+ * 1. Has install lifecycle scripts (install, preinstall, postinstall)
+ * 2. Is an importer or git dependency with prepare scripts (prepare, preprepare, postprepare)
+ * 3. Was marked as needing a build by install (e.g. a binding.gyp-only package)
+ */
+const nodeNeedsBuild = (node: NodeLike): boolean => {
+  if (node.buildState === 'needed') return true
+
+  const { manifest } = node
+  /* c8 ignore next */
+  if (!manifest) return false
+
+  // abbreviated registry manifests replace `scripts` with this flag
+  if (manifest.hasInstallScript) return true
+
+  const { scripts = {} } = manifest
+
+  // Check for install lifecycle scripts
+  const runInstall = !!(
+    scripts.install ||
+    scripts.preinstall ||
+    scripts.postinstall
+  )
+  if (runInstall) return true
+
+  // Check for prepare scripts on importers or git dependencies
+  const prepable = node.id.startsWith('git') || node.importer
+  const runPrepare =
+    !!(
+      scripts.prepare || scripts.preprepare || scripts.postprepare
+      /* c8 ignore next 2 */
+    ) && prepable
+  if (runPrepare) return true
+
+  return false
+}
+
+/**
+ * :scripts Pseudo-Selector filters nodes based on whether they need to be built.
+ *
+ * A node needs to be built if it has:
+ * - Install lifecycle scripts (install, preinstall, postinstall)
+ * - Prepare scripts on importers or git dependencies (prepare, preprepare, postprepare)
+ * - A `buildState` of 'needed', set by install
+ */
+export const scripts = async (state: ParserState) => {
+  for (const node of state.partial.nodes) {
+    if (!nodeNeedsBuild(node)) {
+      removeNode(state, node)
+    }
+  }
+
+  removeDanglingEdges(state)
+
+  return state
+}

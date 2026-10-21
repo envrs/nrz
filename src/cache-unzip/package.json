@@ -1,75 +1,69 @@
 {
   "name": "@nrz/cache-unzip",
   "description": "Daemon that manages the @nrz/cache disk store",
-  "version": "0.0.0-0.1730239248325",
+  "version": "1.5.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/cache-unzip"
   },
-  "tshy": {
-    "selfLink": false,
-    "dialects": [
-      "esm"
-    ],
-    "sourceDialects": [
-      "@nrz/source"
-    ],
-    "exports": {
-      "./package.json": "./package.json",
-      ".": "./src/index.ts"
-    }
-  },
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
     "@nrz/cache": "workspace:*",
-    "@nrz/error-cause": "workspace:*"
+    "@nrz/error-cause": "workspace:*",
+    "@nrz/tar": "workspace:*",
+    "@nrz/types": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "@types/eslint__js": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "prettier": "catalog:",
     "tap": "catalog:",
-    "tshy": "catalog:",
+    "tar": "catalog:",
+    "typedoc": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
   },
   "license": "BSD-2-Clause-Patent",
   "engines": {
-    "node": ">=22",
-    "pnpm": "9"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "format": "prettier --write . --log-level warn --ignore-path ../../.prettierignore --cache",
     "format:check": "prettier --check . --ignore-path ../../.prettierignore --cache",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
-    "prepare": "tshy",
-    "presnap": "tshy",
+    "prepack": "tsc -p tsconfig.publish.json && ../../scripts/update-dist-exports.ts",
     "snap": "tap",
-    "pretest": "tshy",
     "test": "tap",
-    "posttest": "tsc --project tsconfig.test.json",
-    "watch": "tshy --watch"
+    "posttest": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
   },
   "tap": {
     "extends": "../../tap-config.yaml"
   },
   "prettier": "../../.prettierrc.js",
-  "module": "./dist/esm/index.js",
+  "module": "./src/index.ts",
   "type": "module",
   "exports": {
     "./package.json": "./package.json",
     ".": {
       "import": {
-        "@nrz/source": "./src/index.ts",
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
+        "default": "./src/index.ts"
+      }
+    },
+    "./unzip": {
+      "import": {
+        "default": "./src/unzip.ts"
       }
     }
   },
   "files": [
     "dist"
-  ]
+  ],
+  "bugs": {
+    "url": "https://github.com/khulnasoft/nrz/issues"
+  },
+  "homepage": "https://github.com/khulnasoft/nrz/tree/main/src/cache-unzip#readme"
 }

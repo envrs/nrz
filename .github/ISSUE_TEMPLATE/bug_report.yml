@@ -1,0 +1,70 @@
+name: 🐛 Bug Report
+description: Report a bug or unexpected behavior
+title: '[BUG] '
+labels: ['bug', 'needs-triage']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Bug Report
+        Thanks for taking the time to report a bug! Please provide detailed information to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: ✅ Expected Behavior
+      description: What did you expect to happen?
+      placeholder: 'I expected...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: ❌ Actual Behavior
+      description: What actually happened instead?
+      placeholder: 'Instead, what happened was...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: 🔄 Steps to Reproduce
+      description: Please provide detailed steps to reproduce the behavior
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Scroll down to '...'
+        4. See error
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 🌍 Environment
+      description: Please provide information about your environment
+      placeholder: |
+        - OS + version: [e.g. macOS 14.1, Windows 11, Ubuntu 22.04]
+        - Node version: [e.g. 18.17.0]
+        - nrz version: [e.g. 1.2.3]
+      value: |
+        Run the following in your terminal then copy+paste the output: 
+          node -p "[
+            '- OS: ' + process.platform + ' ' + process.version,
+            '- Node: ' + process.version,
+            '- nrz: ' + require('child_process').execSync('nrz -v').toString().trim()
+          ].join('\n')"
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 🔄 Frequency
+      description: How often does this bug occur?
+      options:
+        - Once - Happened only once
+        - Occasionally - Happens sometimes
+        - Frequently - Happens often
+        - Always - Happens every time
+    validations:
+      required: true

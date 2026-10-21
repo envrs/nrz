@@ -1,6 +1,6 @@
 // @ts-check
-import { join } from 'path'
-import { readFileSync } from 'fs'
+import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 
 /**
  * @param {string} cwd
@@ -20,21 +20,31 @@ const readPkg = cwd => {
  */
 export default cwd => {
   const pkg = readPkg(cwd)
+  // Private workspaces are not included in the docs site.
+
   if (pkg.private) {
     return
   }
-  const tshy =
-    pkg.tshy && typeof pkg.tshy === 'object' ? pkg.tshy : {}
+
   const exports =
-    'exports' in tshy && typeof tshy.exports === 'object' ?
-      tshy.exports
+    'exports' in pkg && typeof pkg.exports === 'object' ?
+      pkg.exports
     : null
+
+  // get actual code entry points from package.json exports
+  const entryPoints = Object.values(exports ?? {})
+    .map(p => (typeof p === 'string' ? p : p.import.default))
+    .filter(p => !p.endsWith('package.json'))
+    .map(p => join(cwd, p))
+
+  // If there are no entry points then it means to skip this workspace.
+  if (entryPoints.length === 0) {
+    return
+  }
+
   return {
     // get readme local to workspace
     readme: join(cwd, './README.md'),
-    // get entry points from package.json exports
-    entryPoints: Object.values(exports ?? {})
-      .filter(p => !p.endsWith('package.json'))
-      .map(p => join(cwd, p)),
+    entryPoints,
   }
 }

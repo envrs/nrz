@@ -1,0 +1,162 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/commands/help.ts > TAP > basic > all usage 1`] = `
+⚡️ nrz /vōlt/ - next-gen package management {{VERSION}}
+
+USAGE
+
+  nrz <command>
+
+COMMANDS
+
+                 access       <command> [<a... Manage package access and team permissions
+
+                 bugs         [<spec>]         Open the bug tracker for a package
+  b,             build        <selector>       Build packages with lifecycle scripts
+
+                 cache        [add|ls|info|... Manage the package cache
+                 ci                            Clean install (frozen lockfile)
+                 config       [get|pick|lis... Get or set configuration
+                 create       <initializer>... Create a new project from a template
+
+                 deprecate    <pkg>[@<versi... Deprecate a package or version range
+                 dist-tag     [add|rm|ls] [... Manage package distribution tags
+                 docs                          Open the docs of the current project
+
+  x,             exec         <executable>     Execute a package bin
+  xc,            exec-cache   [ls|delete|in... Manage the exec cache
+  xl,            exec-local   <command>        Execute a local package bin
+
+  h, ?,          help         [<command>]      Show help for a command
+
+                 init                          Initialize a new project
+  i, add,        install      [<package>...]   Install dependencies
+
+  ls,            list                          List installed packages
+                 login                         Authenticate with a registry
+                 logout                        Log out from a registry
+
+                 outdated     [package-name... List dependencies with newer versions available
+
+                 pack                          Create a tarball from a package
+                 ping         [<registry-al... Ping configured registries
+  p,             pkg          <command>        Manage package metadata
+                 profile      <command> [<a... Get or set registry profile properties
+  pub,           publish                       Publish package to registry
+
+  q,             query        <selector>       Query for packages in the project
+
+                 registry     <alias> <comm... Run an account command against a named registry
+                 repo         [<spec>]         Open the repository page for a package
+  r, run-script, run          <script>         Run a script defined in package.json
+  rx,            run-exec     <script>         Run a script &/or fallback to executing a binary
+
+                 setup        [<account>]      Configure your nrz.io account registries
+                 skills       [list|link]      Manage agent skills from installed packages
+
+                 token        [add|rm]         Manage authentication tokens
+
+  rm,            uninstall    [<package>...]   Remove dependencies
+                 unpublish    <pkg>[@<versi... Remove a package from the registry
+  u,             update                        Update package versions to latest in-range
+
+                 version      <increment>      Bump package version
+  info, show,    view         <pkg>[@<versi... View registry information about a package
+
+                 whoami                        Display the current user
+
+COMPANION BINS
+
+  xvn    eq. nrz run
+  nrx    eq. nrz exec
+
+FLAGS
+
+  -a,    --all                        Show all commands, bins, and flags
+  -c,    --color                      Enable color output
+  -h,    --help                       Print helpful information
+         --no-color                   Disable color output
+         --registry  <url>            Set the registry to resolve packages against
+  -v,    --version                    Print the version
+  -y,    --yes                        Automatically accept prompts
+
+Learn more: https://nrz.khulnasoft.com
+Get support: https://nrz.community
+
+Run \`nrz help <command>\` for detailed information about a specific command.
+`
+
+exports[`test/commands/help.ts > TAP > basic > default usage 1`] = `
+⚡️ nrz /vōlt/ next-gen package management {{VERSION}}
+
+USAGE
+
+  nrz <command>
+
+COMMON COMMANDS
+
+       setup     [<account>]      Configure your nrz.io account registries
+       init                       Initialize a new project
+  i,   install   [<package>...]   Install dependencies
+  q,   query     <selector>       Query for packages in the project
+  b,   build     <selector>       Build packages with lifecycle scripts
+  r,   run       <script>         Run a script defined in package.json
+  x,   exec      <executable>     Execute a package bin
+  p,   pkg       <command>        Manage package metadata
+  pub, publish                    Publish package to registry
+       registry  <alias> <command> Run an account command against a named registry
+
+COMPANION BINS
+
+  xvn            eq. nrz run
+  nrx            eq. nrz exec
+
+COMMON FLAGS
+
+  -v, --version                  Log the cli version
+  -a, --all                      List all commands, bins & flags
+
+Learn more: https://nrz.khulnasoft.com
+Get support: https://nrz.community
+
+This is not the full usage information, run \`nrz -a\` for more.
+
+`
+
+exports[`test/commands/help.ts > TAP > basic > jack usage 1`] = `
+Usage:
+  nrz help [<command>]
+
+Print the full help output for the CLI, or help for a specific command
+
+  Aliases
+
+    ​h, ?
+
+  Examples
+
+    Show general CLI help
+
+    ​nrz help
+
+    Show help for the install command
+
+    ​nrz help install
+
+    Show help for the run command
+
+    ​nrz help run
+
+  Options
+
+    all
+      Show all commands, bins, and flags.
+
+      ​--all
+
+`

@@ -1,0 +1,13 @@
+{
+  "name": "nrz",
+  "description": "Agent skills for the nrz CLI and nrz.io registries.",
+  "author": {
+    "name": "KhulnaSoft, Ltd",
+    "email": "support@khulnasoft.com.com",
+    "url": "https://nrz.khulnasoft.com"
+  },
+  "skills": [
+    "./skills/nrz-registry-migration",
+    "./src/query/skills/dss-query"
+  ]
+}

@@ -1,9 +1,8 @@
-import { type EdgeLike, type NodeLike } from '@nrz/graph'
-import {
-  type ParserState,
-  type ParserFn,
-  asCombinatorNode,
-} from './types.ts'
+import { asCombinatorNode } from '@nrz/dss-parser'
+import { queryError } from './error.ts'
+import type { CombinatorName } from '@nrz/dss-parser'
+import type { EdgeLike, NodeLike } from '@nrz/types'
+import type { ParserState, ParserFn } from './types.ts'
 
 /**
  * Returns a new set of nodes, containing all direct dependencies
@@ -106,7 +105,7 @@ const combinatorSelectors = {
   '>': childCombinator,
   '~': subsequentSiblingCombinator,
   ' ': descendentCombinator,
-}
+} satisfies Record<CombinatorName, ParserFn>
 
 const combinatorSelectorsMap = new Map<string, ParserFn>(
   Object.entries(combinatorSelectors),
@@ -126,7 +125,11 @@ export const combinator = async (state: ParserState) => {
       return state
     }
 
-    throw new Error(`Unsupported combinator: ${state.current.value}`)
+    throw queryError(
+      `Unsupported combinator: ${state.current.value}`,
+      state.current,
+      { validOptions: [...combinatorSelectorsMap.keys()] },
+    )
   }
   return parserFn(state)
 }

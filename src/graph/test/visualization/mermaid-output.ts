@@ -1,8 +1,15 @@
 import t from 'tap'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { Graph } from '../../src/graph.ts'
-import { mermaidOutput } from '../../src/visualization/mermaid-output.ts'
+import { save } from '../../src/lockfile/save.ts'
+import { load } from '../../src/lockfile/load.ts'
+import {
+  mermaidOutput,
+  generateShortId,
+} from '../../src/visualization/mermaid-output.ts'
 import { loadActualGraph } from '../fixtures/actual.ts'
 import { joinDepIDTuple } from '@nrz/dep-id'
 
@@ -58,7 +65,7 @@ t.test('human-readable-output', async t => {
       name: 'baz',
       version: '1.0.0',
       dist: {
-        tarball: 'https://registry.khulnasoft.com/baz',
+        tarball: 'https://registry.nrz.khulnasoft.com/baz',
       },
     },
   )
@@ -93,7 +100,7 @@ t.test('actual graph', async t => {
     'should print from an actual loaded graph',
   )
 
-  t.test('selected packages', async t => {
+  await t.test('selected packages', async t => {
     const edges = [...graph.edges].filter(e => e.name === 'baz')
     const nodes = [
       graph.nodes.get(
@@ -109,6 +116,24 @@ t.test('actual graph', async t => {
       'should print selected packages',
     )
   })
+
+  await t.test('highlight selection', async t => {
+    const edges = [...graph.edges].filter(e => e.name === 'baz')
+    const nodes = [
+      graph.nodes.get(
+        joinDepIDTuple(['registry', 'custom', 'baz@1.0.0']),
+      )!,
+    ]
+    t.matchSnapshot(
+      mermaidOutput({
+        edges,
+        importers: graph.importers,
+        nodes,
+        highlightSelection: true,
+      }),
+      'should print selected packages with highlight',
+    )
+  })
 })
 
 t.test('workspaces', async t => {
@@ -118,8 +143,8 @@ t.test('workspaces', async t => {
   }
   const dir = t.testdir({
     'package.json': JSON.stringify(mainManifest),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['./packages/*'] },
     }),
     packages: {
       a: {
@@ -151,6 +176,94 @@ t.test('workspaces', async t => {
     }),
     'should print workspaces mermaid output',
   )
+})
+
+t.test('workspaces with dependencies', async t => {
+  const mainManifest = {
+    name: 'test-workspaces',
+    version: '1.0.0',
+  }
+  const dir = t.testdir({
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['./packages/*'] },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'a',
+          version: '1.0.0',
+          dependencies: {
+            which: '^6.0.0',
+          },
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'b',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+  const monorepo = Monorepo.load(dir)
+  const graph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest,
+    monorepo,
+  })
+
+  // Find workspace 'a' and add its dependencies
+  const [wsA] = [...graph.importers].filter(
+    n => n.name === 'a' && !n.mainImporter,
+  )
+  if (!wsA) throw new Error('missing workspace a')
+
+  const which = graph.placePackage(
+    wsA,
+    'prod',
+    Spec.parse('which', '^6.0.0'),
+    {
+      name: 'which',
+      version: '6.0.0',
+      dependencies: {
+        isexe: '^3.1.1',
+      },
+    },
+  )
+  if (!which) throw new Error('failed to place which')
+
+  graph.placePackage(which, 'prod', Spec.parse('isexe', '^3.1.1'), {
+    name: 'isexe',
+    version: '3.1.1',
+  })
+
+  t.matchSnapshot(
+    mermaidOutput({
+      edges: [...graph.edges],
+      importers: graph.importers,
+      nodes: [...graph.nodes.values()],
+    }),
+    'should print workspaces with dependencies',
+  )
+
+  await t.test('select only which package', async t => {
+    const edges = [...graph.edges].filter(e => e.name === 'which')
+    const nodes = [
+      graph.nodes.get(
+        joinDepIDTuple(['registry', '', 'which@6.0.0']),
+      )!,
+    ]
+    t.matchSnapshot(
+      mermaidOutput({
+        edges,
+        importers: graph.importers,
+        nodes,
+      }),
+      'should exclude workspace b when only which is selected',
+    )
+  })
 })
 
 t.test('cycle', async t => {
@@ -198,5 +311,165 @@ t.test('cycle', async t => {
       nodes: [...graph.nodes.values()],
     }),
     'should print cycle mermaid output',
+  )
+})
+
+t.test(
+  'built graph and lockfile load render the same mermaid',
+  async t => {
+    const mainManifest = {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: { zed: '^1.0.0', foo: '^1.0.0', bar: '^1.0.0' },
+    }
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify(mainManifest),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = new Graph({
+      projectRoot,
+      ...configData,
+      mainManifest,
+    })
+    graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('zed', '^1.0.0'),
+      { name: 'zed', version: '1.0.0' },
+    )
+    graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('foo', '^1.0.0'),
+      { name: 'foo', version: '1.0.0' },
+    )
+    graph.placePackage(
+      graph.mainImporter,
+      'prod',
+      Spec.parse('bar', '^1.0.0'),
+      { name: 'bar', version: '1.0.0' },
+    )
+    graph.sortNodes()
+    save({ ...configData, graph })
+    const loaded = load({
+      ...configData,
+      projectRoot,
+      mainManifest,
+    })
+    t.strictSame(
+      [...graph.nodes.keys()],
+      [...loaded.nodes.keys()],
+      'node iteration order matches after save→load',
+    )
+    const letters = (g: Graph) =>
+      [...g.nodes.keys()].map(
+        (id, i) => `${generateShortId(i)}:${id}`,
+      )
+    t.strictSame(
+      letters(graph),
+      letters(loaded),
+      'mermaid letter aliases match',
+    )
+  },
+)
+
+t.test('large scale identifier generation', async t => {
+  // Test basic single character cases
+  t.equal(generateShortId(0), 'a', 'index 0 should be "a"')
+  t.equal(generateShortId(25), 'z', 'index 25 should be "z"')
+  t.equal(generateShortId(26), 'A', 'index 26 should be "A"')
+  t.equal(generateShortId(51), 'Z', 'index 51 should be "Z"')
+
+  // Test two character cases
+  t.equal(generateShortId(52), 'aa', 'index 52 should be "aa"')
+  t.equal(generateShortId(53), 'ab', 'index 53 should be "ab"')
+  t.equal(generateShortId(77), 'az', 'index 77 should be "az"')
+  t.equal(generateShortId(78), 'aA', 'index 78 should be "aA"')
+  t.equal(generateShortId(103), 'aZ', 'index 103 should be "aZ"')
+  t.equal(generateShortId(104), 'ba', 'index 104 should be "ba"')
+
+  // Test boundary cases for two-character identifiers (corrected values)
+  t.equal(generateShortId(2755), 'ZZ', 'index 2755 should be "ZZ"')
+
+  // Test three character cases (corrected values)
+  t.equal(generateShortId(2756), 'aaa', 'index 2756 should be "aaa"')
+  t.equal(generateShortId(2757), 'aab', 'index 2757 should be "aab"')
+
+  // Test a large number to ensure it works for 10,000+ cases
+  const largeId = generateShortId(10000)
+  t.type(
+    largeId,
+    'string',
+    'should generate valid string for index 10000',
+  )
+  t.ok(
+    largeId.length > 0,
+    'should generate non-empty string for large index',
+  )
+  t.ok(
+    /^[a-zA-Z]+$/.test(largeId),
+    'should only contain letters for large index',
+  )
+})
+
+t.test('children', async t => {
+  const graph = new Graph({
+    projectRoot: t.testdirName,
+    ...configData,
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+  })
+  const place = (from: typeof graph.mainImporter, name: string) => {
+    const node = graph.placePackage(
+      from,
+      'prod',
+      Spec.parse(name, '^1.0.0'),
+      { name, version: '1.0.0' },
+    )
+    if (!node) throw new Error('failed to place ' + name)
+    return node
+  }
+  const foo = place(graph.mainImporter, 'foo')
+  place(graph.mainImporter, 'other')
+  const bar = place(graph.mainImporter, 'bar')
+  const baz = place(bar, 'baz')
+  graph.addEdge('prod', Spec.parse('foo', '^1.0.0'), baz, foo)
+  const children = new Map([
+    [
+      foo.id,
+      [
+        { label: 'a (linked)', edge: 'foo@1.0.0' },
+        { label: 'say "hi"' },
+      ],
+    ],
+    [baz.id, [{ label: 'c', edge: 'x (baz@1.0.0)' }]],
+    [bar.id, []],
+    [
+      joinDepIDTuple(['registry', '', 'gone@1.0.0']),
+      [{ label: 'g' }],
+    ],
+  ])
+  const out = mermaidOutput({
+    edges: [],
+    importers: graph.importers,
+    nodes: [foo, baz],
+    children,
+  })
+  t.matchSnapshot(out, 'paths to the nodes, leaves under them')
+  t.notMatch(out, 'other', 'not on a path')
+  t.equal(
+    out.match(/"a \(linked\)"/g)?.length,
+    1,
+    'leaves drawn once',
+  )
+  t.notMatch(
+    mermaidOutput({
+      edges: [],
+      importers: graph.importers,
+      nodes: [foo],
+    }),
+    'classDef b',
+    'no children, no class',
   )
 })

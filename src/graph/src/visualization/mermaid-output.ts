@@ -1,12 +1,18 @@
-import { type DepID } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { Edge } from '../edge.ts'
 import { Node } from '../node.ts'
-import { type EdgeLike, type NodeLike } from '../types.ts'
+import type { EdgeLike, NodeLike } from '@nrz/types'
+
+/** A leaf drawn under a graph node: node label, optional edge label. */
+export type MermaidChild = { label: string; edge?: string }
 
 export type MermaidOutputGraph = {
   edges: EdgeLike[]
   importers: Set<NodeLike>
   nodes: NodeLike[]
+  highlightSelection?: boolean
+  /** leaves to draw under included nodes (class `b`), eg: skills */
+  children?: Map<DepID, MermaidChild[]>
 }
 
 type TraverseItem = {
@@ -16,59 +22,202 @@ type TraverseItem = {
 
 let missingCount = 0
 
-const nodeLabel = (node: NodeLike) =>
-  `"${String(node).replaceAll('@', '#64;')}"`
+const escapeLabel = (s: string) =>
+  s.replaceAll('"', '#quot;').replaceAll('@', '#64;')
+
+const isSelected = (
+  options: MermaidOutputGraph,
+  edge?: EdgeLike,
+  node?: NodeLike,
+) =>
+  (!node || options.nodes.includes(node)) &&
+  /* c8 ignore next */ (!edge || options.edges.includes(edge))
+
+/**
+ * Generates a short identifier for a given index following the pattern:
+ * 0 -> a, 1 -> b, ..., 25 -> z, 26 -> A, ..., 51 -> Z, 52 -> aa, 53 -> ab, etc.
+ * This implements a bijective base-52 numbering system where a-z = 0-25, A-Z = 26-51
+ */
+export function generateShortId(index: number): string {
+  const base = 52
+
+  // Helper function to convert a digit (0-51) to character
+  const digitToChar = (digit: number): string => {
+    if (digit < 26) {
+      // a-z (0-25)
+      return String.fromCharCode(97 + digit)
+    } else {
+      // A-Z (26-51)
+      return String.fromCharCode(65 + (digit - 26))
+    }
+  }
+
+  // Bijective base-52 conversion
+  let result = ''
+  let num = index + 1 // Convert to 1-based for bijective base
+
+  while (num > 0) {
+    num-- // Adjust for 0-based indexing in each position
+    const remainder = num % base
+    result = digitToChar(remainder) + result
+    num = Math.floor(num / base)
+  }
+
+  return result
+}
+
+/**
+ * Creates a mapping from DepID to short identifier
+ */
+function createDepIdMapping(
+  importers: Set<NodeLike>,
+): Map<DepID, string> {
+  const mapping = new Map<DepID, string>()
+  const uniqueDepIds = new Set<DepID>()
+
+  // Collect all unique DepIDs from nodes & importers
+  const [importer] = importers
+  if (importer) {
+    for (const node of importer.graph.nodes.values()) {
+      uniqueDepIds.add(node.id)
+    }
+  }
+
+  // Create mapping for each unique DepID
+  let index = 0
+  for (const depId of uniqueDepIds) {
+    mapping.set(depId, generateShortId(index++))
+  }
+
+  return mapping
+}
+
+/**
+ * Returns a node reference: on the first occurrence of a node, returns the full label;
+ * on subsequent occurrences, returns just the shortId.
+ *
+ * Note: Mutates the `labeledNodes` set as a side effect to track which nodes have already
+ * been labeled. This tracking is shared across multiple importers to prevent duplicate
+ * labels in the output.
+ */
+const nodeRef = (
+  node: NodeLike,
+  labeledNodes: Set<DepID>,
+  depIdMapping: Map<DepID, string>,
+  options: MermaidOutputGraph,
+): string => {
+  const shortId =
+    depIdMapping.get(
+      node.id,
+    ) /* c8 ignore next - should not be possible */ ?? ''
+  const selectedClass =
+    (
+      options.highlightSelection &&
+      isSelected(options, undefined, node)
+    ) ?
+      ':::a'
+    : ''
+  if (labeledNodes.has(node.id)) {
+    return shortId + selectedClass
+  }
+  labeledNodes.add(node.id)
+  return `${shortId}("${String(node).replaceAll('@', '#64;')}")${selectedClass}`
+}
 
 function parseNode(
   seenNodes: Set<DepID>,
+  labeledNodes: Set<DepID>,
   includedItems: Map<EdgeLike | NodeLike, boolean>,
+  depIdMapping: Map<DepID, string>,
+  options: MermaidOutputGraph,
+  leaves: Map<DepID, string>,
   node: NodeLike,
+  isImporter = false,
 ) {
   if (seenNodes.has(node.id) || !includedItems.get(node)) {
     return ''
   }
   seenNodes.add(node.id)
-  const edges: string = [...node.edgesOut.values()]
-    .map(e => parseEdge(seenNodes, includedItems, e))
+  // For importers, render the node label first as a standalone line before processing edges,
+  // since they appear at the top of the graph. Non-importer nodes are labeled inline as part of edge definitions.
+  const nodeLabel =
+    isImporter ?
+      nodeRef(node, labeledNodes, depIdMapping, options)
+    : ''
+  // Include both regular edges and workspace edges (if any)
+  const allEdges = [
+    ...node.edgesOut.values(),
+    ...(node.workspaces?.values() ?? []),
+  ]
+  const edges: string = [
+    leaves.get(node.id),
+    ...allEdges.map(e =>
+      parseEdge(
+        seenNodes,
+        labeledNodes,
+        includedItems,
+        depIdMapping,
+        options,
+        leaves,
+        e,
+      ),
+    ),
+  ]
     .filter(Boolean)
     .join('\n')
-  return `${encodeURIComponent(node.id)}(${nodeLabel(node)})${edges.length ? '\n' : ''}${edges}`
+  // Only render node standalone for importers, others are rendered as part of edges
+  if (isImporter) {
+    /* c8 ignore next */
+    return `${nodeLabel}${edges.length ? '\n' : ''}${edges}`
+  }
+  return edges
 }
 
 function parseEdge(
   seenNodes: Set<DepID>,
+  labeledNodes: Set<DepID>,
   includedItems: Map<EdgeLike | NodeLike, boolean>,
+  depIdMapping: Map<DepID, string>,
+  options: MermaidOutputGraph,
+  leaves: Map<DepID, string>,
   edge: EdgeLike,
 ) {
   if (!includedItems.get(edge)) {
     return ''
   }
 
+  const edgeType = edge.type === 'prod' ? '' : ` (${edge.type})`
   const edgeResult =
-    `${encodeURIComponent(edge.from.id)}(${nodeLabel(edge.from)})` +
-    ` -->|"${String(edge.spec).replaceAll('@', '#64;')} (${edge.type})"| `
+    nodeRef(edge.from, labeledNodes, depIdMapping, options) +
+    ` -->|"${String(edge.spec).replaceAll('@', '#64;')}${edgeType}"| `
 
   const missingLabel =
     edge.type.endsWith('ptional') ? 'Missing Optional' : 'Missing'
   if (!edge.to) {
-    return edgeResult + `missing-${missingCount++}(${missingLabel})\n`
+    return edgeResult + `missing-${missingCount++}(${missingLabel})`
   }
 
-  return (
-    edgeResult +
-    `${encodeURIComponent(edge.to.id)}(${nodeLabel(edge.to)})\n` +
-    parseNode(seenNodes, includedItems, edge.to)
+  // Label the target node first so that if it's referenced again later in the graph,
+  // it will use the short identifier instead of repeating the full label.
+  const toRef = nodeRef(edge.to, labeledNodes, depIdMapping, options)
+  const childEdges = parseNode(
+    seenNodes,
+    labeledNodes,
+    includedItems,
+    depIdMapping,
+    options,
+    leaves,
+    edge.to,
   )
+  return edgeResult + toRef + (childEdges ? '\n' + childEdges : '')
 }
 
 /**
  * Returns a mermaid string representation of the graph.
  */
-export function mermaidOutput({
-  edges,
-  importers,
-  nodes,
-}: MermaidOutputGraph) {
+export function mermaidOutput(options: MermaidOutputGraph) {
+  const { edges, importers, nodes, highlightSelection, children } =
+    options
   const seen = new Set<EdgeLike | NodeLike>()
   const includedItems = new Map<EdgeLike | NodeLike, boolean>()
   const traverse = new Set<TraverseItem>(
@@ -95,6 +244,12 @@ export function mermaidOutput({
       for (const edge of item.self.edgesOut.values()) {
         traverse.add({ self: edge, parent: item.self })
       }
+      // Also traverse workspace edges (only mainImporter has these)
+      if (item.self.workspaces) {
+        for (const edge of item.self.workspaces.values()) {
+          traverse.add({ self: edge, parent: item.self })
+        }
+      }
     }
   }
 
@@ -104,10 +259,53 @@ export function mermaidOutput({
     }
   }
 
-  return (
-    'flowchart TD\n' +
-    [...importers]
-      .map(i => parseNode(new Set<DepID>(), includedItems, i))
-      .join('\n')
-  )
+  // Create DepID to short identifier mapping
+  const depIdMapping = createDepIdMapping(importers)
+
+  // leaf lines per node, ids after the graph's
+  const leaves = new Map<DepID, string>()
+  let leafIndex = depIdMapping.size
+  for (const [id, items] of children ?? []) {
+    const from = depIdMapping.get(id)
+    if (!from || !items.length) continue
+    leaves.set(
+      id,
+      items
+        .map(
+          ({ label, edge }) =>
+            `${from} -->${edge === undefined ? '' : `|"${escapeLabel(edge)}"|`} ${generateShortId(leafIndex++)}("${escapeLabel(label)}"):::b`,
+        )
+        .join('\n'),
+    )
+  }
+
+  // Track nodes that have had their label printed (shared across all importers)
+  const labeledNodes = new Set<DepID>()
+
+  // Track nodes that have been processed (shared across all importers to avoid duplicates)
+  const seenNodes = new Set<DepID>()
+
+  const graphOutput = [...importers]
+    .map(i =>
+      parseNode(
+        seenNodes,
+        labeledNodes,
+        includedItems,
+        depIdMapping,
+        options,
+        leaves,
+        i,
+        true, // isImporter
+      ),
+    )
+    .filter(Boolean)
+    .join('\n')
+
+  const styleDefinition =
+    (highlightSelection ?
+      '\nclassDef a fill:gold,color:#242424'
+    : '') +
+    (leaves.size ? '\nclassDef b fill:turquoise,color:#242424' : '')
+
+  return 'flowchart TD\n' + graphOutput + styleDefinition
 }

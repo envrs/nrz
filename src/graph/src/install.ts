@@ -1,0 +1,396 @@
+import { load as actualLoad } from './actual/load.ts'
+import { build as idealBuild } from './ideal/build.ts'
+import { reify } from './reify/index.ts'
+import { GraphModifier } from './modifiers.ts'
+import { init } from '@nrz/init'
+import { error } from '@nrz/error-cause'
+import type { NormalizedManifest } from '@nrz/types'
+import { asError } from '@nrz/types'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { LoadOptions } from './actual/load.ts'
+import { getDependencies } from './dependencies.ts'
+import type {
+  AddImportersDependenciesMap,
+  Dependency,
+} from './dependencies.ts'
+import { RollbackRemove } from '@nrz/rollback-remove'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
+import { existsSync, rmSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { load as loadVirtual, loadData } from './lockfile/load.ts'
+import { formatOptionsChange } from './lockfile/format-options-change.ts'
+import type { SpecCache } from './lockfile/types.ts'
+import { getImporterSpecs } from './ideal/get-importer-specs.ts'
+import { lockfile } from './index.ts'
+import type { Graph } from './index.ts'
+import { updatePackageJson } from './reify/update-importers-package-json.ts'
+import { Monorepo } from '@nrz/workspaces'
+import type { Diff } from './diff.ts'
+import { assertSkillsDirs } from './skills/dirs.ts'
+import { assertQuery } from './filter-nodes-by-query.ts'
+import type { LinkSkillsResult } from './skills/index.ts'
+
+export type InstallOptions = LoadOptions & {
+  packageInfo: PackageInfoClient
+  cleanInstall?: boolean // Only set by ci command for clean install
+  allowScripts: string
+  saveExact?: boolean
+  savePrefix?: string
+  /**
+   * DSS query: packages whose agent skills get linked into the
+   * project's agent skill dirs after install. Selectors may end with
+   * `:skill()`. Unset or `:not(*)`: none.
+   */
+  allowSkills?: string
+  /**
+   * agent skill dirs, relative to projectRoot. Unset: detect; `[]`:
+   * none
+   */
+  skillsDirs?: string[]
+}
+
+/**
+ * Result of {@link install}.
+ */
+export type InstallResult = {
+  buildQueue?: DepID[]
+  graph: Graph
+  diff?: Diff
+  /** skill links added or removed, if any */
+  skills?: LinkSkillsResult
+}
+
+export const install = async (
+  options: InstallOptions,
+  add?: AddImportersDependenciesMap,
+): Promise<InstallResult> => {
+  // Validate incompatible options
+  if (options.lockfileOnly && options.cleanInstall) {
+    throw error(
+      'Cannot use --lockfile-only with --clean-install (ci command). Clean install requires filesystem operations.',
+    )
+  }
+
+  // unset or `:not(*)`: no skills work at all, the skills code never
+  // loads
+  const allowSkills =
+    options.allowSkills === ':not(*)' ?
+      undefined
+    : options.allowSkills
+  // fail before installing, not after
+  if (allowSkills) {
+    await assertQuery(allowSkills, 'allow-skills', ['skill'])
+    assertSkillsDirs(options.projectRoot, options.skillsDirs)
+  }
+
+  if (options.expectLockfile || options.frozenLockfile) {
+    const lockfilePath = resolve(options.projectRoot, 'nrz-lock.json')
+    if (!existsSync(lockfilePath)) {
+      throw error(
+        'nrz-lock.json file is required when using --expect-lockfile, --frozen-lockfile, or ci command',
+        {
+          path: lockfilePath,
+        },
+      )
+    }
+  }
+
+  let mainManifest: NormalizedManifest | undefined = undefined
+  try {
+    mainManifest = options.packageJson.read(options.projectRoot)
+  } catch (err) {
+    if (asError(err).message === 'Could not read package.json file') {
+      await init({ cwd: options.projectRoot })
+      mainManifest = options.packageJson.read(options.projectRoot, {
+        reload: true,
+      })
+    } else {
+      throw err
+    }
+  }
+
+  // Load an unfiltered monorepo to ensure all workspace importers are
+  // included in the graph. This is necessary because the options.monorepo
+  // may be filtered by -w/--workspace flags, which would cause nodes/edges
+  // from other workspaces to be lost during graph construction.
+  const fullMonorepo = Monorepo.maybeLoad(options.projectRoot, {
+    packageJson: options.packageJson,
+    scurry: options.scurry,
+  })
+
+  const specCache: SpecCache = new Map()
+  const lockfileData =
+    options.frozenLockfile ? loadData(options.projectRoot) : undefined
+  // loaded before the frozen check so that the lockfile options compare
+  // against a config that includes them, and so that the check knows
+  // which dependency specs the modifiers govern
+  const modifiers = GraphModifier.maybeLoad(options)
+
+  if (options.frozenLockfile) {
+    // validates no add/remove operations are requested
+    if (add?.modifiedDependencies) {
+      const dependencies: string[] = []
+      for (const [, deps] of add) {
+        for (const [name] of deps) {
+          dependencies.push(name)
+        }
+      }
+      throw error(
+        'Cannot add dependencies when using --frozen-lockfile',
+        { found: dependencies.join(', ') },
+      )
+    }
+
+    const lockfileGraph = loadVirtual({
+      ...options,
+      mainManifest,
+      modifiers,
+      monorepo: fullMonorepo,
+      specCache,
+      lockfileData,
+    })
+
+    const emptyAdd = Object.assign(
+      new Map<DepID, Map<string, Dependency>>(),
+      { modifiedDependencies: false },
+    )
+    const emptyRemove = Object.assign(new Map<DepID, Set<string>>(), {
+      modifiedDependencies: false,
+    })
+    const importerSpecs = getImporterSpecs({
+      graph: lockfileGraph,
+      add: emptyAdd,
+      remove: emptyRemove,
+      ...options,
+      modifiers,
+    })
+
+    // Check for spec changes by comparing package.json specs with lockfile edges
+    const specChanges: string[] = []
+    for (const importer of lockfileGraph.importers) {
+      const deps = getDependencies(importer, options)
+      for (const [depName, dep] of deps) {
+        // the edge text of a governed dependency is the modifier value,
+        // never the manifest range; a change to it is an options change
+        if (modifiers?.targetsImporterEdge(importer, dep.spec))
+          continue
+        const edge = importer.edgesOut.get(depName)
+        if (edge?.spec) {
+          if (edge.spec.toString() !== dep.spec.toString()) {
+            const node = lockfileGraph.nodes.get(importer.id)
+            /* c8 ignore next */
+            const location = node?.location || importer.id
+            specChanges.push(
+              `  ${location}: ${depName} spec changed from "${edge.spec}" to "${dep.spec}"`,
+            )
+          }
+        }
+      }
+    }
+
+    if (
+      importerSpecs.add.modifiedDependencies ||
+      importerSpecs.remove.modifiedDependencies ||
+      importerSpecs.removedEdges.size > 0 ||
+      specChanges.length > 0 ||
+      lockfileGraph.optionsChanged
+    ) {
+      const details: string[] = []
+
+      if (lockfileGraph.optionsChanged) {
+        details.push('  Configuration options have changed:')
+        for (const change of lockfileGraph.optionsChanges) {
+          details.push(`    ${formatOptionsChange(change)}`)
+        }
+      }
+
+      if (specChanges.length > 0) {
+        details.push(...specChanges)
+      }
+
+      for (const [importerId, deps] of importerSpecs.add) {
+        if (deps.size > 0) {
+          const node = lockfileGraph.nodes.get(importerId)
+          const location = node?.location || importerId
+          const depNames = Array.from(deps.keys())
+          const depLabelAdd =
+            deps.size === 1 ? 'dependency' : 'dependencies'
+          details.push(
+            `  ${location}: ${deps.size} ${depLabelAdd} to add (${depNames.join(', ')})`,
+          )
+        }
+      }
+
+      for (const [importerId, deps] of importerSpecs.remove) {
+        if (deps.size > 0) {
+          const node = lockfileGraph.nodes.get(importerId)
+          const location = node?.location || importerId
+          const depNames = Array.from(deps)
+          const depLabelRemove =
+            deps.size === 1 ?
+              'dependency'
+            : /* c8 ignore next */ 'dependencies'
+          details.push(
+            `  ${location}: ${deps.size} ${depLabelRemove} to remove (${depNames.join(', ')})`,
+          )
+        }
+      }
+
+      for (const edge of importerSpecs.removedEdges) {
+        details.push(
+          `  ${edge.from.location}: ${edge.name} is removed by a graph modifier`,
+        )
+      }
+
+      const lockfilePath = resolve(
+        options.projectRoot,
+        'nrz-lock.json',
+      )
+      throw error(
+        'Lockfile is out of sync with package.json. Run "nrz install" to update.\n' +
+          details.join('\n'),
+        {
+          path: lockfilePath,
+        },
+      )
+    }
+  }
+
+  // an explicit add of a dep a `-` modifier removes fails before
+  // anything on disk is touched
+  if (modifiers && add?.modifiedDependencies) {
+    const wsIds = new Set(
+      [...(fullMonorepo?.values() ?? [])].map(ws => ws.id),
+    )
+    for (const [id, deps] of add) {
+      const mainImporter = id === joinDepIDTuple(['file', '.'])
+      // nested folders are no importers, appendNodes checks those
+      if (!mainImporter && !wsIds.has(id)) continue
+      for (const { spec } of deps.values()) {
+        const found = modifiers.removesImporterEdge(
+          { importer: true, mainImporter },
+          spec,
+        )
+        if (found) {
+          throw error(
+            `Cannot add ${spec.name}: it is removed by a graph modifier`,
+            { code: 'ECONFIG', found },
+          )
+        }
+      }
+    }
+  }
+
+  const remover = new RollbackRemove()
+  if (options.cleanInstall) {
+    const nodeModulesPath = resolve(
+      options.projectRoot,
+      'node_modules',
+    )
+    if (existsSync(nodeModulesPath)) {
+      await remover.rm(nodeModulesPath)
+      remover.confirm()
+    }
+  }
+
+  let result: InstallResult
+  try {
+    const remove = Object.assign(new Map<DepID, Set<string>>(), {
+      modifiedDependencies: false,
+    })
+    let act: Graph | undefined = actualLoad({
+      ...options,
+      mainManifest,
+      loadManifests: true,
+      modifiers: undefined, // modifiers should not be used here
+      monorepo: fullMonorepo,
+      specCache,
+    })
+    // if the actual graph has no dependencies, it's simpler to ignore it
+    // this allows us to check for its availability later on for properly
+    // handling situations like resetting edges for refreshing the ideal graph
+    if (act.importers.size === act.nodes.size) {
+      act = undefined
+    }
+    const graph = await idealBuild({
+      ...options,
+      actual: act,
+      add,
+      mainManifest,
+      loadManifests: true,
+      modifiers,
+      remove,
+      remover,
+      monorepo: fullMonorepo,
+      specCache,
+      lockfileData,
+    })
+
+    // If lockfileOnly is enabled, skip reify and only save the lockfile
+    if (options.lockfileOnly) {
+      // Save only the main lockfile, skip all filesystem operations.
+      // Spread `options` so that spec-level config (registry,
+      // scoped-registries, git-hosts, catalogs, etc.) round-trips
+      // through the lockfile - otherwise subsequent installs lose
+      // the configured registry and rewrite node/edge DepIDs back
+      // to the default npm registry. (See nrz/nrz#1580.)
+      // normalise importer edge specs before saving, so the lockfile
+      // carries the same value package.json gets
+      const saveImportersPackageJson =
+        /* c8 ignore next */
+        add?.modifiedDependencies || remove.modifiedDependencies ?
+          updatePackageJson({
+            ...options,
+            add,
+            graph,
+            remove,
+          })
+        : undefined
+      lockfile.save({ ...options, graph, modifiers })
+      saveImportersPackageJson?.()
+      // nothing is extracted or moved on this path, so nothing should be
+      // parked; confirm anyway so an early return can never leave
+      // `.NRZ.DELETE.*` behind
+      remover.confirm()
+      return { graph, diff: undefined }
+    }
+
+    const { diff, buildQueue } = await reify({
+      ...options,
+      add,
+      actual: act,
+      graph,
+      loadManifests: true,
+      modifiers,
+      remove,
+      remover,
+    })
+
+    result = { buildQueue, graph, diff }
+  } catch (err) {
+    /* c8 ignore next */
+    await remover.rollback().catch(() => {})
+    // Remove hidden lockfile on failure
+    try {
+      const hiddenLockfile = resolve(
+        options.projectRoot,
+        'node_modules/.nrz-lock.json',
+      )
+      if (existsSync(hiddenLockfile)) {
+        rmSync(hiddenLockfile, { force: true })
+      }
+    } catch {}
+    throw err
+  }
+
+  // after the try: a link failure must not roll back the install
+  if (!allowSkills) return result
+  const { linkSkills } = await import('./skills/index.ts')
+  result.skills = await linkSkills({
+    ...options,
+    graph: result.graph,
+    target: allowSkills,
+  })
+  return result
+}

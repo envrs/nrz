@@ -1,187 +1,206 @@
-import { error } from '@nrz/error-cause'
-import { type EdgeLike, type NodeLike } from '@nrz/graph'
-import {
-  type Tag,
-  type String,
-  type Selector,
-  type Root,
-  type Pseudo,
-  type Nesting,
-  type Identifier,
-  type Comment,
-  type Combinator,
-  type ClassName,
-  type Attribute,
-  type Universal,
-} from 'postcss-selector-parser'
+import type { EdgeLike, NodeLike } from '@nrz/types'
+import type {
+  SecurityArchiveLike,
+  PackageScore,
+} from '@nrz/security-archive'
+import type { DepID } from '@nrz/dep-id'
+import type { PartPseudoName, PostcssNode } from '@nrz/dss-parser'
 
-export type PostcssNode =
-  | Tag
-  | String
-  | Selector
-  | Root
-  | Pseudo
-  | Nesting
-  | Identifier
-  | Comment
-  | Combinator
-  | ClassName
-  | Attribute
-  | Universal
+export type HostContextsMapResult = {
+  initialEdges: EdgeLike[]
+  initialNodes: NodeLike[]
+  edges: EdgeLike[]
+  nodes: NodeLike[]
+  securityArchive: SecurityArchiveLike | undefined
+}
 
-export type PostcssNodeWithChildren = Selector | Root | Pseudo
+export type HostContextsMap = Map<
+  string,
+  () => Promise<HostContextsMapResult>
+>
+
+export type Specificity = {
+  idCounter: number
+  commonCounter: number
+}
 
 export type GraphSelectionState = {
   nodes: Set<NodeLike>
   edges: Set<EdgeLike>
 }
 
+/**
+ * Callback that returns changed file paths for a given
+ * commitish reference. Used by the :diff() pseudo selector.
+ * The returned paths should be relative to the project root.
+ */
+export type DiffFilesProvider = (commitish: string) => Set<string>
+
+/**
+ * Callback that returns the `authorization` header value to use when
+ * fetching data from a registry URL, e.g. by the :outdated() pseudo
+ * selector. Keeps the browser-safe query package free of any direct
+ * keychain / registry-client dependency.
+ */
+export type GetAuthHeader = (
+  url: string,
+) => Promise<string | undefined>
+
+/**
+ * Whether an installed package ships agent skills; for `:skills`.
+ * Keeps fs out of this package.
+ */
+export type HasSkills = (node: NodeLike) => Promise<boolean>
+
+/**
+ * One top-level selector of a query and the nodes it matched. `name`
+ * and `patterns` are set when it ends in a part selector, e.g.
+ * `#a:skill(x, y*)`.
+ */
+export type QueryPart<N = QueryResponseNode> = {
+  name?: PartPseudoName
+  /** as typed, `*` = glob; for matching only, never paths */
+  patterns?: string[]
+  nodes: N[]
+}
+
 export type ParserState = {
   cancellable: () => Promise<void>
   collect: GraphSelectionState
+  comment: string
   current: PostcssNode
+  diffFiles?: DiffFilesProvider
+  getAuthHeader?: GetAuthHeader
+  hasSkills?: HasSkills
+  hostContexts?: HostContextsMap
+  importers: Set<NodeLike>
   initial: GraphSelectionState
   loose?: boolean
   next?: PostcssNode
   prev?: PostcssNode
   result?: NodeLike[]
-  signal?: AbortSignal
+  signal: AbortSignal
   walk: ParserFn
   partial: GraphSelectionState
+  /** set by `:skill()`, read and cleared by `walk()` */
+  part?: Pick<QueryPart, 'name' | 'patterns'>
+  /** one entry per top-level selector, only when opted in */
+  parts?: QueryPart<NodeLike>[]
+  /** part selectors this consumer allows */
+  partSelectors?: ReadonlySet<PartPseudoName>
+  retries: number
+  securityArchive: SecurityArchiveLike | undefined
+  scopeIDs?: DepID[]
+  specificity: Specificity
 }
 
 export type QueryResponse = {
-  edges: EdgeLike[]
-  nodes: NodeLike[]
+  edges: QueryResponseEdge[]
+  nodes: QueryResponseNode[]
+  importers: QueryResponseNode[]
+  comment: string
+  specificity: Specificity
+  /**
+   * one entry per top-level selector, only with `partSelectors` and
+   * a non-empty query
+   */
+  parts?: QueryPart[]
+}
+
+export type QueryResponseEdge = Omit<EdgeLike, 'from' | 'to'> & {
+  from: QueryResponseNode
+  to?: QueryResponseNode
+}
+
+export type QueryResponseNode = Omit<
+  NodeLike,
+  'edgesIn' | 'edgesOut'
+> & {
+  edgesIn: Set<QueryResponseEdge>
+  edgesOut: Map<string, QueryResponseEdge>
+  insights: Insights
+  toJSON: () => Pick<
+    QueryResponseNode,
+    | 'id'
+    | 'name'
+    | 'version'
+    | 'location'
+    | 'importer'
+    | 'manifest'
+    | 'projectRoot'
+    | 'integrity'
+    | 'resolved'
+    | 'dev'
+    | 'optional'
+    | 'insights'
+    | 'confused'
+  >
+}
+
+export type Insights = {
+  abandoned?: boolean
+  confused?: boolean
+  cve?: `CVE-${string}`[]
+  cwe?: `CWE-${string}`[]
+  debug?: boolean
+  deprecated?: boolean
+  dynamic?: boolean
+  entropic?: boolean
+  env?: boolean
+  eval?: boolean
+  fs?: boolean
+  license?: LicenseInsights
+  malware?: boolean
+  minified?: boolean
+  native?: boolean
+  network?: boolean
+  obfuscated?: boolean
+  scanned: boolean
+  score?: PackageScore
+  scripts?: boolean
+  severity?: SeverityInsights
+  shell?: boolean
+  shrinkwrap?: boolean
+  squat?: SquatInsights
+  suspicious?: boolean
+  tracker?: boolean
+  trivial?: boolean
+  undesirable?: boolean
+  unknown?: boolean
+  unmaintained?: boolean
+  unpopular?: boolean
+  unstable?: boolean
+  vuln?: VulnInsights
+}
+
+export type LicenseInsights = {
+  unlicensed: boolean
+  misc: boolean
+  restricted: boolean
+  ambiguous: boolean
+  copyleft: boolean
+  unknown: boolean
+  none: boolean
+  exception: boolean
+}
+
+export type LeveledInsights = {
+  low: boolean
+  medium: boolean
+  high: boolean
+  critical: boolean
+}
+
+export type SeverityInsights = LeveledInsights
+export type VulnInsights = LeveledInsights
+
+export type SquatInsights = {
+  medium: boolean
+  critical: boolean
 }
 
 export type ParserFn = (opt: ParserState) => Promise<ParserState>
 
-export const isPostcssNodeWithChildren = (
-  node: any,
-): node is PostcssNodeWithChildren =>
-  'type' in node && 'nodes' in node
-
-export const asPostcssNodeWithChildren = (
-  node?: PostcssNode,
-): PostcssNodeWithChildren => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isPostcssNodeWithChildren(node)) {
-    throw error('Not a query selector node with children', {
-      found: node,
-    })
-  }
-  return node
-}
-
-const isObj = (o: unknown): o is Record<string, unknown> =>
-  !!o && typeof o === 'object'
-
-export const isAttributeNode = (node: unknown): node is Attribute =>
-  isObj(node) && !!node.attribute && node.type === 'attribute'
-
-export const asAttributeNode = (node?: PostcssNode): Attribute => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isAttributeNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'attribute',
-      found: node.type,
-    })
-  }
-  return node
-}
-
-export const isClassNode = (node: unknown): node is ClassName =>
-  isObj(node) && !!node.value && node.type === 'class'
-
-export const asClassNode = (node?: PostcssNode): ClassName => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isClassNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'class',
-      found: node.type,
-    })
-  }
-  return node
-}
-
-export const isCombinatorNode = (node: unknown): node is Combinator =>
-  isObj(node) && !!node.value && node.type === 'combinator'
-
-export const asCombinatorNode = (node?: PostcssNode): Combinator => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isCombinatorNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'combinator',
-      found: node.type,
-    })
-  }
-  return node
-}
-
-export const isIdentifierNode = (node: any): node is Identifier =>
-  isObj(node) && !!node.value && node.type === 'id'
-
-export const asIdentifierNode = (node?: PostcssNode): Identifier => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isIdentifierNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'id',
-      found: node.type,
-    })
-  }
-  return node
-}
-
-export const isSelectorNode = (node: any): node is Selector =>
-  isPostcssNodeWithChildren(node) && node.type === 'selector'
-
-export const isPseudoNode = (node: unknown): node is Pseudo =>
-  isObj(node) && !!node.value && node.type === 'pseudo'
-
-export const asPseudoNode = (node?: PostcssNode): Pseudo => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isPseudoNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'pseudo',
-      found: node.type,
-    })
-  }
-  return node
-}
-
-export const isTagNode = (node: unknown): node is Tag =>
-  isObj(node) && !!node.value && node.type === 'tag'
-
-export const asTagNode = (node?: PostcssNode): Tag => {
-  if (!node) {
-    throw error('Expected a query node')
-  }
-
-  if (!isTagNode(node)) {
-    throw error('Mismatching query node', {
-      wanted: 'tag',
-      found: node.type,
-    })
-  }
-
-  return node
+export type ParsedSelectorToken = PostcssNode & {
+  token: string
 }

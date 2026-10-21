@@ -1,0 +1,20 @@
+name: 📚 Documentation
+description: Improve or create documentation
+title: '[DOCS] '
+labels: ['documentation', 'enhancement']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📚 Documentation
+        Thanks for helping improve our documentation! Clear documentation is essential for project success and developer experience.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 📋 Description
+      description: Describe what documentation needs to be created, updated, or improved.
+      placeholder: 'Describe the documentation work needed...'
+    validations:
+      required: true

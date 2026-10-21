@@ -1,0 +1,265 @@
+import { writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
+import assert from 'node:assert'
+import { run } from '@nrz/run'
+import { commandUsage } from '../config/usage.ts'
+import type { CommandFn, CommandUsage } from '../index.ts'
+import { packTarball } from '../pack-tarball.ts'
+import type { Views } from '../view.ts'
+import prettyBytes from 'pretty-bytes'
+import { actual } from '@nrz/graph'
+import { Query } from '@nrz/query'
+import type { LoadedConfig } from '../config/index.ts'
+import { error } from '@nrz/error-cause'
+import { createHostContextsMap } from '../query-host-contexts.ts'
+import { sortScopeLocations } from '../sort-scope-locations.ts'
+import { minimatch } from 'minimatch'
+
+export const needsRegistry = true
+
+export const usage: CommandUsage = () =>
+  commandUsage({
+    command: 'pack',
+    usage: '',
+    description: `Create a tarball from a package in the current directory or specified folder.
+    
+    The tarball will be saved to the current directory with the name
+    <name>-<version>.tgz.`,
+    options: {
+      'dry-run': {
+        description:
+          'Show what would be packed without creating a tarball',
+      },
+      scope: {
+        value: '<query>',
+        description:
+          'Filter packages to pack using a DSS query selector.',
+      },
+      workspace: {
+        value: '<path|glob>',
+        description: 'Limit pack targets to matching workspaces.',
+      },
+      'workspace-group': {
+        value: '<name>',
+        description: 'Limit pack targets to workspace groups.',
+      },
+      recursive: {
+        description: 'Pack all workspaces in the monorepo.',
+      },
+    },
+  })
+
+export type CommandResultSingle = {
+  id: string
+  name: string
+  version: string
+  filename: string
+  files: string[]
+  size: number
+  unpackedSize: number
+  shasum?: string
+  integrity?: string
+}
+
+export type CommandResult =
+  CommandResultSingle | CommandResultSingle[]
+
+export const views = {
+  human: results => {
+    const item = (r: CommandResultSingle) => {
+      const lines = [
+        `📦 Package: ${r.id}`,
+        `📄 File: ${r.filename}`,
+        `📁 ${r.files.length} Files`,
+        ...r.files.map(f => `  - ${f}`),
+        `📊 Package Size: ${prettyBytes(r.size)}`,
+        `📂 Unpacked Size: ${prettyBytes(r.unpackedSize)}`,
+      ]
+      if (r.shasum) lines.push(`🔒 Shasum: ${r.shasum}`)
+      if (r.integrity) lines.push(`🔐 Integrity: ${r.integrity}`)
+      return lines.join('\n')
+    }
+    return Array.isArray(results) ?
+        results.map(item).join('\n\n')
+      : item(results)
+  },
+  json: r => r,
+} as const satisfies Views<CommandResult>
+
+/**
+ * Resolve a scope query string to workspace locations using the DSS query system.
+ */
+const scopeLocations = async (
+  queryString: string,
+  conf: LoadedConfig,
+): Promise<string[]> => {
+  const { options, projectRoot } = conf
+  const mainManifest = options.packageJson.maybeRead(projectRoot)
+  let graph
+  if (mainManifest) {
+    graph = actual.load({
+      ...options,
+      mainManifest,
+      monorepo: options.monorepo,
+      loadManifests: false,
+    })
+  }
+  const hostContexts = await createHostContextsMap(conf)
+  const query = new Query({
+    /* c8 ignore next */
+    nodes: graph ? new Set(graph.nodes.values()) : new Set(),
+    edges: graph?.edges ?? new Set(),
+    importers: graph?.importers ?? new Set(),
+    securityArchive: undefined,
+    hostContexts,
+  })
+  const { nodes } = await query.search(queryString, {
+    signal: new AbortController().signal,
+  })
+  const locations: string[] = []
+  for (const node of nodes) {
+    const { location } = node.toJSON()
+    assert(
+      location,
+      error(`node ${node.id} has no location`, {
+        found: node,
+      }),
+    )
+    locations.push(resolve(projectRoot, location))
+  }
+  return sortScopeLocations(locations, options.monorepo)
+}
+
+export const command: CommandFn<CommandResult> = async conf => {
+  const { options, projectRoot } = conf
+  const queryString = conf.get('scope')
+  const paths = conf.get('workspace')
+  const groups = conf.get('workspace-group')
+  const recursive = conf.get('recursive')
+
+  const locations: string[] = []
+  let single: string | null = null
+
+  if (queryString) {
+    locations.push(...(await scopeLocations(queryString, conf)))
+  } else if (paths?.length || groups?.length || recursive) {
+    for (const workspace of options.monorepo ?? []) {
+      // When specific workspace paths are set (including auto-inferred from cwd),
+      // filter to only matching workspaces. Without this, all monorepo workspaces
+      // would be operated on even when only one was specified.
+      if (paths?.length) {
+        const matches = paths.some(
+          (p: string) =>
+            workspace.path === p ||
+            workspace.name === p ||
+            workspace.fullpath === p ||
+            resolve(projectRoot, p) === workspace.fullpath ||
+            minimatch(workspace.path, p),
+        )
+        if (!matches) continue
+      }
+      locations.push(workspace.fullpath)
+    }
+  } else if (options.monorepo) {
+    const cwd = process.cwd()
+    if (cwd === projectRoot) {
+      for (const workspace of options.monorepo) {
+        locations.push(workspace.fullpath)
+      }
+    } else {
+      const ws = options.monorepo.get(cwd)
+      if (ws) {
+        locations.push(ws.fullpath)
+      } else {
+        const rel = relative(projectRoot, cwd).replaceAll('\\', '/')
+        locations.push(
+          ...(await scopeLocations(`:path("${rel}")`, conf)),
+        )
+      }
+    }
+  } else {
+    single = options.packageJson.find(process.cwd()) ?? projectRoot
+  }
+
+  if (single) {
+    return commandSingle(single, conf)
+  }
+
+  assert(
+    locations.length > 0,
+    error('No workspaces or query results found'),
+  )
+
+  const results: CommandResultSingle[] = []
+  for (const location of locations) {
+    results.push(await commandSingle(location, conf))
+  }
+  return results
+}
+
+export const commandSingle = async (
+  location: string,
+  conf: LoadedConfig,
+) => {
+  const manifestPath = conf.options.packageJson.find(location)
+  assert(manifestPath, 'No package.json found')
+  const manifestDir = dirname(manifestPath)
+  const manifest = conf.options.packageJson.read(manifestDir)
+
+  const isDryRun = conf.options['dry-run']
+  const runOptions = {
+    cwd: manifestDir,
+    projectRoot: conf.projectRoot,
+    packageJson: conf.options.packageJson,
+    manifest,
+    ignoreMissing: true,
+    ignorePrePost: true,
+  }
+
+  await run({
+    ...runOptions,
+    arg0: 'prepack',
+  })
+
+  await run({
+    ...runOptions,
+    arg0: 'prepare',
+  })
+
+  // Re-read the manifest after lifecycle scripts, which may have modified package.json.
+  const updatedManifest = conf.options.packageJson.read(manifestDir, {
+    reload: true,
+  })
+
+  const {
+    name,
+    version,
+    filename,
+    tarballData,
+    unpackedSize,
+    files,
+    integrity,
+    shasum,
+  } = await packTarball(updatedManifest, manifestDir, conf)
+
+  if (!isDryRun) {
+    await writeFile(join(manifestDir, filename), tarballData)
+  }
+
+  await run({
+    ...runOptions,
+    arg0: 'postpack',
+  })
+
+  return {
+    id: `${name}@${version}`,
+    name,
+    version,
+    filename,
+    files,
+    size: tarballData.length,
+    unpackedSize,
+    shasum,
+    integrity,
+  }
+}

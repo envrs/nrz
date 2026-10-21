@@ -1,11 +1,12 @@
-import { type DepID, joinDepIDTuple } from '@nrz/dep-id'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
 import { Monorepo } from '@nrz/workspaces'
 import t from 'tap'
 import { satisfies } from '../src/index.ts'
 
 const projectRoot = t.testdir({
-  'nrz-workspaces.json': JSON.stringify('src/*'),
+  'nrz.json': JSON.stringify({ workspaces: 'src/*' }),
   src: {
     a: {
       'package.json': JSON.stringify({
@@ -100,7 +101,11 @@ t.test('ids that satisfy the spec', t => {
     ],
     [Spec.parse('a@file:a'), joinDepIDTuple(['file', './a'])],
     [
-      Spec.parse('a@registry:https://registry.npmjs.org/#a@1.x'),
+      // the `npm` alias is no longer a built-in default; configure it so
+      // the default-registry DepID resolves to the npm registry URL
+      Spec.parse('a@registry:https://registry.npmjs.org/#a@1.x', {
+        registries: { npm: 'https://registry.npmjs.org/' },
+      }),
       joinDepIDTuple(['registry', '', 'a@1.2.3']),
     ],
     [
@@ -124,6 +129,81 @@ t.test('ids that satisfy the spec', t => {
     )
   }
 
+  t.end()
+})
+
+t.test('registry specs satisfied by workspace dep ids', t => {
+  // When a monorepo workspace package is referenced with a plain
+  // semver spec (e.g. "a@1.x"), it should satisfy a workspace
+  // DepID if the workspace version matches. This mirrors
+  // npm/pnpm/yarn behavior of auto-resolving workspace packages.
+  const satisfied: [Spec, DepID][] = [
+    // exact version match
+    [Spec.parse('a@1.2.3'), joinDepIDTuple(['workspace', 'src/a'])],
+    // semver range match
+    [Spec.parse('a@^1.0.0'), joinDepIDTuple(['workspace', 'src/a'])],
+    // x-range match
+    [Spec.parse('a@1.x'), joinDepIDTuple(['workspace', 'src/a'])],
+    // dist-tag (no range) should match any workspace version
+    [Spec.parse('a@latest'), joinDepIDTuple(['workspace', 'src/a'])],
+    // * range matches any version
+    [Spec.parse('a@*'), joinDepIDTuple(['workspace', 'src/a'])],
+  ]
+
+  for (const [spec, depid] of satisfied) {
+    t.equal(
+      satisfies(depid, spec, projectRoot, projectRoot, monorepo),
+      true,
+      {
+        spec: spec,
+        depid,
+      },
+    )
+  }
+
+  t.end()
+})
+
+t.test('registry specs NOT satisfied by workspace dep ids', t => {
+  const unsatisfied: [Spec, DepID][] = [
+    // version out of range (workspace a is 1.2.3, spec wants 2.x)
+    [Spec.parse('a@2.x'), joinDepIDTuple(['workspace', 'src/a'])],
+    // name mismatch (no workspace named 'nonexistent')
+    [
+      Spec.parse('nonexistent@1.x'),
+      joinDepIDTuple(['workspace', 'src/a']),
+    ],
+    // workspace without a version (b has no version)
+    [Spec.parse('b@1.x'), joinDepIDTuple(['workspace', 'src/b'])],
+  ]
+
+  for (const [spec, depid] of unsatisfied) {
+    t.equal(
+      satisfies(depid, spec, projectRoot, projectRoot, monorepo),
+      false,
+      {
+        spec: spec,
+        depid,
+      },
+    )
+  }
+
+  t.end()
+})
+
+t.test('registry spec vs workspace dep id without monorepo', t => {
+  // Without a monorepo, registry specs should never match
+  // workspace dep ids
+  t.equal(
+    satisfies(
+      joinDepIDTuple(['workspace', 'src/a']),
+      Spec.parse('a@1.x'),
+      projectRoot,
+      projectRoot,
+      undefined,
+    ),
+    false,
+  )
   t.end()
 })
 

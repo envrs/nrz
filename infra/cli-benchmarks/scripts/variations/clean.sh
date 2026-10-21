@@ -1,0 +1,19 @@
+# Exit on error
+set -Eeuxo pipefail
+
+# Load common variables
+source "$1/variations/common.sh"
+
+# Run the benchmark suite
+# When running a clean benchmark, we want to clean up all the things in
+# between each run using the clean-helper.sh script.
+hyperfine \
+  --ignore-failure \
+  --export-json="$BENCH_OUTPUT_FOLDER/benchmarks.json" \
+  --warmup="$BENCH_WARMUP" \
+  --runs="$BENCH_RUNS" \
+  --prepare="bash $BENCH_SCRIPTS/clean-helpers.sh wait_nrz_children; sleep 1; bash $BENCH_SCRIPTS/clean-helpers.sh clean_all" \
+  --conclude="bash $BENCH_SCRIPTS/clean-helpers.sh wait_nrz_children; sleep 1; bash $BENCH_SCRIPTS/clean-helpers.sh clean_all" \
+  --cleanup="bash $BENCH_SCRIPTS/clean-helpers.sh clean_all" \
+  --parameter-list "binary" "$BENCH_BINARY" \
+  --command-name="{binary} install: $BENCH_FIXTURE & $BENCH_VARIATION" "$BENCH_COMMAND_NRZ"

@@ -1,0 +1,71 @@
+/* IMPORTANT
+ * This snapshot file is auto-generated, but designed for humans.
+ * It should be checked into source control and tracked carefully.
+ * Re-generate by setting TAP_SNAPSHOT=1 and running tests.
+ * Make sure to inspect the output below.  Do not ignore changes!
+ */
+'use strict'
+exports[`test/commands/publish.ts > TAP > usage > must match snapshot 1`] = `
+Usage:
+  nrz publish
+
+Create a tarball from a package and publish it to the configured registry.
+This command will pack the package in the current directory or specified folder,
+and then upload it to the configured registry.
+
+The registry is the package's \`publishConfig.registry\` if set (no other registry
+config needed), else \`--registry\`, else a configured alias.
+
+  Aliases
+
+    ​pub
+
+  Options
+
+    tag
+      Publish the package with the given tag
+
+      ​--tag=<tag>
+
+    access
+      Set access level (public or restricted)
+
+      ​--access=<level>
+
+    otp
+      Provide an OTP to use when publishing a package.
+
+      ​--otp=<otp>
+
+    publish-directory
+      Directory to use for pack and publish operations instead of the current
+      directory. The directory must exist and nothing will be copied to it.
+
+      ​--publish-directory=<path>
+
+    dry-run
+      Show what would be published without actually publishing.
+
+      ​--dry-run
+
+    scope
+      Filter packages to publish using a DSS query selector.
+
+      ​--scope=<query>
+
+    workspace
+      Limit publish targets to matching workspaces.
+
+      ​--workspace=<path|glob>
+
+    workspace-group
+      Limit publish targets to workspace groups.
+
+      ​--workspace-group=<name>
+
+    recursive
+      Publish all workspaces in the monorepo.
+
+      ​--recursive
+
+`

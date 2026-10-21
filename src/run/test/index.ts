@@ -1,14 +1,36 @@
 import { promiseSpawn } from '@nrz/promise-spawn'
-import { type Manifest } from '@nrz/types'
-import { resolve } from 'path'
+import type { Manifest } from '@nrz/types'
+import EventEmitter from 'node:events'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import t from 'tap'
-import { isRunResult, run } from '../src/index.ts'
-import { tsTestdir } from './fixtures/testdir-ts.ts'
+import {
+  exec,
+  isRunResult,
+  npmConfigUserAgent,
+  run,
+} from '../src/index.ts'
+import * as nodeGypUtils from '../src/node-gyp.ts'
 
-const fixture = resolve(
-  tsTestdir(t, resolve(import.meta.dirname, 'fixtures/script')),
-  'index.js',
-)
+const isPosix = process.platform !== 'win32'
+const esc = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`
+const shellCmd = (cmd: string, args: string[]) =>
+  isPosix ?
+    {
+      command: `${cmd} ${args.map(esc).join(' ')}`,
+      args: [] as string[],
+    }
+  : { command: cmd, args }
+
+const fixture = resolve(import.meta.dirname, 'fixtures/script.ts')
+
+const NODE_OPTIONS = '--no-warnings --experimental-strip-types'
+
+// fake promiseSpawn() result
+const spawned = <T>(result: T) =>
+  Object.assign(Promise.resolve(result), {
+    process: new EventEmitter(),
+  })
 
 const node =
   process.execPath.includes(' ') ?
@@ -48,6 +70,15 @@ t.test('run', async t => {
             failpost: 'echo {}',
             postfailpost: fail,
 
+            failmain: fail,
+
+            failpostnopre: 'echo {}',
+            postfailpostnopre: fail,
+
+            prefailpostwithpre: 'echo {}',
+            failpostwithpre: 'echo {}',
+            postfailpostwithpre: fail,
+
             passprepost:
               `${node} "${fixture}" child run ` +
               `${cwd} ${projectRoot} passprepost`,
@@ -64,7 +95,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'bg'],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     const command =
       `${node} "${fixture}" child run ` + `${cwd} ${projectRoot} bg`
@@ -81,6 +112,7 @@ t.test('run', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'bg',
           npm_lifecycle_script: command,
@@ -91,11 +123,30 @@ t.test('run', async t => {
     })
   })
 
+  t.test('npm_config_user_agent format', async t => {
+    t.match(
+      npmConfigUserAgent,
+      /^nrz\/\d+\.\d+\.\d+ \S+$/,
+      'npm_config_user_agent matches expected format',
+    )
+    const result = await promiseSpawn(
+      process.execPath,
+      [fixture, 'parent', 'run', cwd, projectRoot, 'bg'],
+      { env: { NODE_OPTIONS } },
+    )
+    const parsed = JSON.parse(result.stdout)
+    t.equal(
+      parsed.stdout.env.npm_config_user_agent,
+      npmConfigUserAgent,
+      'npm_config_user_agent set in lifecycle script env',
+    )
+  })
+
   t.test('fg', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'runFG', cwd, projectRoot, 'fg'],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     const command =
       `${node} "${fixture}" child runFG ` + `${cwd} ${projectRoot} fg`
@@ -107,6 +158,7 @@ t.test('run', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'fg',
           npm_lifecycle_script: command,
@@ -129,7 +181,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'failpre'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), {
       command: fail,
@@ -146,7 +198,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'failpost'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), {
       command: 'echo {}',
@@ -172,7 +224,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'passprefailmain'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     const command =
       node +
@@ -197,11 +249,92 @@ t.test('run', async t => {
     })
   })
 
+  t.test('fail main (no pre)', async t => {
+    const result = await promiseSpawn(
+      process.execPath,
+      [fixture, 'parent', 'run', cwd, projectRoot, 'failmain'],
+      { acceptFail: true, env: { NODE_OPTIONS } },
+    )
+    const command =
+      node +
+      ' -e "process.exitCode=1;console.log(JSON.stringify(process.env.npm_lifecycle_event))"'
+    t.strictSame(JSON.parse(result.stdout), {
+      command,
+      args: [],
+      cwd,
+      status: 1,
+      signal: null,
+      stdout: 'failmain',
+      stderr: '',
+    })
+  })
+
+  t.test('fail post (no pre)', async t => {
+    const result = await promiseSpawn(
+      process.execPath,
+      [fixture, 'parent', 'run', cwd, projectRoot, 'failpostnopre'],
+      { acceptFail: true, env: { NODE_OPTIONS } },
+    )
+    t.strictSame(JSON.parse(result.stdout), {
+      command: 'echo {}',
+      args: [],
+      cwd,
+      status: 1,
+      signal: null,
+      stdout: {},
+      stderr: '',
+      post: {
+        command: fail,
+        args: [],
+        cwd,
+        status: 1,
+        signal: null,
+        stdout: '"postfailpostnopre"',
+        stderr: '',
+      },
+    })
+  })
+
+  t.test('fail post (with pre)', async t => {
+    const result = await promiseSpawn(
+      process.execPath,
+      [fixture, 'parent', 'run', cwd, projectRoot, 'failpostwithpre'],
+      { acceptFail: true, env: { NODE_OPTIONS } },
+    )
+    t.strictSame(JSON.parse(result.stdout), {
+      command: 'echo {}',
+      args: [],
+      cwd,
+      status: 1,
+      signal: null,
+      stdout: {},
+      stderr: '',
+      pre: {
+        command: 'echo {}',
+        args: [],
+        cwd,
+        status: 0,
+        signal: null,
+        stdout: '{}',
+        stderr: '',
+      },
+      post: {
+        command: fail,
+        args: [],
+        cwd,
+        status: 1,
+        signal: null,
+        stdout: '"postfailpostwithpre"',
+        stderr: '',
+      },
+    })
+  })
+
   t.test('ignore missing', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'ignoremissing'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     const command = ''
     t.strictSame(JSON.parse(result.stdout), {
@@ -219,7 +352,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'runFG', cwd, projectRoot, 'ignoremissing'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     const command = ''
     t.strictSame(JSON.parse(result.stdout), [
@@ -240,7 +373,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'missing'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
     t.match(result, {
       status: 1,
@@ -253,7 +386,7 @@ t.test('run', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'run', cwd, projectRoot, 'passprepost'],
-      { acceptFail: true, env: {} },
+      { acceptFail: true, env: { NODE_OPTIONS } },
     )
 
     const command =
@@ -272,6 +405,7 @@ t.test('run', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'passprepost',
           npm_lifecycle_script: command,
@@ -316,7 +450,7 @@ t.test('exec', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'exec', cwd, projectRoot],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
@@ -341,7 +475,7 @@ t.test('exec', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'exec', cwd, projectRoot, 'a', 'b', 'c'],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
@@ -375,7 +509,7 @@ t.test('exec', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'execFG', cwd, projectRoot],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), [
       {
@@ -402,7 +536,7 @@ t.test('exec', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'execFG', cwd, projectRoot, 'a', 'b', 'c'],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), [
       {
@@ -456,7 +590,7 @@ t.test('runExec (exec)', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'runExec', cwd, projectRoot],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
@@ -491,7 +625,7 @@ t.test('runExec (exec)', async t => {
         'b',
         'c',
       ],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
@@ -525,7 +659,7 @@ t.test('runExec (exec)', async t => {
     const result = await promiseSpawn(
       process.execPath,
       [fixture, 'parent', 'runExecFG', cwd, projectRoot],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), [
       {
@@ -562,7 +696,7 @@ t.test('runExec (exec)', async t => {
         'b',
         'c',
       ],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), [
       {
@@ -626,13 +760,19 @@ t.test('runExec (run)', async t => {
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'node-package-json-script',
           npm_lifecycle_script: node,
+          NODE_OPTIONS,
         },
       },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
-      command: node,
-      args: [fixture, 'child', 'runExec', cwd, projectRoot],
+      ...shellCmd(node, [
+        fixture,
+        'child',
+        'runExec',
+        cwd,
+        projectRoot,
+      ]),
       cwd,
       status: 0,
       signal: null,
@@ -642,6 +782,7 @@ t.test('runExec (run)', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'node-package-json-script',
           npm_lifecycle_script: node,
@@ -666,12 +807,11 @@ t.test('runExec (run)', async t => {
         'b',
         'c',
       ],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.hasStrict(result, { status: 0, signal: null })
     t.strictSame(JSON.parse(result.stdout), {
-      command: node,
-      args: [
+      ...shellCmd(node, [
         fixture,
         'child',
         'runExec',
@@ -680,7 +820,7 @@ t.test('runExec (run)', async t => {
         'a',
         'b',
         'c',
-      ],
+      ]),
       cwd,
       status: 0,
       signal: null,
@@ -690,6 +830,7 @@ t.test('runExec (run)', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'node-package-json-script',
           npm_lifecycle_script: node,
@@ -711,7 +852,7 @@ t.test('runExec (run)', async t => {
         projectRoot,
         'node-package-json-script',
       ],
-      { env: {} },
+      { env: { NODE_OPTIONS } },
     )
     t.strictSame(JSON.parse(result.stdout), [
       {
@@ -720,6 +861,7 @@ t.test('runExec (run)', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
           npm_lifecycle_event: 'node-package-json-script',
           npm_lifecycle_script: node,
@@ -755,10 +897,9 @@ t.test('runExec (run)', async t => {
       {
         env: {
           npm_package_json: resolve(cwd, 'package.json'),
-
           npm_lifecycle_event: 'node-package-json-script',
-
           npm_lifecycle_script: node,
+          NODE_OPTIONS,
         },
       },
     )
@@ -769,6 +910,7 @@ t.test('runExec (run)', async t => {
         cwd,
         projectRoot,
         env: {
+          npm_config_user_agent: npmConfigUserAgent,
           npm_package_json: resolve(cwd, 'package.json'),
 
           npm_lifecycle_event: 'node-package-json-script',
@@ -834,6 +976,7 @@ t.test('do not trust manifests npm mucks with', async t => {
     manifest,
     arg0: 'install',
     projectRoot: cwd,
+    color: true,
   })
   t.match(res, {
     command: 'echo ok',
@@ -842,6 +985,503 @@ t.test('do not trust manifests npm mucks with', async t => {
     signal: null,
     stdout: 'ok',
     stderr: '',
-    pre: undefined,
   })
+})
+
+t.test(
+  'read scripts from disk for abbreviated manifests',
+  async t => {
+    const cwd = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'x',
+        version: '1.2.3',
+        scripts: { install: 'echo ok' },
+      }),
+    })
+    // an abbreviated registry manifest has no scripts to run
+    const manifest: Manifest = {
+      name: 'x',
+      version: '1.2.3',
+      hasInstallScript: true,
+    }
+    const res = await run({
+      cwd,
+      manifest,
+      arg0: 'install',
+      projectRoot: cwd,
+      color: true,
+    })
+    t.match(res, {
+      command: 'echo ok',
+      args: [],
+      status: 0,
+      signal: null,
+      stdout: 'ok',
+      stderr: '',
+    })
+  },
+)
+
+t.test(
+  'detect binding.gyp and run implicit node-gyp rebuild',
+  async t => {
+    // Track what commands were executed
+    const executedCommands: string[] = []
+
+    const { run: mockRun } = await t.mockImport<
+      typeof import('../src/index.ts')
+    >('../src/index.ts', {
+      '@nrz/promise-spawn': {
+        promiseSpawn: (cmd: string) => {
+          executedCommands.push(cmd)
+          return spawned({
+            command: cmd,
+            args: [],
+            cwd: '',
+            status: 0,
+            signal: null,
+            stdout: '',
+            stderr: '',
+          })
+        },
+      },
+      'foreground-child': {
+        foregroundChild: () => {},
+      },
+      'foreground-child/proxy-signals': {
+        proxySignals: () => {},
+      },
+    })
+
+    const cwd = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'native-addon',
+        version: '1.0.0',
+        // No install script defined
+      }),
+      // binding.gyp file present
+      'binding.gyp': JSON.stringify({
+        targets: [{ target_name: 'addon' }],
+      }),
+    })
+
+    // manifest from tarball has no install script
+    const manifest: Manifest = {
+      name: 'native-addon',
+      version: '1.0.0',
+    }
+
+    await mockRun({
+      cwd,
+      manifest,
+      arg0: 'install',
+      projectRoot: cwd,
+    })
+
+    // Verify the correct command was detected and executed
+    t.equal(executedCommands.length, 1, 'should execute one command')
+    t.equal(
+      executedCommands[0],
+      'node-gyp rebuild',
+      'should detect binding.gyp and use implicit node-gyp rebuild',
+    )
+  },
+)
+
+t.test(
+  'binding.gyp detection does not override existing install script',
+  async t => {
+    const cwd = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'native-addon',
+        version: '1.0.0',
+        scripts: { install: 'echo custom-install' },
+      }),
+      // binding.gyp file present
+      'binding.gyp': JSON.stringify({
+        targets: [{ target_name: 'addon' }],
+      }),
+    })
+    const manifest: Manifest = {
+      name: 'native-addon',
+      version: '1.0.0',
+      scripts: { install: 'echo custom-install' },
+    }
+    const res = await run({
+      cwd,
+      manifest,
+      arg0: 'install',
+      projectRoot: cwd,
+      color: true,
+    })
+    t.match(res, {
+      command: 'echo custom-install',
+      status: 0,
+      stdout: 'custom-install',
+    })
+  },
+)
+
+t.test(
+  'binding.gyp detection does not override existing preinstall script',
+  async t => {
+    const cwd = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'native-addon',
+        version: '1.0.0',
+        scripts: { preinstall: 'echo preinstall-only' },
+      }),
+      // binding.gyp file present
+      'binding.gyp': JSON.stringify({
+        targets: [{ target_name: 'addon' }],
+      }),
+    })
+    const manifest: Manifest = {
+      name: 'native-addon',
+      version: '1.0.0',
+      scripts: { preinstall: 'echo preinstall-only' },
+    }
+    // With no install script but preinstall exists, install event should
+    // not add implicit node-gyp rebuild (npm behavior)
+    const res = await run({
+      cwd,
+      manifest,
+      arg0: 'install',
+      projectRoot: cwd,
+      ignoreMissing: true,
+    })
+    // The install command itself should be empty/missing since only preinstall exists
+    t.match(res, {
+      command: '',
+      status: 0,
+    })
+  },
+)
+
+t.test('no binding.gyp means no implicit install', async t => {
+  const cwd = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'regular-package',
+      version: '1.0.0',
+      // No install script and no binding.gyp
+    }),
+  })
+  const manifest: Manifest = {
+    name: 'regular-package',
+    version: '1.0.0',
+  }
+  const res = await run({
+    cwd,
+    manifest,
+    arg0: 'install',
+    projectRoot: cwd,
+    ignoreMissing: true,
+  })
+  // Should return empty since no install script and no binding.gyp
+  t.match(res, {
+    command: '',
+    status: 0,
+  })
+})
+
+t.test('quote things properly only as needed', async t => {
+  const manifest: Manifest = {
+    name: 'x',
+    version: '1.2.3',
+    scripts: {
+      // designed to upset shells if not quoted properly
+      n: `${node} -p "'!(ok)' + process.argv.slice(1)"`,
+    },
+  }
+  const cwd = t.testdir({
+    'package.json': JSON.stringify(manifest),
+  })
+
+  const [runRes, execRes] = await Promise.all([
+    run({
+      cwd,
+      manifest,
+      arg0: 'n',
+      args: ['yes', 'ok'],
+      projectRoot: cwd,
+    }),
+    exec({
+      arg0: process.execPath,
+      args: ['-p', "'!(ok)' + process.argv.slice(1)", 'yes', 'ok'],
+      cwd,
+      projectRoot: cwd,
+      color: true,
+    }),
+  ])
+
+  t.matchStrict(runRes, {
+    ...shellCmd(`${node} -p "'!(ok)' + process.argv.slice(1)"`, [
+      'yes',
+      'ok',
+    ]),
+    status: 0,
+    signal: null,
+    stdout: '!(ok)yes,ok',
+    stderr: '',
+  })
+
+  t.match(execRes, {
+    args: ['-p', "'!(ok)' + process.argv.slice(1)", 'yes', 'ok'],
+    status: 0,
+    signal: null,
+    stdout: '!(ok)yes,ok',
+    stderr: '',
+  })
+})
+
+t.test(
+  'shell-escape args with metacharacters',
+  {
+    skip: process.platform === 'win32' && 'POSIX shell required',
+  },
+  async t => {
+    const manifest: Manifest = {
+      name: 'x',
+      version: '1.2.3',
+      scripts: {
+        echo: `${node} -p "JSON.stringify(process.argv.slice(1))"`,
+      },
+    }
+    const cwd = t.testdir({
+      'package.json': JSON.stringify(manifest),
+    })
+
+    const result = await run({
+      cwd,
+      manifest,
+      arg0: 'echo',
+      args: ['#hash', '$dollar', 'normal', "it's"],
+      projectRoot: cwd,
+    })
+
+    t.equal(result.status, 0)
+    t.strictSame(JSON.parse(result.stdout), [
+      '#hash',
+      '$dollar',
+      'normal',
+      "it's",
+    ])
+  },
+)
+
+t.test('shell-escaping is shell-aware', async t => {
+  let captured: { cmd: string; args: string[] } | undefined
+  const { exec: mockExec } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '@nrz/promise-spawn': {
+      promiseSpawn: (cmd: string, args: string[]) => {
+        captured = { cmd, args }
+        return spawned({
+          command: cmd,
+          args,
+          cwd: '',
+          status: 0,
+          signal: null,
+          stdout: '',
+          stderr: '',
+        })
+      },
+    },
+    'foreground-child/proxy-signals': { proxySignals: () => {} },
+  })
+  const cwd = t.testdir({ node_modules: { '.bin': {} } })
+
+  await mockExec({
+    arg0: 'echo',
+    args: ['#hash', '$dollar'],
+    cwd,
+    projectRoot: cwd,
+    'script-shell': 'C:\\Windows\\System32\\cmd.exe',
+  })
+  t.equal(captured?.cmd, 'echo', 'cmd.exe: command is not folded')
+  t.strictSame(
+    captured?.args,
+    ['#hash', '$dollar'],
+    'cmd.exe: args preserved',
+  )
+
+  captured = undefined as typeof captured
+  await mockExec({
+    arg0: 'echo',
+    args: ['#hash', "$it's"],
+    cwd,
+    projectRoot: cwd,
+    'script-shell': '/bin/sh',
+  })
+  t.equal(
+    captured?.cmd,
+    "echo '#hash' '$it'\\''s'",
+    'posix shell string: args folded with escaping',
+  )
+  t.strictSame(
+    captured?.args,
+    [],
+    'posix shell string: args array emptied',
+  )
+})
+
+t.test('node-gyp shim injection into PATH', async t => {
+  const MOCK_SHIM_DIR = '/mock/shim/directory'
+
+  const { exec: execWithMock } = await t.mockImport<
+    typeof import('../src/index.ts')
+  >('../src/index.ts', {
+    '../src/node-gyp.ts': {
+      ...nodeGypUtils,
+      getNodeGypShim: async () => `${MOCK_SHIM_DIR}/node-gyp`,
+    },
+  })
+
+  const cwd = t.testdir({
+    node_modules: { '.bin': {} },
+  })
+
+  t.test('exec with node-gyp command injects shim dir', async t => {
+    // Use shell command that mentions node-gyp to trigger shim injection
+    const result = await execWithMock({
+      arg0: 'echo "would call node-gyp here"',
+      cwd,
+      projectRoot: cwd,
+      'script-shell': true,
+    })
+
+    // The command should succeed since we're just echoing
+    t.equal(result.status, 0, 'command executed successfully')
+    t.match(
+      result.stdout,
+      /would call node-gyp here/,
+      'output contains expected text',
+    )
+  })
+
+  t.test(
+    'exec without node-gyp does not inject shim dir',
+    async t => {
+      const result = await execWithMock({
+        arg0: 'echo',
+        args: ['hello'],
+        cwd,
+        projectRoot: cwd,
+      })
+
+      t.equal(result.status, 0)
+      t.match(result.stdout, 'hello')
+    },
+  )
+})
+
+t.test('exec bg FORCE_COLOR respects isTTY', async t => {
+  const cwd = t.testdir({
+    node_modules: { '.bin': {} },
+  })
+
+  const printForceColor = `${node} -p "process.env.FORCE_COLOR"`
+
+  t.test('color=true with isTTY=true sets FORCE_COLOR=1', async t => {
+    const originalIsTTY = process.stdout.isTTY
+    t.teardown(() => {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        writable: true,
+        configurable: true,
+      })
+    })
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: true,
+      writable: true,
+      configurable: true,
+    })
+
+    const result = await exec({
+      arg0: printForceColor,
+      cwd,
+      projectRoot: cwd,
+      color: true,
+      'script-shell': true,
+    })
+    t.equal(result.status, 0)
+    t.equal(result.stdout.trim(), '1')
+  })
+
+  t.test(
+    'color=true with isTTY=undefined sets FORCE_COLOR=0',
+    async t => {
+      const originalIsTTY = process.stdout.isTTY
+      t.teardown(() => {
+        Object.defineProperty(process.stdout, 'isTTY', {
+          value: originalIsTTY,
+          writable: true,
+          configurable: true,
+        })
+      })
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      })
+
+      const result = await exec({
+        arg0: printForceColor,
+        cwd,
+        projectRoot: cwd,
+        color: true,
+        'script-shell': true,
+      })
+      t.equal(result.status, 0)
+      t.equal(result.stdout.trim(), '0')
+    },
+  )
+
+  t.test('color=false always sets FORCE_COLOR=0', async t => {
+    const result = await exec({
+      arg0: printForceColor,
+      cwd,
+      projectRoot: cwd,
+      color: false,
+      'script-shell': true,
+    })
+    t.equal(result.status, 0)
+    t.equal(result.stdout.trim(), '0')
+  })
+})
+
+t.test('exec bg aborted by signal', async t => {
+  // not a testdir: on Windows the orphan holds its cwd (EBUSY)
+  const cwd = import.meta.dirname
+  const mod = pathToFileURL(
+    resolve(import.meta.dirname, '../src/index.ts'),
+  ).href
+  // the shell's child outlives the killed shell (Windows: for 25s)
+  const arg0 = `${node} -e "setInterval(function () { console.log(1) }, 100); setTimeout(function () { process.exit() }, 25000)"`
+  const code = `
+const { exec } = await import(${JSON.stringify(mod)})
+const ac = new AbortController()
+setTimeout(() => ac.abort(), 500)
+await exec({
+  arg0: ${JSON.stringify(arg0)},
+  cwd: ${JSON.stringify(cwd)},
+  projectRoot: ${JSON.stringify(cwd)},
+  'script-shell': true,
+  signal: ac.signal,
+}).catch(er => console.log(er.cause.cause.name))
+`
+  const result = await promiseSpawn(
+    process.execPath,
+    ['--input-type=module', '-e', code],
+    {
+      env: { NODE_OPTIONS },
+      acceptFail: true,
+      // pipes left open keep it alive until this kills it
+      timeout: 20_000,
+    },
+  )
+  t.equal(result.signal, null, 'not killed')
+  t.equal(result.status, 0, result.stderr)
+  t.equal(result.stdout.trim(), 'AbortError')
 })

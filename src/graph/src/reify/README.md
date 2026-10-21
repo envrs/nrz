@@ -1,0 +1,72 @@
+---
+title: '@nrz/graph.reify'
+---
+
+# @nrz/graph.reify
+
+Apply graph changes to `node_modules`, transforming the actual state
+to match the ideal graph.
+
+## USAGE
+
+```ts
+import { reify } from '@nrz/graph'
+import { PackageInfoClient } from '@nrz/package-info'
+import { PackageJson } from '@nrz/package-json'
+import { RollbackRemove } from '@nrz/rollback-remove'
+import { PathScurry } from 'path-scurry'
+
+const { diff, buildQueue } = await reify({
+  graph, // Ideal graph to apply
+  projectRoot: '/path/to/project',
+  packageInfo: new PackageInfoClient({ cache }),
+  packageJson: new PackageJson(),
+  scurry: new PathScurry(projectRoot),
+  remover: new RollbackRemove(),
+  allowScripts: '*', // DSS query for packages allowed to run scripts
+  // Optional
+  actual, // Pre-loaded actual graph
+  add, // AddImportersDependenciesMap
+  remove, // RemoveImportersDependenciesMap
+})
+```
+
+## Behavior
+
+1. Computes `Diff(actual, ideal)` — returns early if no changes
+2. Extracts new nodes to `.nrz` store (parallel), skipping optional
+   ones that are deprecated or can't install on this platform (and
+   deps only they need; `nrz-lock.json` keeps them)
+3. Deletes outdated edges and their bin links
+4. Creates symlinks for new edges + bin links
+5. Hoists internal links to `node_modules/.nrz/node_modules/`
+6. Runs lifecycle scripts (`install`, `prepare`) on allowed nodes
+   (store links copied first)
+7. Saves lockfiles (`nrz-lock.json` + hidden)
+8. Updates `package.json` if `add`/`remove` modified dependencies
+9. Cleans up deleted nodes from store
+
+## Result
+
+```ts
+type ReifyResult = {
+  diff: Diff
+  buildQueue?: DepID[] // Nodes that needed building
+}
+```
+
+## Modules
+
+| File                               | Purpose                      |
+| ---------------------------------- | ---------------------------- |
+| `index.ts`                         | Orchestrates reify process   |
+| `add-nodes.ts`                     | Extract packages to store    |
+| `add-edge.ts`                      | Create symlinks + bin links  |
+| `delete-edge.ts`                   | Remove symlinks + bin links  |
+| `internal-hoist.ts`                | Hoist preferred versions     |
+| `symlink-sync.ts`                  | Sync symlink + mkdir parent  |
+| `build.ts`                         | Run lifecycle scripts        |
+| `unshare.ts`                       | Copy store links pre-script  |
+| `rollback.ts`                      | Revert on failure            |
+| `optional-fail.ts`                 | Handle optional dep failures |
+| `update-importers-package-json.ts` | Update package.json files    |

@@ -1,30 +1,52 @@
-import { type RollbackRemove } from '@nrz/rollback-remove'
-import { type Manifest } from '@nrz/types'
-import { mkdir, symlink } from 'fs/promises'
-import { dirname, relative } from 'path'
-import { type PathScurry } from 'path-scurry'
-import { type Edge } from '../edge.ts'
-import { binPaths } from './bin-paths.ts'
+import { cmdShimIfExists } from '@nrz/cmd-shim'
+import type { RollbackRemove } from '@nrz/rollback-remove'
+import { symlinkSync } from 'node:fs'
+import type { symlink } from 'node:fs'
+import { dirname, relative, resolve } from 'node:path'
+import type { PathScurry } from 'path-scurry'
+import type { Edge } from '../edge.ts'
+import { symlinkSyncMkdirp } from './symlink-sync.ts'
 
 const clobberSymlink = async (
   target: string,
   link: string,
   remover: RollbackRemove,
-  type = 'file',
+  type: symlink.Type = 'file',
 ) => {
-  await mkdir(dirname(link), { recursive: true })
+  // On Windows, directory symlinks require elevated privileges.
+  // Use junctions instead, which work without special permissions.
+  // Junctions require absolute target paths, so resolve relative targets.
+  const symlinkType: symlink.Type =
+    type === 'dir' && process.platform === 'win32' ? 'junction' : type
+  const symlinkTarget =
+    symlinkType === 'junction' ?
+      resolve(dirname(link), target)
+    : target
   try {
-    await symlink(target, link, type)
-  } catch (e) {
-    const er = e as NodeJS.ErrnoException
-    if (er.code === 'EEXIST') {
-      return remover.rm(link).then(() => symlink(target, link))
-      /* c8 ignore start */
-    } else {
+    symlinkSyncMkdirp(symlinkTarget, link, symlinkType)
+  } catch (er) {
+    /* c8 ignore start */
+    if ((er as NodeJS.ErrnoException).code !== 'EEXIST') {
       throw er
     }
+    /* c8 ignore stop */
+
+    // if the symlink exists, remove it
+    await remover.rm(link)
+
+    try {
+      // then try to create it again
+      symlinkSync(symlinkTarget, link, symlinkType)
+      /* c8 ignore start */
+    } catch (er) {
+      // if the symlink still exists, then multiple paths could be writing to it
+      // so now just ignore that error. See https://github.com/khulnasoft/nrz/issues/797
+      if ((er as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw er
+      }
+    }
+    /* c8 ignore stop */
   }
-  /* c8 ignore stop */
 }
 
 /**
@@ -34,31 +56,39 @@ const clobberSymlink = async (
  */
 export const addEdge = async (
   edge: Edge,
-  manifest: Manifest,
   scurry: PathScurry,
   remover: RollbackRemove,
+  bins?: Record<string, string>,
 ) => {
   if (!edge.to) return
-  const binRoot = scurry.resolve(
-    edge.from.nodeModules(scurry),
-    '.bin',
-  )
-  const path = scurry.resolve(
-    edge.from.nodeModules(scurry),
-    edge.spec.name,
-  )
+  const { sep } = scurry.cwd
+  const nm = edge.from.nodeModules(scurry)
+  const binRoot = nm + sep + '.bin'
+  const path = nm + sep + edge.spec.name.replace('/', sep)
   const promises: Promise<unknown>[] = []
   const target = relative(
     dirname(path),
     edge.to.resolvedLocation(scurry),
   )
-  promises.push(clobberSymlink(target, path, remover, 'dir'))
-  const bp = binPaths(manifest)
-  for (const [key, val] of Object.entries(bp)) {
-    const link = scurry.resolve(binRoot, key)
-    const target = relative(binRoot, scurry.resolve(path, val))
-    // TODO: bash/cmd/pwsh shims on Windows
-    promises.push(clobberSymlink(target, link, remover))
+
+  // can only parallelize this on posix, because the win32 shims
+  // need to know that they will exist before being created.
+  const p = clobberSymlink(target, path, remover, 'dir')
+  if (process.platform === 'win32') await p
+  else promises.push(p)
+
+  if (bins) {
+    for (const [key, val] of Object.entries(bins)) {
+      const link = resolve(binRoot, key)
+      const absTarget = resolve(path, val)
+      const target = relative(binRoot, absTarget)
+      // TODO: bash/cmd/ps1 shims on Windows
+      promises.push(
+        process.platform === 'win32' ?
+          cmdShimIfExists(absTarget, link, remover)
+        : clobberSymlink(target, link, remover),
+      )
+    }
   }
-  await Promise.all(promises)
+  if (promises.length) await Promise.all(promises)
 }

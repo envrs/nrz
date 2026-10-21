@@ -1,0 +1,811 @@
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { PackageInfoClient } from '@nrz/package-info'
+import type { RollbackRemove } from '@nrz/rollback-remove'
+import { PackageJson } from '@nrz/package-json'
+import { getOptions } from '@nrz/spec'
+import type { Spec } from '@nrz/spec'
+import { expandNormalizedManifestSymbols } from '@nrz/types'
+import type { NormalizedManifest } from '@nrz/types'
+import { resolve } from 'node:path'
+import { PathScurry } from 'path-scurry'
+import t from 'tap'
+import type { Diff } from '../../src/diff.ts'
+import type { Node } from '../../src/node.ts'
+import { extractNode } from '../../src/reify/extract-node.ts'
+
+const configData = {
+  registry: 'https://registry.npmjs.org/',
+  // the `npm` alias is no longer built in; configure it so the default
+  // registry DepID hydrates back to the `npm` alias name
+  registries: { npm: 'https://registry.npmjs.org/' },
+}
+
+const removed: string[] = []
+const mockRemover = {
+  rm: async (path: string) => {
+    removed.push(path)
+  },
+} as unknown as RollbackRemove
+
+const extracted: [Spec, string, any][] = []
+const mockPackageInfo = {
+  extract: async (spec: Spec, target: string, options: any) => {
+    if (spec.name === 'failer') {
+      throw new Error('failer fails to extract')
+    }
+    extracted.push([spec, target, options])
+    // Simulate remote/git deps returning computed integrity
+    if (spec.name === 'remote-pkg') {
+      return {
+        resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+        integrity: 'sha512-computed-integrity-from-extract',
+        spec,
+      }
+    }
+    return { extracted: true }
+  },
+} as unknown as PackageInfoClient
+
+t.beforeEach(() => {
+  removed.length = 0
+  extracted.length = 0
+})
+
+const mockNode = (props: Record<string, any>) =>
+  ({
+    resolvedFromLockfile: false,
+    ...props,
+    resolvedLocation: (scurry: PathScurry) =>
+      scurry.cwd.resolve(props.location).fullpath(),
+    isOptional: () => props.optional ?? false,
+  }) as unknown as Node
+
+const mockDiff = {
+  to: {
+    removeNode: () => {},
+  },
+  nodes: {
+    delete: new Set<any>([]),
+    add: new Set<any>([]),
+  },
+  hadOptionalFailures: false,
+} as unknown as Diff
+
+t.test('successfully extract a node', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'foo@1.2.3']),
+    location:
+      './node_modules/.nrz/' +
+      joinDepIDTuple(['registry', '', 'foo@1.2.3']) +
+      '/node_modules/foo',
+    name: 'foo',
+    manifest: { name: 'foo', version: '1.2.3' },
+    integrity: 'sha512-abc123',
+    resolved: 'https://registry.npmjs.org/foo/-/foo-1.2.3.tgz',
+    resolvedFromLockfile: true,
+  })
+
+  const scurry = new PathScurry(
+    t.testdir({
+      node_modules: {
+        '.nrz': {
+          [joinDepIDTuple(['registry', '', 'foo@1.2.3'])]: {
+            node_modules: { foo: {} },
+          },
+        },
+      },
+    }),
+  )
+  const result = await extractNode(
+    node,
+    scurry,
+    mockRemover,
+    getOptions(configData),
+    mockPackageInfo,
+    mockDiff,
+  )
+
+  t.strictSame(
+    result,
+    { success: true, node },
+    'extraction successful',
+  )
+
+  t.strictSame(
+    removed,
+    [
+      resolve(
+        t.testdirName,
+        'node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'foo@1.2.3']) +
+          '/node_modules/foo',
+      ),
+    ],
+    'target directory removed',
+  )
+
+  t.equal(extracted.length, 1, 'package extracted')
+  const [spec, _target, options] = extracted[0]!
+  t.equal(spec.name, 'foo', 'correct spec name')
+  t.equal(spec.bareSpec, '1.2.3', 'correct spec version')
+  t.equal(options.integrity, 'sha512-abc123', 'integrity passed')
+  t.equal(
+    options.resolved,
+    'https://registry.npmjs.org/foo/-/foo-1.2.3.tgz',
+    'resolved passed',
+  )
+  t.equal(options.fromLockfile, true, 'fromLockfile passed')
+})
+
+t.test('missing target is not removed', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'foo@1.2.3']),
+    location: './node_modules/foo',
+    name: 'foo',
+    manifest: { name: 'foo', version: '1.2.3' },
+  })
+  const result = await extractNode(
+    node,
+    new PathScurry(t.testdir({})),
+    mockRemover,
+    getOptions(configData),
+    mockPackageInfo,
+    mockDiff,
+  )
+  t.strictSame(result, { success: true, node })
+  t.strictSame(removed, [], 'nothing to remove')
+  t.equal(extracted.length, 1, 'still extracted')
+})
+
+t.test('dangling link at target is removed', async t => {
+  const id = joinDepIDTuple(['registry', '', 'foo@1.2.3'])
+  const node = mockNode({
+    id,
+    location: `./node_modules/.nrz/${id}/node_modules/foo`,
+    name: 'foo',
+    manifest: { name: 'foo', version: '1.2.3' },
+  })
+  const dir = t.testdir({
+    node_modules: {
+      '.nrz': {
+        [id]: {
+          node_modules: { foo: t.fixture('symlink', '../missing') },
+        },
+      },
+    },
+  })
+  await extractNode(
+    node,
+    new PathScurry(dir),
+    mockRemover,
+    getOptions(configData),
+    mockPackageInfo,
+    mockDiff,
+  )
+  t.strictSame(removed, [
+    resolve(dir, `node_modules/.nrz/${id}/node_modules/foo`),
+  ])
+})
+
+t.test('handle extraction failure for optional node', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'failer@1.2.3']),
+    location:
+      './node_modules/.nrz/' +
+      joinDepIDTuple(['registry', '', 'failer@1.2.3']) +
+      '/node_modules/failer',
+    name: 'failer',
+    manifest: { name: 'failer', version: '1.2.3' },
+    edgesIn: new Set(),
+    optional: true,
+  })
+
+  const scurry = new PathScurry(t.testdirName)
+  const result = await extractNode(
+    node,
+    scurry,
+    mockRemover,
+    {},
+    mockPackageInfo,
+    mockDiff,
+  )
+
+  t.equal(result.success, false, 'extraction failed')
+  t.equal(result.node, node, 'node returned in result')
+  if (!result.success) {
+    t.ok(result.error, 'error included in result')
+    t.match(
+      result.error,
+      /failer fails to extract/,
+      'correct error message',
+    )
+  }
+
+  t.match(
+    mockDiff.nodes.delete,
+    new Set([
+      { id: joinDepIDTuple(['registry', '', 'failer@1.2.3']) },
+    ]),
+    'failer scheduled for deletion',
+  )
+})
+
+t.test('skip deprecated optional package', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'deprecated@1.2.3']),
+    location:
+      './node_modules/.nrz/' +
+      joinDepIDTuple(['registry', '', 'deprecated@1.2.3']) +
+      '/node_modules/deprecated',
+    name: 'deprecated',
+    manifest: {
+      name: 'deprecated',
+      version: '1.2.3',
+      deprecated: 'do not use this',
+    },
+    edgesIn: new Set(),
+    optional: true,
+  })
+
+  const scurry = new PathScurry(t.testdirName)
+  const result = await extractNode(
+    node,
+    scurry,
+    mockRemover,
+    {},
+    mockPackageInfo,
+    mockDiff,
+  )
+
+  t.equal(result.success, false, 'extraction skipped')
+  if (!result.success) {
+    t.match(
+      result.error,
+      /Platform check failed or package deprecated/,
+      'correct error message',
+    )
+  }
+  t.equal(extracted.length, 0, 'no extraction attempted')
+  t.match(
+    mockDiff.nodes.delete,
+    new Set([
+      { id: joinDepIDTuple(['registry', '', 'deprecated@1.2.3']) },
+    ]),
+    'deprecated node scheduled for deletion',
+  )
+})
+
+t.test('skip incompatible platform for optional package', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'incompatible@1.2.3']),
+    location:
+      './node_modules/.nrz/' +
+      joinDepIDTuple(['registry', '', 'incompatible@1.2.3']) +
+      '/node_modules/incompatible',
+    name: 'incompatible',
+    manifest: {
+      name: 'incompatible',
+      version: '1.2.3',
+      engines: { node: '1.x' },
+    },
+    edgesIn: new Set(),
+    optional: true,
+  })
+
+  const scurry = new PathScurry(t.testdirName)
+  const result = await extractNode(
+    node,
+    scurry,
+    mockRemover,
+    {},
+    mockPackageInfo,
+    mockDiff,
+  )
+
+  t.equal(result.success, false, 'extraction skipped')
+  if (!result.success) {
+    t.match(
+      result.error,
+      /Platform check failed or package deprecated/,
+      'correct error message',
+    )
+  }
+  t.equal(extracted.length, 0, 'no extraction attempted')
+})
+
+t.test(
+  'throw error for non-optional node extraction failure',
+  async t => {
+    const node = mockNode({
+      id: joinDepIDTuple(['registry', '', 'failer@1.2.3']),
+      location:
+        './node_modules/.nrz/' +
+        joinDepIDTuple(['registry', '', 'failer@1.2.3']) +
+        '/node_modules/failer',
+      name: 'failer',
+      manifest: { name: 'failer', version: '1.2.3' },
+      optional: false,
+    })
+
+    const scurry = new PathScurry(t.testdirName)
+
+    await t.rejects(
+      extractNode(
+        node,
+        scurry,
+        mockRemover,
+        {},
+        mockPackageInfo,
+        mockDiff,
+      ),
+      /failer fails to extract/,
+      'should throw error for non-optional package',
+    )
+  },
+)
+
+t.test('use platform data from node when available', async t => {
+  const node = mockNode({
+    id: joinDepIDTuple(['registry', '', 'platform-test@1.2.3']),
+    location:
+      './node_modules/.nrz/' +
+      joinDepIDTuple(['registry', '', 'platform-test@1.2.3']) +
+      '/node_modules/platform-test',
+    name: 'platform-test',
+    manifest: {
+      name: 'platform-test',
+      version: '1.2.3',
+    },
+    platform: {
+      engines: { node: '>=14' },
+      os: ['darwin', 'linux', 'win32'],
+    },
+    optional: true,
+  })
+
+  const scurry = new PathScurry(t.testdirName)
+  const result = await extractNode(
+    node,
+    scurry,
+    mockRemover,
+    {},
+    mockPackageInfo,
+    mockDiff,
+  )
+
+  // Should succeed since current node version is likely >= 14
+  t.equal(
+    result.success,
+    true,
+    'extraction successful with platform data',
+  )
+})
+
+t.test('extract node without diff object', async t => {
+  t.test('successfully extract a node without diff', async t => {
+    const node = mockNode({
+      id: joinDepIDTuple(['registry', '', 'no-diff@1.2.3']),
+      location:
+        './node_modules/.nrz/' +
+        joinDepIDTuple(['registry', '', 'no-diff@1.2.3']) +
+        '/node_modules/no-diff',
+      name: 'no-diff',
+      manifest: { name: 'no-diff', version: '1.2.3' },
+      integrity: 'sha512-xyz789',
+      resolved:
+        'https://registry.npmjs.org/no-diff/-/no-diff-1.2.3.tgz',
+    })
+
+    const scurry = new PathScurry(t.testdirName)
+    const result = await extractNode(
+      node,
+      scurry,
+      mockRemover,
+      {},
+      mockPackageInfo,
+      undefined, // No diff provided
+    )
+
+    t.strictSame(
+      result,
+      { success: true, node },
+      'extraction successful without diff',
+    )
+    t.equal(extracted.length, 1, 'package extracted')
+    t.equal(
+      extracted[0]?.[2].fromLockfile,
+      false,
+      'fromLockfile false when not from lockfile',
+    )
+  })
+
+  t.test(
+    'handle extraction failure for optional node without diff',
+    async t => {
+      // Create a mock graph that the node belongs to
+      const mockGraph = {
+        nodes: new Map(),
+        removeNode: () => {},
+      }
+
+      const node = mockNode({
+        id: joinDepIDTuple(['registry', '', 'failer@1.2.3']),
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'failer@1.2.3']) +
+          '/node_modules/failer',
+        name: 'failer',
+        manifest: { name: 'failer', version: '1.2.3' },
+        edgesIn: new Set(),
+        optional: true,
+        graph: mockGraph,
+      })
+
+      const scurry = new PathScurry(t.testdirName)
+      const result = await extractNode(
+        node,
+        scurry,
+        mockRemover,
+        {},
+        mockPackageInfo,
+        undefined, // No diff provided
+      )
+
+      t.equal(result.success, false, 'extraction failed')
+      t.equal(result.node, node, 'node returned in result')
+      if (!result.success) {
+        t.ok(result.error, 'error included in result')
+        t.match(
+          result.error,
+          /failer fails to extract/,
+          'correct error message',
+        )
+      }
+    },
+  )
+
+  t.test(
+    'throw error for non-optional node extraction failure without diff',
+    async t => {
+      const mockGraph = {
+        nodes: new Map(),
+        removeNode: () => {},
+      }
+
+      const node = mockNode({
+        id: joinDepIDTuple(['registry', '', 'failer@1.2.3']),
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'failer@1.2.3']) +
+          '/node_modules/failer',
+        name: 'failer',
+        manifest: { name: 'failer', version: '1.2.3' },
+        optional: false,
+        graph: mockGraph,
+      })
+
+      const scurry = new PathScurry(t.testdirName)
+
+      await t.rejects(
+        extractNode(
+          node,
+          scurry,
+          mockRemover,
+          {},
+          mockPackageInfo,
+          undefined, // No diff provided
+        ),
+        /failer fails to extract/,
+        'should throw error for non-optional package without diff',
+      )
+    },
+  )
+
+  t.test('skip deprecated optional package without diff', async t => {
+    const mockGraph = {
+      nodes: new Map(),
+      removeNode: () => {},
+    }
+
+    const node = mockNode({
+      id: joinDepIDTuple(['registry', '', 'deprecated@1.2.3']),
+      location:
+        './node_modules/.nrz/' +
+        joinDepIDTuple(['registry', '', 'deprecated@1.2.3']) +
+        '/node_modules/deprecated',
+      name: 'deprecated',
+      manifest: {
+        name: 'deprecated',
+        version: '1.2.3',
+        deprecated: 'do not use this',
+      },
+      edgesIn: new Set(),
+      optional: true,
+      graph: mockGraph,
+    })
+
+    const scurry = new PathScurry(t.testdirName)
+    const result = await extractNode(
+      node,
+      scurry,
+      mockRemover,
+      {},
+      mockPackageInfo,
+      undefined, // No diff provided
+    )
+
+    t.equal(result.success, false, 'extraction skipped')
+    if (!result.success) {
+      t.match(
+        result.error,
+        /Platform check failed or package deprecated/,
+        'correct error message',
+      )
+    }
+    t.equal(extracted.length, 0, 'no extraction attempted')
+  })
+
+  t.test(
+    'skip incompatible platform for optional package without diff',
+    async t => {
+      const mockGraph = {
+        nodes: new Map(),
+        removeNode: () => {},
+      }
+
+      const node = mockNode({
+        id: joinDepIDTuple(['registry', '', 'incompatible@1.2.3']),
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple(['registry', '', 'incompatible@1.2.3']) +
+          '/node_modules/incompatible',
+        name: 'incompatible',
+        manifest: {
+          name: 'incompatible',
+          version: '1.2.3',
+          engines: { node: '1.x' },
+        },
+        edgesIn: new Set(),
+        optional: true,
+        graph: mockGraph,
+      })
+
+      const scurry = new PathScurry(t.testdirName)
+      const result = await extractNode(
+        node,
+        scurry,
+        mockRemover,
+        {},
+        mockPackageInfo,
+        undefined, // No diff provided
+      )
+
+      t.equal(result.success, false, 'extraction skipped')
+      if (!result.success) {
+        t.match(
+          result.error,
+          /Platform check failed or package deprecated/,
+          'correct error message',
+        )
+      }
+      t.equal(extracted.length, 0, 'no extraction attempted')
+    },
+  )
+})
+
+t.test('integrity capture from remote/git deps', async t => {
+  t.test(
+    'capture integrity from extract result when node has none',
+    async t => {
+      const node = mockNode({
+        id: joinDepIDTuple([
+          'remote',
+          'https://example.com/remote-pkg-1.0.0.tgz',
+        ]),
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple([
+            'remote',
+            'https://example.com/remote-pkg-1.0.0.tgz',
+          ]) +
+          '/node_modules/remote-pkg',
+        name: 'remote-pkg',
+        manifest: { name: 'remote-pkg', version: '1.0.0' },
+        integrity: undefined, // No integrity yet
+        resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+      })
+
+      const scurry = new PathScurry(t.testdirName)
+      const result = await extractNode(
+        node,
+        scurry,
+        mockRemover,
+        {},
+        mockPackageInfo,
+        mockDiff,
+      )
+
+      t.strictSame(
+        result,
+        { success: true, node },
+        'extraction successful',
+      )
+      t.equal(
+        node.integrity,
+        'sha512-computed-integrity-from-extract',
+        'integrity captured from extract result',
+      )
+    },
+  )
+
+  t.test('do not overwrite existing node integrity', async t => {
+    const existingIntegrity = 'sha512-existing-integrity'
+    const node = mockNode({
+      id: joinDepIDTuple([
+        'remote',
+        'https://example.com/remote-pkg-1.0.0.tgz',
+      ]),
+      location:
+        './node_modules/.nrz/' +
+        joinDepIDTuple([
+          'remote',
+          'https://example.com/remote-pkg-1.0.0.tgz',
+        ]) +
+        '/node_modules/remote-pkg',
+      name: 'remote-pkg',
+      manifest: { name: 'remote-pkg', version: '1.0.0' },
+      integrity: existingIntegrity, // Already has integrity
+      resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+    })
+
+    const scurry = new PathScurry(t.testdirName)
+    const result = await extractNode(
+      node,
+      scurry,
+      mockRemover,
+      {},
+      mockPackageInfo,
+      mockDiff,
+    )
+
+    t.strictSame(
+      result,
+      { success: true, node },
+      'extraction successful',
+    )
+    t.equal(
+      node.integrity,
+      existingIntegrity,
+      'existing integrity preserved',
+    )
+  })
+
+  t.test(
+    'capture integrity for optional node without diff',
+    async t => {
+      const mockGraph = {
+        nodes: new Map(),
+        removeNode: () => {},
+      }
+
+      const node = mockNode({
+        id: joinDepIDTuple([
+          'remote',
+          'https://example.com/remote-pkg-1.0.0.tgz',
+        ]),
+        location:
+          './node_modules/.nrz/' +
+          joinDepIDTuple([
+            'remote',
+            'https://example.com/remote-pkg-1.0.0.tgz',
+          ]) +
+          '/node_modules/remote-pkg',
+        name: 'remote-pkg',
+        manifest: { name: 'remote-pkg', version: '1.0.0' },
+        integrity: undefined,
+        resolved: 'https://example.com/remote-pkg-1.0.0.tgz',
+        optional: true,
+        graph: mockGraph,
+      })
+
+      const scurry = new PathScurry(t.testdirName)
+      const result = await extractNode(
+        node,
+        scurry,
+        mockRemover,
+        {},
+        mockPackageInfo,
+        undefined, // No diff
+      )
+
+      t.strictSame(
+        result,
+        { success: true, node },
+        'extraction successful',
+      )
+      t.equal(
+        node.integrity,
+        'sha512-computed-integrity-from-extract',
+        'integrity captured for optional node',
+      )
+    },
+  )
+})
+
+t.test('global store index data', async t => {
+  const id = joinDepIDTuple(['registry', '', 'store-pkg@1.2.3'])
+  const storeNode = (props: Record<string, any> = {}) =>
+    mockNode({
+      id,
+      location: `./node_modules/.nrz/${id}/node_modules/store-pkg`,
+      name: 'store-pkg',
+      integrity: 'sha512-abc',
+      resolved: 'https://registry.example.com/x.tgz',
+      ...props,
+    })
+  const linked = (r: Record<string, unknown>) =>
+    ({
+      extract: async (spec: Spec) => ({ spec, ...r }),
+    }) as unknown as PackageInfoClient
+  const run = (node: Node, r: Record<string, unknown>) =>
+    extractNode(
+      node,
+      new PathScurry(t.testdirName),
+      mockRemover,
+      getOptions(configData),
+      linked(r),
+      mockDiff,
+    )
+  const pkg = {
+    name: 'store-pkg',
+    version: 'v1.2.3',
+    author: 'A <a@example.com> (https://a.example.com)',
+    contributors: ['B <b@example.com>'],
+    funding: 'https://f.example.com',
+    bugs: 'https://b.example.com',
+    bin: './cli.js',
+    scripts: { install: 'x' },
+  }
+
+  t.test('same manifest as reading it from disk', async t => {
+    const dir = t.testdir({
+      'package.json': JSON.stringify(pkg, null, 2),
+    })
+    const node = storeNode()
+    await run(node, {
+      manifest: JSON.stringify(pkg),
+      bindingGyp: true,
+    })
+    const lockfileForm = (m: NormalizedManifest | undefined) =>
+      JSON.stringify(m && expandNormalizedManifestSymbols(m))
+    t.equal(
+      lockfileForm(node.manifest),
+      lockfileForm(new PackageJson().read(dir)),
+    )
+    t.equal(node.bindingGyp, true)
+  })
+
+  t.test('existing manifest kept', async t => {
+    const manifest = { name: 'store-pkg', version: '1.2.3' }
+    const node = storeNode({ manifest })
+    await run(node, {
+      manifest: JSON.stringify(pkg),
+      bindingGyp: false,
+    })
+    t.equal(node.manifest, manifest)
+    t.equal(node.bindingGyp, false)
+  })
+
+  t.test('invalid manifest left for the disk read', async t => {
+    for (const manifest of [
+      JSON.stringify({ ...pkg, version: '' }),
+      JSON.stringify({ ...pkg, dependencies: { a: 1 } }),
+      '{nope',
+    ]) {
+      const node = storeNode()
+      await run(node, { manifest })
+      t.equal(node.manifest, undefined)
+      t.equal(node.bindingGyp, undefined)
+    }
+  })
+})

@@ -1,19 +1,12 @@
-import t from 'tap'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
+import t from 'tap'
 import { Graph } from '../../src/graph.ts'
 import { humanReadableOutput } from '../../src/visualization/human-readable-output.ts'
 import { loadActualGraph } from '../fixtures/actual.ts'
-import chalk, { type ChalkInstance } from 'chalk'
-import { joinDepIDTuple } from '@nrz/dep-id'
-chalk.level = 1
-
-const colors = {
-  dim: (s: string) => s,
-  red: (s: string) => s,
-  reset: (s: string) => s,
-  yellow: (s: string) => s,
-} as ChalkInstance
 
 const configData = {
   registry: 'https://registry.npmjs.org/',
@@ -24,8 +17,11 @@ const configData = {
 } satisfies SpecOptions
 
 t.test('human-readable-output', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest: {
       name: 'my-project',
@@ -63,7 +59,7 @@ t.test('human-readable-output', async t => {
   const baz = graph.placePackage(
     bar,
     'dev',
-    Spec.parse('baz', 'custom:bar@^1.0.0', configData as SpecOptions),
+    Spec.parse('baz', 'custom:baz@^1.0.0', configData as SpecOptions),
     {
       name: 'baz',
       version: '1.0.0',
@@ -111,7 +107,7 @@ t.test('human-readable-output', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors: undefined },
+      {},
     ),
     'should print human readable output',
   )
@@ -127,7 +123,7 @@ t.test('actual graph', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should print from an actual loaded graph',
   )
@@ -147,7 +143,7 @@ t.test('actual graph', async t => {
           importers: graph.importers,
           nodes,
         },
-        { colors },
+        {},
       ),
       'should print selected packages',
     )
@@ -162,7 +158,7 @@ t.test('actual graph', async t => {
           importers: graph.importers,
           nodes: [...graph.nodes.values()],
         },
-        { colors: chalk },
+        { colors: true },
       ),
       'should use colors',
     )
@@ -174,10 +170,10 @@ t.test('workspaces', async t => {
     name: 'my-project',
     version: '1.0.0',
   }
-  const dir = t.testdir({
+  const projectRoot = t.testdir({
     'package.json': JSON.stringify(mainManifest),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['./packages/*'] },
     }),
     packages: {
       a: {
@@ -194,9 +190,11 @@ t.test('workspaces', async t => {
       },
     },
   })
-  const monorepo = Monorepo.load(dir)
+  t.chdir(projectRoot)
+  unload('project')
+  const monorepo = Monorepo.load(projectRoot)
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest,
     monorepo,
@@ -209,15 +207,98 @@ t.test('workspaces', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should print human readable workspaces output',
   )
 })
 
-t.test('cycle', async t => {
+t.test('workspaces as dependencies', async t => {
+  const mainManifest = {
+    name: 'my-project',
+    version: '1.0.0',
+  }
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify(mainManifest),
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['./packages/*'] },
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: 'workspace-a',
+          version: '1.0.0',
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: 'workspace-b',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+  t.chdir(projectRoot)
+  unload('project')
+  const monorepo = Monorepo.load(projectRoot)
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
+    ...configData,
+    mainManifest,
+    monorepo,
+  })
+
+  // Manually add workspace edges to demonstrate the functionality
+  // This simulates how workspaces could be represented as dependencies
+  const mainImporter = graph.mainImporter
+  mainImporter.workspaces = new Map()
+  const workspaceA = [...graph.importers].find(
+    node => node.name === 'workspace-a',
+  )
+  const workspaceB = [...graph.importers].find(
+    node => node.name === 'workspace-b',
+  )
+
+  if (workspaceA && workspaceB) {
+    // Create edges to represent workspace dependencies in the workspaces map
+    const edgeA = graph.addEdge(
+      'prod',
+      Spec.parse('workspace-a', 'workspace:*'),
+      mainImporter,
+      workspaceA,
+    )
+    const edgeB = graph.addEdge(
+      'prod',
+      Spec.parse('workspace-b', 'workspace:*'),
+      mainImporter,
+      workspaceB,
+    )
+
+    // Add to workspaces map to show they should be treated like edgesOut
+    mainImporter.workspaces.set('workspace-a', edgeA)
+    mainImporter.workspaces.set('workspace-b', edgeB)
+  }
+
+  t.matchSnapshot(
+    humanReadableOutput(
+      {
+        edges: [...graph.edges],
+        highlightSelection: false,
+        importers: graph.importers,
+        nodes: [...graph.nodes.values()],
+      },
+      {},
+    ),
+    'should print workspaces as dependencies of the main importer',
+  )
+})
+
+t.test('cycle', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
     ...configData,
     mainManifest: {
       name: 'my-project',
@@ -261,15 +342,18 @@ t.test('cycle', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should print cycle human readable output',
   )
 })
 
 t.test('nameless package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest: {},
   })
@@ -281,15 +365,18 @@ t.test('nameless package', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should fallback to printing package id if name is missing',
   )
 })
 
 t.test('versionless package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest: {
       name: 'my-project',
@@ -313,28 +400,31 @@ t.test('versionless package', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should skip printing version number',
   )
 })
 
 t.test('aliased package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
     ...configData,
     mainManifest: {
       name: 'my-project',
       version: '1.0.0',
       dependencies: {
-        a: '^1.0.0',
+        a: 'npm:@myscope/foo@^1.0.0',
       },
     },
   })
   graph.placePackage(
     graph.mainImporter,
     'optional',
-    Spec.parse('a', '^1.0.0'),
+    Spec.parse('a', 'npm:@myscope/foo@^1.0.0'),
     { name: '@myscope/foo', version: '1.0.0' },
   )
   t.matchSnapshot(
@@ -345,15 +435,53 @@ t.test('aliased package', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should print both edge and node names',
   )
 })
 
-t.test('missing optional', async t => {
+t.test('confused package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const graph = new Graph({
-    projectRoot: t.testdirName,
+    projectRoot,
+    ...configData,
+    mainManifest: {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        'different-name': '^1.0.0',
+      },
+    },
+  })
+  graph.placePackage(
+    graph.mainImporter,
+    'optional',
+    Spec.parse('different-name', '^1.0.0'),
+    { name: 'actual-name', version: '1.0.0' },
+  )
+  t.matchSnapshot(
+    humanReadableOutput(
+      {
+        edges: [...graph.edges],
+        highlightSelection: false,
+        importers: graph.importers,
+        nodes: [...graph.nodes.values()],
+      },
+      {},
+    ),
+    'should print both spec and manifest names when they differ',
+  )
+})
+
+t.test('missing optional', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
     ...configData,
     mainManifest: {
       name: 'my-project',
@@ -376,7 +504,7 @@ t.test('missing optional', async t => {
         importers: graph.importers,
         nodes: [...graph.nodes.values()],
       },
-      { colors },
+      {},
     ),
     'should print missing optional package',
   )
@@ -390,9 +518,123 @@ t.test('missing optional', async t => {
           importers: graph.importers,
           nodes: [...graph.nodes.values()],
         },
-        { colors: chalk },
+        { colors: true },
       ),
       'should use colors',
+    )
+  })
+})
+
+t.test('overridden package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    ...configData,
+    mainManifest: {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        foo: '^1.0.0',
+      },
+    },
+  })
+  const fooSpec = Spec.parse('foo', '^1.0.0')
+  // Mark the spec as overridden
+  fooSpec.overridden = true
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    fooSpec,
+    {
+      name: 'foo',
+      version: '2.0.0',
+    },
+  )
+  t.ok(foo)
+  t.matchSnapshot(
+    humanReadableOutput(
+      {
+        edges: [...graph.edges],
+        highlightSelection: false,
+        importers: graph.importers,
+        nodes: [...graph.nodes.values()],
+      },
+      {},
+    ),
+    'should print overridden package',
+  )
+
+  t.test('colors', async t => {
+    t.matchSnapshot(
+      humanReadableOutput(
+        {
+          edges: [...graph.edges],
+          highlightSelection: false,
+          importers: graph.importers,
+          nodes: [...graph.nodes.values()],
+        },
+        { colors: true },
+      ),
+      'should use colors for overridden package',
+    )
+  })
+})
+
+t.test('overridden aliased package', async t => {
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
+  const graph = new Graph({
+    projectRoot,
+    ...configData,
+    mainManifest: {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {
+        a: 'npm:@myscope/foo@^1.0.0',
+      },
+    },
+  })
+  const aliasedSpec = Spec.parse('a', 'npm:@myscope/foo@^1.0.0')
+  // Mark the spec as overridden
+  aliasedSpec.overridden = true
+  const foo = graph.placePackage(
+    graph.mainImporter,
+    'prod',
+    aliasedSpec,
+    {
+      name: '@myscope/foo',
+      version: '2.0.0',
+    },
+  )
+  t.ok(foo)
+  t.matchSnapshot(
+    humanReadableOutput(
+      {
+        edges: [...graph.edges],
+        highlightSelection: false,
+        importers: graph.importers,
+        nodes: [...graph.nodes.values()],
+      },
+      {},
+    ),
+    'should print overridden aliased package with toName',
+  )
+
+  t.test('colors', async t => {
+    t.matchSnapshot(
+      humanReadableOutput(
+        {
+          edges: [...graph.edges],
+          highlightSelection: false,
+          importers: graph.importers,
+          nodes: [...graph.nodes.values()],
+        },
+        { colors: true },
+      ),
+      'should use colors for overridden aliased package',
     )
   })
 })

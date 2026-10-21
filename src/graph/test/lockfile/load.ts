@@ -1,21 +1,25 @@
-import {
-  type DepID,
-  type DepIDTuple,
-  joinDepIDTuple,
-} from '@nrz/dep-id'
-import { type SpecOptions } from '@nrz/spec'
+import type { DepID, DepIDTuple } from '@nrz/dep-id'
+import { joinDepIDTuple } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
+import { defaultGitHosts } from '@nrz/spec'
+import { PackageJson } from '@nrz/package-json'
 import t from 'tap'
-import { type LockfileNode } from '../../src/index.ts'
+import type { LockfileNode } from '../../src/index.ts'
+import { Graph } from '../../src/graph.ts'
 import {
+  diffLockfileOptions,
   load,
+  loadData,
   loadHidden,
   loadObject,
 } from '../../src/lockfile/load.ts'
-import {
-  type LockfileData,
-  type LockfileEdgeKey,
-  type LockfileEdges,
-  type LockfileEdgeValue,
+import { loadEdges } from '../../src/lockfile/load-edges.ts'
+import type {
+  LockfileData,
+  LockfileEdgeKey,
+  LockfileEdges,
+  LockfileEdgeValue,
 } from '../../src/lockfile/types.ts'
 import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
 
@@ -65,6 +69,7 @@ t.test('load', async t => {
     [spaceKey]: spaceVal,
   }
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {
       registries: {
         custom: 'https://registry.example.com',
@@ -96,13 +101,28 @@ t.test('load', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   const graph = load({
     ...configData,
     projectRoot,
     mainManifest,
   })
+  t.equal(
+    graph.nodes.get(joinDepIDTuple(['registry', '', 'bar@1.0.0']))
+      ?.resolvedFromLockfile,
+    true,
+    'integrity+resolved from lockfile',
+  )
+  t.equal(
+    graph.nodes.get(joinDepIDTuple(['registry', '', 'foo@1.0.0']))
+      ?.resolvedFromLockfile,
+    false,
+    'integrity without resolved is not lockfile-verified',
+  )
   t.matchSnapshot(objectLikeOutput(graph))
 })
 
@@ -130,24 +150,61 @@ t.test('loadHidden', async t => {
     [spaceKey]: spaceVal,
   }
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {
       registries: {
         custom: 'https://registry.example.com',
       },
     },
     nodes: {
-      [joinDepIDTuple(['file', '.'])]: [0, 'my-project'],
-      [joinDepIDTuple(['file', 'linked'])]: [0, 'linked'],
+      [joinDepIDTuple(['file', '.'])]: [
+        0,
+        'my-project',
+        // integrity
+        null,
+        // resolved
+        null,
+        // location
+        null,
+        // manifest
+        {
+          name: 'my-project',
+          version: '1.0.0',
+          // placeholder: add additional fields as needed for test
+        },
+      ],
+      [joinDepIDTuple(['file', 'linked'])]: [
+        0,
+        'linked',
+        null,
+        null,
+        null,
+        {
+          name: 'linked',
+          version: '1.0.0',
+        },
+      ],
       [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: [
         0,
         'foo',
         'sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==',
+        null,
+        null,
+        {
+          name: 'foo',
+          version: '1.0.0',
+        },
       ],
       [joinDepIDTuple(['registry', '', 'bar@1.0.0'])]: [
         0,
         'bar',
         'sha512-6/deadbeef==',
         'https://registry.example.com/bar/-/bar-1.0.0.tgz',
+        null,
+        {
+          name: 'bar',
+          version: '1.0.0',
+        },
       ],
       [joinDepIDTuple(['registry', '', 'baz@1.0.0'])]: [
         0,
@@ -155,26 +212,46 @@ t.test('loadHidden', async t => {
         null,
         null,
         './node_modules/.pnpm/baz@1.0.0/node_modules/baz',
+        {
+          name: 'baz',
+          version: '1.0.0',
+        },
       ],
     } as Record<DepID, LockfileNode>,
     edges,
   }
   const projectRoot = t.testdir({
+    'nrz.json': '{}',
     node_modules: {
       '.nrz-lock.json': JSON.stringify(lockfileData),
     },
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   const graph = loadHidden({
     ...configData,
     projectRoot,
     mainManifest,
   })
+  t.equal(
+    graph.nodes.get(joinDepIDTuple(['registry', '', 'bar@1.0.0']))
+      ?.resolvedFromLockfile,
+    true,
+    'integrity+resolved from hidden lockfile',
+  )
+  t.equal(
+    graph.nodes.get(joinDepIDTuple(['registry', '', 'foo@1.0.0']))
+      ?.resolvedFromLockfile,
+    false,
+    'integrity without resolved is not lockfile-verified',
+  )
   t.matchSnapshot(objectLikeOutput(graph))
 })
 
 t.test('workspaces', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {
       registries: {
         custom: 'http://example.com',
@@ -197,8 +274,10 @@ t.test('workspaces', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: {
+        packages: ['./packages/*'],
+      },
     }),
     packages: {
       a: {
@@ -218,6 +297,8 @@ t.test('workspaces', async t => {
       },
     },
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   const graph = load({
     ...configData,
@@ -229,6 +310,7 @@ t.test('workspaces', async t => {
 
 t.test('unknown dep type', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {},
     nodes: {
       [joinDepIDTuple(['file', '.'])]: [0, 'my-project'],
@@ -246,7 +328,10 @@ t.test('unknown dep type', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   t.throws(
     () =>
@@ -262,6 +347,7 @@ t.test('unknown dep type', async t => {
 
 t.test('invalid dep id in edge', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {},
     nodes: {
       [joinDepIDTuple(['file', '.'])]: [0, 'my-project'],
@@ -280,7 +366,10 @@ t.test('invalid dep id in edge', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   t.throws(
     () =>
@@ -296,6 +385,7 @@ t.test('invalid dep id in edge', async t => {
 
 t.test('missing edge `from`', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {},
     nodes: {
       [joinDepIDTuple(['file', '.'])]: [0, 'my-project'],
@@ -313,7 +403,10 @@ t.test('missing edge `from`', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   t.throws(
     () =>
@@ -329,6 +422,7 @@ t.test('missing edge `from`', async t => {
 
 t.test('load with custom git hosts', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {
       'git-hosts': {
         example: 'git+ssh://example.com/$1/$2.git',
@@ -348,7 +442,10 @@ t.test('load with custom git hosts', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   const graph = load({
     ...configData,
@@ -368,8 +465,9 @@ t.test('load with custom git hosts', async t => {
 
 t.test('load with custom scope registry', async t => {
   const lockfileData: LockfileData = {
+    lockfileVersion: 1,
     options: {
-      'scope-registries': {
+      'scoped-registries': {
         '@myscope': 'http://example.com',
       },
     },
@@ -387,7 +485,10 @@ t.test('load with custom scope registry', async t => {
   }
   const projectRoot = t.testdir({
     'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
   })
+  t.chdir(projectRoot)
+  unload('project')
 
   const graph = load({
     ...configData,
@@ -408,7 +509,9 @@ t.test('load with custom scope registry', async t => {
 t.test(
   'option-defined values should overwrite lockfile values',
   async t => {
-    const projectRoot = t.testdir()
+    const projectRoot = t.testdir({ 'nrz.json': '{}' })
+    t.chdir(projectRoot)
+    unload('project')
     const mainManifest = { name: 'my-project', version: '1.0.0' }
     const loadOptions = {
       registries: {
@@ -418,6 +521,7 @@ t.test(
       projectRoot,
     }
     const lockfileData: LockfileData = {
+      lockfileVersion: 1,
       options: {
         registry: 'http://example.com',
         registries: {
@@ -436,7 +540,9 @@ t.test(
 )
 
 t.test('missing options object', async t => {
-  const projectRoot = t.testdir()
+  const projectRoot = t.testdir({ 'nrz.json': '{}' })
+  t.chdir(projectRoot)
+  unload('project')
   const mainManifest = { name: 'my-project', version: '1.0.0' }
   const loadOptions = {
     registries: {
@@ -446,6 +552,8 @@ t.test('missing options object', async t => {
     projectRoot,
   }
   const lockfileData = {
+    lockfileVersion: 1,
+    options: {},
     nodes: {},
     edges: {},
   } as LockfileData
@@ -453,4 +561,1524 @@ t.test('missing options object', async t => {
     JSON.stringify(loadObject(loadOptions, lockfileData), null, 2),
     'should be able to parse lockfile without options object',
   )
+})
+
+t.test('load with optimization path for large graphs', async t => {
+  const nodes: LockfileData['nodes'] = {}
+  const edges: LockfileData['edges'] = {}
+
+  // Add root
+  const mainDepId = joinDepIDTuple(['file', '.'])
+  nodes[mainDepId] = [
+    0,
+    'my-project',
+    null,
+    null,
+    null,
+    {
+      name: 'my-project',
+      version: '1.0.0',
+      dependencies: {},
+    },
+  ]
+
+  // Add many nodes and edges to trigger optimization code paths (>50)
+  for (let i = 0; i < 60; i++) {
+    const packageName = `opt-pkg-${i}`
+    const depId = joinDepIDTuple([
+      'registry',
+      '',
+      `${packageName}@1.0.${i}`,
+    ])
+
+    nodes[depId] = [
+      0,
+      packageName,
+      null,
+      null,
+      null,
+      {
+        name: packageName,
+        version: `1.0.${i}`,
+        dependencies: {},
+      },
+    ]
+
+    edges[`${mainDepId} ${packageName}`] = `prod ^1.0.${i} ${depId}`
+  }
+
+  const lockfileData: LockfileData = {
+    lockfileVersion: 1,
+    options: { registry: 'https://registry.npmjs.org/' },
+    nodes,
+    edges,
+  }
+
+  const graph = loadObject(
+    {
+      projectRoot: t.testdirName,
+      mainManifest: {
+        name: 'my-project',
+        version: '1.0.0',
+      },
+      packageJson: new PackageJson(),
+    },
+    lockfileData,
+  )
+
+  t.equal(
+    graph.nodes.size,
+    61,
+    'should load all nodes using optimization path',
+  )
+  t.equal(
+    graph.edges.size,
+    60,
+    'should load all edges using optimization path',
+  )
+
+  // Verify optimization was used by checking some nodes exist
+  t.ok(graph.nodes.has(mainDepId), 'root node exists')
+  t.ok(
+    graph.nodes.has(
+      joinDepIDTuple(['registry', '', 'opt-pkg-0@1.0.0']),
+    ),
+    'first optimized node exists',
+  )
+})
+
+t.test(
+  'loadEdges with optimization path for large graphs',
+  async t => {
+    const edges: LockfileData['edges'] = {}
+
+    // Create a graph with pre-existing nodes
+    const graph = new Graph({
+      mainManifest: {
+        name: 'my-project',
+        version: '1.0.0',
+      },
+      projectRoot: t.testdirName,
+    })
+
+    const mainDepId = joinDepIDTuple(['file', '.'])
+
+    // Add many edges to trigger optimization code paths (>50)
+    for (let i = 0; i < 60; i++) {
+      const packageName = `edge-pkg-${i}`
+      const depId = joinDepIDTuple([
+        'registry',
+        '',
+        `${packageName}@1.0.${i}`,
+      ])
+
+      // Add nodes to graph first
+      graph.addNode(depId, {
+        name: packageName,
+        version: `1.0.${i}`,
+        dependencies: {},
+      })
+
+      edges[`${mainDepId} ${packageName}`] = `prod ^1.0.${i} ${depId}`
+    }
+
+    // Test direct loadEdges call
+    loadEdges(graph, edges, {
+      registry: 'https://registry.npmjs.org/',
+    })
+
+    t.equal(
+      graph.edges.size,
+      60,
+      'should load all edges using optimization path',
+    )
+
+    // Verify some edges exist
+    const firstEdge = [...graph.edges][0]
+    t.ok(firstEdge, 'first edge exists')
+    if (firstEdge) {
+      t.equal(
+        firstEdge.spec.name,
+        'edge-pkg-0',
+        'edge has correct spec name',
+      )
+    }
+  },
+)
+
+t.test('load platform data for optional dependencies', async t => {
+  const projectRoot = t.testdir()
+  const packageJson = new PackageJson()
+
+  const lockfileData: LockfileData = {
+    lockfileVersion: 1,
+    options: configData,
+    nodes: {
+      [joinDepIDTuple(['registry', '', 'foo@1.0.0'])]: [
+        0,
+        'foo',
+        null,
+        null,
+        null,
+        null,
+        null,
+      ] as LockfileNode,
+      [joinDepIDTuple(['registry', '', 'bar@1.0.0'])]: [
+        1, // optional flag
+        'bar',
+        null,
+        null,
+        null,
+        null,
+        null,
+        {
+          engines: { node: '>=16' },
+          os: 'linux',
+          cpu: ['x64'],
+        },
+      ] as LockfileNode,
+      [joinDepIDTuple(['registry', '', 'baz@1.0.0'])]: [
+        1, // optional flag
+        'baz',
+        null,
+        null,
+        null,
+        null,
+        null,
+        {
+          engines: { node: '>=14' },
+          os: ['linux', 'darwin'],
+          cpu: ['x64', 'arm64'],
+        },
+      ] as LockfileNode,
+    },
+    edges: {
+      [`${joinDepIDTuple(['file', '.'])} foo`]:
+        `prod ^1.0.0 ${joinDepIDTuple(['registry', '', 'foo@1.0.0'])}` as LockfileEdgeValue,
+      [`${joinDepIDTuple(['file', '.'])} bar`]:
+        `optional ^1.0.0 ${joinDepIDTuple(['registry', '', 'bar@1.0.0'])}` as LockfileEdgeValue,
+      [`${joinDepIDTuple(['file', '.'])} baz`]:
+        `optional ^1.0.0 ${joinDepIDTuple(['registry', '', 'baz@1.0.0'])}` as LockfileEdgeValue,
+    },
+  }
+
+  const graph = loadObject(
+    {
+      ...configData,
+      mainManifest,
+      projectRoot,
+      packageJson,
+    },
+    lockfileData,
+  )
+
+  // Verify nodes are loaded correctly
+  const foo = graph.nodes.get(
+    joinDepIDTuple(['registry', '', 'foo@1.0.0']),
+  )
+  t.ok(foo, 'foo node exists')
+  t.notOk(foo?.platform, 'foo does not have platform data')
+  t.equal(foo?.optional, false, 'foo is not optional')
+
+  const bar = graph.nodes.get(
+    joinDepIDTuple(['registry', '', 'bar@1.0.0']),
+  )
+  t.ok(bar, 'bar node exists')
+  t.ok(bar?.platform, 'bar has platform data')
+  t.same(
+    bar?.platform,
+    {
+      engines: { node: '>=16' },
+      os: 'linux',
+      cpu: ['x64'],
+    },
+    'bar platform data is loaded correctly',
+  )
+  t.equal(bar?.optional, true, 'bar is optional')
+
+  const baz = graph.nodes.get(
+    joinDepIDTuple(['registry', '', 'baz@1.0.0']),
+  )
+  t.ok(baz, 'baz node exists')
+  t.ok(baz?.platform, 'baz has platform data')
+  t.same(
+    baz?.platform,
+    {
+      engines: { node: '>=14' },
+      os: ['linux', 'darwin'],
+      cpu: ['x64', 'arm64'],
+    },
+    'baz platform data is loaded correctly',
+  )
+  t.equal(baz?.optional, true, 'baz is optional')
+})
+
+t.test('load with peerSetHash in extra parameter', async t => {
+  const projectRoot = t.testdir()
+  const packageJson = new PackageJson()
+
+  const lockfileData: LockfileData = {
+    lockfileVersion: 1,
+    options: configData,
+    nodes: {
+      // Node with modifier only
+      [joinDepIDTuple([
+        'registry',
+        '',
+        'with-modifier@1.0.0',
+        ':root > #with-modifier',
+      ])]: [
+        0,
+        'with-modifier',
+        null,
+        null,
+        null,
+        { name: 'with-modifier', version: '1.0.0' },
+      ] as LockfileNode,
+      // Node with peerSetHash only
+      [joinDepIDTuple([
+        'registry',
+        '',
+        'with-peer@1.0.0',
+        'peer.hash123',
+      ])]: [
+        0,
+        'with-peer',
+        null,
+        null,
+        null,
+        { name: 'with-peer', version: '1.0.0' },
+      ] as LockfileNode,
+      // Node with both modifier and peerSetHash
+      [joinDepIDTuple([
+        'registry',
+        '',
+        'with-both@1.0.0',
+        ':root > #with-bothpeer.hash456',
+      ])]: [
+        0,
+        'with-both',
+        null,
+        null,
+        null,
+        { name: 'with-both', version: '1.0.0' },
+      ] as LockfileNode,
+      // Node with neither
+      [joinDepIDTuple(['registry', '', 'regular@1.0.0'])]: [
+        0,
+        'regular',
+        null,
+        null,
+        null,
+        { name: 'regular', version: '1.0.0' },
+      ] as LockfileNode,
+    },
+    edges: {
+      [`${joinDepIDTuple(['file', '.'])} with-modifier`]:
+        `prod ^1.0.0 ${joinDepIDTuple(['registry', '', 'with-modifier@1.0.0', ':root > #with-modifier'])}` as LockfileEdgeValue,
+      [`${joinDepIDTuple(['file', '.'])} with-peer`]:
+        `prod ^1.0.0 ${joinDepIDTuple(['registry', '', 'with-peer@1.0.0', 'peer.hash123'])}` as LockfileEdgeValue,
+      [`${joinDepIDTuple(['file', '.'])} with-both`]:
+        `prod ^1.0.0 ${joinDepIDTuple(['registry', '', 'with-both@1.0.0', ':root > #with-bothpeer.hash456'])}` as LockfileEdgeValue,
+      [`${joinDepIDTuple(['file', '.'])} regular`]:
+        `prod ^1.0.0 ${joinDepIDTuple(['registry', '', 'regular@1.0.0'])}` as LockfileEdgeValue,
+    },
+  }
+
+  const graph = loadObject(
+    {
+      ...configData,
+      mainManifest,
+      projectRoot,
+      packageJson,
+    },
+    lockfileData,
+  )
+
+  // Verify modifier-only node
+  const withModifier = graph.nodes.get(
+    joinDepIDTuple([
+      'registry',
+      '',
+      'with-modifier@1.0.0',
+      ':root > #with-modifier',
+    ]),
+  )
+  t.ok(withModifier, 'with-modifier node exists')
+  t.equal(
+    withModifier?.modifier,
+    ':root > #with-modifier',
+    'has modifier',
+  )
+  t.notOk(withModifier?.peerSetHash, 'no peerSetHash')
+
+  // Verify peerSetHash-only node
+  const withPeer = graph.nodes.get(
+    joinDepIDTuple([
+      'registry',
+      '',
+      'with-peer@1.0.0',
+      'peer.hash123',
+    ]),
+  )
+  t.ok(withPeer, 'with-peer node exists')
+  t.notOk(withPeer?.modifier, 'no modifier')
+  t.equal(withPeer?.peerSetHash, 'peer.hash123', 'has peerSetHash')
+
+  // Verify node with both
+  const withBoth = graph.nodes.get(
+    joinDepIDTuple([
+      'registry',
+      '',
+      'with-both@1.0.0',
+      ':root > #with-bothpeer.hash456',
+    ]),
+  )
+  t.ok(withBoth, 'with-both node exists')
+  t.equal(withBoth?.modifier, ':root > #with-both', 'has modifier')
+  t.equal(withBoth?.peerSetHash, 'peer.hash456', 'has peerSetHash')
+
+  // Verify regular node
+  const regular = graph.nodes.get(
+    joinDepIDTuple(['registry', '', 'regular@1.0.0']),
+  )
+  t.ok(regular, 'regular node exists')
+  t.notOk(regular?.modifier, 'no modifier')
+  t.notOk(regular?.peerSetHash, 'no peerSetHash')
+})
+
+t.test('lockfile version validation', async t => {
+  const projectRoot = t.testdir()
+  const packageJson = new PackageJson()
+  const { LOCKFILE_VERSION } = await t.mockImport<
+    typeof import('../../src/lockfile/types.ts')
+  >('../../src/lockfile/types.ts')
+
+  t.test('load with matching version succeeds', async t => {
+    const lockfileData: LockfileData = {
+      lockfileVersion: LOCKFILE_VERSION,
+      options: {},
+      nodes: {},
+      edges: {},
+    }
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        packageJson,
+      },
+      lockfileData,
+    )
+    t.ok(graph, 'graph loaded successfully')
+  })
+
+  t.test('load with missing version throws error', async t => {
+    const lockfileData: Omit<LockfileData, 'lockfileVersion'> & {
+      lockfileVersion?: number
+    } = {
+      options: {},
+      nodes: {},
+      edges: {},
+    }
+    t.throws(
+      () =>
+        loadObject(
+          {
+            ...configData,
+            mainManifest,
+            projectRoot,
+            packageJson,
+          },
+          lockfileData,
+        ),
+      {
+        message: 'Missing lockfile version',
+        cause: {
+          code: 'ELOCKFILEVERSION',
+          found: undefined,
+          wanted: LOCKFILE_VERSION,
+        },
+      },
+      'throws with missing version',
+    )
+  })
+
+  t.test(
+    'load with older version throws ELOCKFILEVERSION',
+    async t => {
+      const lockfileData: LockfileData = {
+        lockfileVersion: LOCKFILE_VERSION - 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }
+      t.throws(
+        () =>
+          loadObject(
+            {
+              ...configData,
+              mainManifest,
+              projectRoot,
+              packageJson,
+            },
+            lockfileData,
+          ),
+        {
+          message: 'Unsupported lockfile version',
+          cause: {
+            code: 'ELOCKFILEVERSION',
+            found: LOCKFILE_VERSION - 1,
+            wanted: LOCKFILE_VERSION,
+          },
+        },
+        'throws with older version',
+      )
+    },
+  )
+
+  t.test(
+    'load with newer version throws ELOCKFILEVERSION',
+    async t => {
+      const lockfileData: LockfileData = {
+        lockfileVersion: LOCKFILE_VERSION + 1,
+        options: {},
+        nodes: {},
+        edges: {},
+      }
+      t.throws(
+        () =>
+          loadObject(
+            {
+              ...configData,
+              mainManifest,
+              projectRoot,
+              packageJson,
+            },
+            lockfileData,
+          ),
+        {
+          message: 'Unsupported lockfile version',
+          cause: {
+            code: 'ELOCKFILEVERSION',
+            found: LOCKFILE_VERSION + 1,
+            wanted: LOCKFILE_VERSION,
+          },
+        },
+        'throws with newer version',
+      )
+    },
+  )
+
+  t.test(
+    'load gracefully skips edges from missing workspace nodes',
+    async t => {
+      const abbrevId = joinDepIDTuple([
+        'registry',
+        '',
+        'abbrev@3.0.1',
+      ])
+      const lockfileData = {
+        lockfileVersion: LOCKFILE_VERSION,
+        options: {},
+        nodes: {
+          [abbrevId]: [0, 'abbrev'],
+        },
+        edges: {
+          [edgeKey(['file', '.'], 'abbrev')]:
+            `prod ^3.0.0 ${abbrevId}`,
+          // edge from a workspace that no longer exists
+          [edgeKey(['workspace', 'packages/removed-ws'], 'abbrev')]:
+            `prod ^3.0.0 ${abbrevId}`,
+        },
+      } as unknown as LockfileData
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          packageJson,
+        },
+        lockfileData,
+      )
+      // root should still have its edge
+      t.ok(
+        graph.mainImporter.edgesOut.has('abbrev'),
+        'root edge to abbrev should be loaded',
+      )
+      // the workspace edge should have been skipped without throwing
+      t.equal(
+        graph.edges.size,
+        1,
+        'only the root edge should exist (workspace edge skipped)',
+      )
+    },
+  )
+})
+
+t.test('optionsChanged detection', async t => {
+  const abbrevId = joinDepIDTuple(['registry', '', 'abbrev@2.0.0'])
+  const baseLockfileData = {
+    lockfileVersion: 1,
+    options: {},
+    nodes: {
+      [abbrevId]: [0, 'abbrev', 'sha512-abc=='],
+    },
+    edges: {
+      [edgeKey(['file', '.'], 'abbrev')]: `prod ^2.0.0 ${abbrevId}`,
+    },
+  } as unknown as LockfileData
+
+  t.test(
+    'optionsChanged is false when lockfile and current options match',
+    async t => {
+      const matchingLockfile: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          // the configured registry is always recorded now that there
+          // is no default to elide it against; the `npm` alias is also
+          // persisted now that it is no longer a built-in default
+          registry: 'https://registry.npmjs.org/',
+          registries: {
+            npm: 'https://registry.npmjs.org/',
+            custom: 'http://example.com',
+          },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(matchingLockfile),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+        },
+        matchingLockfile,
+      )
+      t.equal(graph.optionsChanged, false, 'options have not changed')
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when modifiers are added',
+    async t => {
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(baseLockfileData),
+        'nrz.json': JSON.stringify({
+          modifiers: { '#abbrev': '^3.0.0' },
+        }),
+      })
+      t.chdir(projectRoot)
+      unload('project')
+
+      const { GraphModifier } = await import('../../src/modifiers.ts')
+      const modifiers = new GraphModifier(configData)
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          modifiers,
+        },
+        baseLockfileData,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to new modifiers',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when modifiers are changed',
+    async t => {
+      const lockfileWithModifiers: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          modifiers: { '#abbrev': '^2.0.0' },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithModifiers),
+        'nrz.json': JSON.stringify({
+          modifiers: { '#abbrev': '^3.0.0' },
+        }),
+      })
+      t.chdir(projectRoot)
+      unload('project')
+
+      const { GraphModifier } = await import('../../src/modifiers.ts')
+      const modifiers = new GraphModifier(configData)
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          modifiers,
+        },
+        lockfileWithModifiers,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to modified modifiers',
+      )
+    },
+  )
+
+  t.test(
+    'default-registry-alias round-trips without drift',
+    async t => {
+      const lockfileWithAlias: LockfileData = {
+        ...baseLockfileData,
+        // key order must mirror buildCurrentOptions / save.ts
+        // (default-registry-alias before registries) since the drift
+        // check is a JSON string comparison
+        options: {
+          'default-registry-alias': 'internal',
+          registries: {
+            npm: 'https://registry.npmjs.org/',
+            internal: 'https://internal.example.com/',
+          },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithAlias),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          registry: undefined,
+          registries: {
+            npm: 'https://registry.npmjs.org/',
+            internal: 'https://internal.example.com/',
+          },
+          'default-registry-alias': 'internal',
+          mainManifest,
+          projectRoot,
+        },
+        lockfileWithAlias,
+      )
+      t.equal(
+        graph.optionsChanged,
+        false,
+        'matching non-default alias does not trip drift',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when default-registry-alias is changed',
+    async t => {
+      const lockfileWithAlias: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          registries: {
+            npm: 'https://registry.npmjs.org/',
+            internal: 'https://internal.example.com/',
+          },
+          'default-registry-alias': 'internal',
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithAlias),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          registry: undefined,
+          registries: {
+            npm: 'https://registry.npmjs.org/',
+            internal: 'https://internal.example.com/',
+          },
+          mainManifest,
+          projectRoot,
+        },
+        lockfileWithAlias,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to default-registry-alias change',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when registry is changed',
+    async t => {
+      const lockfileWithRegistry: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          registry: 'https://old-registry.example.com/',
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithRegistry),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+        },
+        lockfileWithRegistry,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to registry change',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when catalog is changed',
+    async t => {
+      const lockfileWithCatalog: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          catalog: { abbrev: '^1.0.0' },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithCatalog),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          catalog: { abbrev: '^2.0.0' },
+        },
+        lockfileWithCatalog,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to catalog change',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged is true when modifiers are removed',
+    async t => {
+      const lockfileWithModifiers: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          modifiers: { '#abbrev': '^2.0.0' },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithModifiers),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+        },
+        lockfileWithModifiers,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to removed modifiers',
+      )
+    },
+  )
+
+  t.test(
+    'optionsChanged detects scoped-registries change',
+    async t => {
+      const lockfileWithScoped: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          'scoped-registries': {
+            '@myorg': 'https://old.example.com/',
+          },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithScoped),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          'scoped-registries': {
+            '@myorg': 'https://new.example.com/',
+          },
+        },
+        lockfileWithScoped,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to scoped-registries change',
+      )
+    },
+  )
+
+  t.test('optionsChanged detects jsr-registries change', async t => {
+    const lockfileWithJsr: LockfileData = {
+      ...baseLockfileData,
+      options: {
+        'jsr-registries': {
+          jsr: 'https://old-jsr.example.com/',
+        },
+      },
+    }
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileWithJsr),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        'jsr-registries': {
+          jsr: 'https://new-jsr.example.com/',
+        },
+      },
+      lockfileWithJsr,
+    )
+    t.equal(
+      graph.optionsChanged,
+      true,
+      'options changed due to jsr-registries change',
+    )
+  })
+
+  t.test('optionsChanged detects git-hosts change', async t => {
+    const lockfileWithGitHosts: LockfileData = {
+      ...baseLockfileData,
+      options: {
+        'git-hosts': {
+          myhost: 'https://old-git.example.com/',
+        },
+      },
+    }
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileWithGitHosts),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        'git-hosts': {
+          myhost: 'https://new-git.example.com/',
+        },
+      },
+      lockfileWithGitHosts,
+    )
+    t.equal(
+      graph.optionsChanged,
+      true,
+      'options changed due to git-hosts change',
+    )
+  })
+
+  t.test(
+    'optionsChanged detects git-host-archives change',
+    async t => {
+      const lockfileWithGHA: LockfileData = {
+        ...baseLockfileData,
+        options: {
+          'git-host-archives': {
+            myhost: 'https://old-archive.example.com/',
+          },
+        },
+      }
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileWithGHA),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          'git-host-archives': {
+            myhost: 'https://new-archive.example.com/',
+          },
+        },
+        lockfileWithGHA,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to git-host-archives change',
+      )
+    },
+  )
+
+  t.test('optionsChanged detects catalogs change', async t => {
+    const lockfileWithCatalogs: LockfileData = {
+      ...baseLockfileData,
+      options: {
+        catalogs: {
+          testing: { vitest: '^1.0.0' },
+        },
+      },
+    }
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileWithCatalogs),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        catalogs: {
+          testing: { vitest: '^2.0.0' },
+        },
+      },
+      lockfileWithCatalogs,
+    )
+    t.equal(
+      graph.optionsChanged,
+      true,
+      'options changed due to catalogs change',
+    )
+  })
+
+  t.test(
+    'optionsChanged detects non-default registry in current config',
+    async t => {
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(baseLockfileData),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          registry: 'https://custom-registry.example.com/',
+        },
+        baseLockfileData,
+      )
+      t.equal(
+        graph.optionsChanged,
+        true,
+        'options changed due to non-default registry',
+      )
+    },
+  )
+
+  t.test('optionsChanged detects registries change', async t => {
+    const lockfileWithRegistries: LockfileData = {
+      ...baseLockfileData,
+      options: {
+        registries: {
+          custom: 'https://old-custom.example.com/',
+        },
+      },
+    }
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileWithRegistries),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        registries: {
+          ...configData.registries,
+          custom: 'https://new-custom.example.com/',
+        },
+      },
+      lockfileWithRegistries,
+    )
+    t.equal(
+      graph.optionsChanged,
+      true,
+      'options changed due to registries change',
+    )
+  })
+})
+
+t.test('specCache interns specs across loads', async t => {
+  const specCache = new Map()
+  const fooId = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+  const lockfileData: LockfileData = {
+    lockfileVersion: 1,
+    options: configData,
+    nodes: {
+      [joinDepIDTuple(['file', '.'])]: [0, 'my-project'],
+      [fooId]: [0, 'foo'],
+    } as Record<DepID, LockfileNode>,
+    edges: {
+      [edgeKey(['file', '.'], 'foo')]: `prod ^1.0.0 ${fooId}`,
+    } as LockfileEdges,
+  }
+  const projectRoot = t.testdir({
+    'nrz-lock.json': JSON.stringify(lockfileData),
+    'nrz.json': '{}',
+  })
+  t.chdir(projectRoot)
+  unload('project')
+
+  const opts = { ...configData, projectRoot, mainManifest, specCache }
+  const a = loadObject(opts, lockfileData)
+  const b = loadObject(opts, lockfileData)
+  const specA = [...a.edges][0]?.spec
+  const specB = [...b.edges][0]?.spec
+  t.equal(specA, specB, 'shared cache reuses Spec instances')
+  t.equal(specCache.size, 1)
+
+  const otherData: LockfileData = {
+    ...lockfileData,
+    options: { registry: 'https://other.example.com/' },
+  }
+  const c = loadObject(opts, otherData)
+  t.not([...c.edges][0]?.spec, specA, 'different options prefix')
+  t.equal(specCache.size, 2)
+
+  const { GraphModifier } = await import('../../src/modifiers.ts')
+  const modifiers = new GraphModifier(configData)
+  const skipped = new Map()
+  const d = loadObject(
+    {
+      ...configData,
+      projectRoot,
+      mainManifest,
+      specCache: skipped,
+      modifiers,
+    },
+    lockfileData,
+  )
+  const e = loadObject(
+    {
+      ...configData,
+      projectRoot,
+      mainManifest,
+      specCache: skipped,
+      modifiers,
+    },
+    lockfileData,
+  )
+  t.not([...d.edges][0]?.spec, [...e.edges][0]?.spec)
+  t.equal(skipped.size, 0, 'modifiers disable interning')
+
+  const parsed = loadData(projectRoot)
+  t.equal(parsed.lockfileVersion, 1)
+  const fromData = load({
+    ...configData,
+    projectRoot,
+    mainManifest,
+    lockfileData: parsed,
+  })
+  t.equal(fromData.edges.size, a.edges.size)
+})
+
+t.test('specCache skips (unknown) names', async t => {
+  const specCache = new Map()
+  const projectRoot = t.testdir()
+  const graph = new Graph({
+    mainManifest,
+    projectRoot,
+  })
+  const fromId = joinDepIDTuple(['file', '.'])
+  const toId = joinDepIDTuple(['file', 'x'])
+  graph.addNode(toId, { name: 'x', version: '1.0.0' })
+  loadEdges(
+    graph,
+    {
+      [`${fromId} (unknown)`]: `prod file:./x ${toId}`,
+    } as LockfileEdges,
+    configData,
+    { specCache, prefix: 'p' },
+  )
+  t.equal(specCache.size, 0)
+})
+
+t.test('catalog specs resolve against current config', async t => {
+  const onceId = joinDepIDTuple(['registry', '', 'once@1.3.3'])
+  const abbrevId = joinDepIDTuple(['registry', '', 'abbrev@1.1.1'])
+  const lockfileData = {
+    lockfileVersion: 1,
+    options: {
+      catalog: { abbrev: '^1.0.0' },
+      catalogs: { legacy: { once: '1.3.3' } },
+    },
+    nodes: {
+      [onceId]: [0, 'once', 'sha512-abc=='],
+      [abbrevId]: [0, 'abbrev', 'sha512-abc=='],
+    },
+    edges: {
+      [edgeKey(['file', '.'], 'once')]:
+        `prod catalog:legacy ${onceId}`,
+      [edgeKey(['file', '.'], 'abbrev')]: `prod catalog: ${abbrevId}`,
+    },
+  } as unknown as LockfileData
+
+  const findEdge = (graph: Graph, name: string) =>
+    [...graph.edges].find(e => e.name === name)
+
+  t.test('current catalog/catalogs win when defined', async t => {
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileData),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const graph = loadObject(
+      {
+        ...configData,
+        mainManifest,
+        projectRoot,
+        catalog: { abbrev: '^2.0.0' },
+        catalogs: { legacy: { once: '^1.3.0' } },
+      },
+      lockfileData,
+    )
+    t.equal(
+      findEdge(graph, 'once')?.spec.final.bareSpec,
+      '^1.3.0',
+      'named catalog entry from current config',
+    )
+    t.equal(
+      findEdge(graph, 'abbrev')?.spec.final.bareSpec,
+      '^2.0.0',
+      'default catalog entry from current config',
+    )
+    t.equal(graph.optionsChanged, true, 'flags options change')
+  })
+
+  t.test(
+    'falls back to lockfile catalogs when config has none',
+    async t => {
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileData),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const graph = loadObject(
+        { ...configData, mainManifest, projectRoot },
+        lockfileData,
+      )
+      t.equal(
+        findEdge(graph, 'once')?.spec.final.bareSpec,
+        '1.3.3',
+        'named catalog entry from lockfile snapshot',
+      )
+      t.equal(
+        findEdge(graph, 'abbrev')?.spec.final.bareSpec,
+        '^1.0.0',
+        'default catalog entry from lockfile snapshot',
+      )
+    },
+  )
+
+  t.test(
+    'specCache does not leak across catalog configs',
+    async t => {
+      const projectRoot = t.testdir({
+        'nrz-lock.json': JSON.stringify(lockfileData),
+        'nrz.json': '{}',
+      })
+      t.chdir(projectRoot)
+      unload('project')
+      const specCache = new Map()
+      const first = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          specCache,
+          catalogs: { legacy: { once: '^1.3.0' } },
+        },
+        lockfileData,
+      )
+      t.equal(findEdge(first, 'once')?.spec.final.bareSpec, '^1.3.0')
+      const second = loadObject(
+        {
+          ...configData,
+          mainManifest,
+          projectRoot,
+          specCache,
+          catalogs: { legacy: { once: '~1.3.1' } },
+        },
+        lockfileData,
+      )
+      t.equal(
+        findEdge(second, 'once')?.spec.final.bareSpec,
+        '~1.3.1',
+        'second load parses with its own catalog values',
+      )
+    },
+  )
+
+  t.test('missing catalog points at the declaring edge', async t => {
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(lockfileData),
+      'nrz.json': '{}',
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    t.throws(
+      () =>
+        loadObject(
+          {
+            ...configData,
+            mainManifest,
+            projectRoot,
+            catalogs: { other: { x: '1.0.0' } },
+          },
+          lockfileData,
+        ),
+      {
+        message: 'Catalog "legacy" not found for once@catalog:legacy',
+        cause: {
+          code: 'ECONFIG',
+          from: 'nrz-lock.json (./package.json dependencies)',
+        },
+      },
+    )
+  })
+})
+
+t.test('diffLockfileOptions', async t => {
+  const abbrevId = joinDepIDTuple(['registry', '', 'abbrev@2.0.0'])
+  const baseLockfileData = {
+    lockfileVersion: 1,
+    options: {},
+    nodes: { [abbrevId]: [0, 'abbrev', 'sha512-abc=='] },
+    edges: {
+      [edgeKey(['file', '.'], 'abbrev')]: `prod ^2.0.0 ${abbrevId}`,
+    },
+  } as unknown as LockfileData
+  // what buildCurrentOptions() makes of configData
+  const baseOptions = {
+    registry: 'https://registry.npmjs.org/',
+    registries: {
+      npm: 'https://registry.npmjs.org/',
+      custom: 'http://example.com',
+    },
+  }
+  const diff = (
+    current: SpecOptions,
+    stored: LockfileData['options'] = {},
+  ) =>
+    diffLockfileOptions(
+      {
+        ...configData,
+        ...current,
+        mainManifest,
+        projectRoot: t.testdirName,
+      },
+      { ...baseOptions, ...stored },
+    )
+
+  t.strictSame(diff({}), [], 'identical options')
+
+  t.strictSame(
+    diff({
+      registries: {
+        custom: 'http://example.com',
+        npm: 'https://registry.npmjs.org/',
+      },
+    }),
+    [],
+    'reordered keys are not a change',
+  )
+
+  t.strictSame(
+    diff(
+      { catalog: { abbrev: '^2.0.0' } },
+      { catalog: { abbrev: '^1.0.0' } },
+    ),
+    [
+      {
+        section: 'catalog',
+        key: 'abbrev',
+        from: '^1.0.0',
+        to: '^2.0.0',
+      },
+    ],
+    'a changed value',
+  )
+
+  t.strictSame(
+    diff({ catalog: { abbrev: '^2.0.0' } }),
+    [
+      {
+        section: 'catalog',
+        key: 'abbrev',
+        from: undefined,
+        to: '^2.0.0',
+      },
+    ],
+    'an added key',
+  )
+
+  t.strictSame(
+    diff({}, { catalog: { abbrev: '^1.0.0' } }),
+    [
+      {
+        section: 'catalog',
+        key: 'abbrev',
+        from: '^1.0.0',
+        to: undefined,
+      },
+    ],
+    'a removed key',
+  )
+
+  t.strictSame(
+    diff(
+      { catalogs: { node24: { '@types/node': '^25' } } },
+      { catalogs: { node24: { '@types/node': '^24' } } },
+    ),
+    [
+      {
+        section: 'catalogs',
+        key: 'node24 @types/node',
+        from: '^24',
+        to: '^25',
+      },
+    ],
+    'a nested catalogs entry',
+  )
+
+  t.strictSame(
+    diff({
+      registries: { ...baseOptions.registries, gh: 'http://gh/' },
+    }),
+    [
+      {
+        section: 'registries',
+        key: 'gh',
+        from: undefined,
+        to: 'http://gh/',
+      },
+    ],
+    'a registries entry',
+  )
+
+  t.strictSame(
+    diff({ registry: 'http://other/' }),
+    [
+      {
+        section: 'registry',
+        from: 'https://registry.npmjs.org/',
+        to: 'http://other/',
+      },
+    ],
+    'a scalar section has no key',
+  )
+
+  t.strictSame(
+    diff({ 'git-hosts': defaultGitHosts }),
+    [],
+    'default entries are not reported',
+  )
+
+  t.test('modifiers and the optionsChanged parity', async t => {
+    const projectRoot = t.testdir({
+      'nrz-lock.json': JSON.stringify(baseLockfileData),
+      'nrz.json': JSON.stringify({
+        modifiers: { '#abbrev': '^3.0.0' },
+      }),
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    const { GraphModifier } = await import('../../src/modifiers.ts')
+    const modifiers = new GraphModifier(configData)
+
+    for (const [options, stored] of [
+      [{ ...configData, modifiers }, {}],
+      [configData, { modifiers: { '#abbrev': '^2.0.0' } }],
+      [configData, {}],
+    ] as [SpecOptions, LockfileData['options']][]) {
+      const loadOptions = { ...options, mainManifest, projectRoot }
+      const lockfileData = { ...baseLockfileData, options: stored }
+      const changes = diffLockfileOptions(loadOptions, stored)
+      const graph = loadObject(loadOptions, lockfileData)
+      t.strictSame(graph.optionsChanges, changes, 'same list')
+      t.equal(
+        graph.optionsChanged,
+        changes.length > 0,
+        'the boolean follows the list',
+      )
+    }
+
+    t.strictSame(
+      diffLockfileOptions(
+        { ...configData, modifiers, mainManifest, projectRoot },
+        { ...baseOptions, modifiers: { '#abbrev': '^2.0.0' } },
+      ),
+      [
+        {
+          section: 'modifiers',
+          key: '#abbrev',
+          from: '^2.0.0',
+          to: '^3.0.0',
+        },
+      ],
+      'a changed modifier',
+    )
+  })
+})
+
+t.test('loadEdges skips malformed edge records', async t => {
+  const graph = new Graph({
+    mainManifest: { name: 'my-project', version: '1.0.0' },
+    projectRoot: t.testdirName,
+  })
+  const mainDepId = joinDepIDTuple(['file', '.'])
+  const fooId = joinDepIDTuple(['registry', '', 'foo@1.0.0'])
+  graph.addNode(fooId, { name: 'foo', version: '1.0.0' })
+  const edges = {
+    [mainDepId]: `prod ^1.0.0 ${fooId}`,
+    [`${mainDepId} bar`]: 'prod',
+    [`${mainDepId} foo`]: `prod ^1.0.0 ${fooId}`,
+  } as LockfileEdges
+  loadEdges(graph, edges, { registry: 'https://registry.npmjs.org/' })
+  t.equal(graph.edges.size, 1, 'only the valid edge is loaded')
 })

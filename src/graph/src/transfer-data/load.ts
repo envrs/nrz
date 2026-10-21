@@ -1,0 +1,288 @@
+import { error } from '@nrz/error-cause'
+import {
+  SecurityArchive,
+  usesNpmRegistry,
+} from '@nrz/security-archive/browser'
+import {
+  defaultGitHostArchives,
+  defaultGitHosts,
+  defaultRegistries,
+  defaultRegistryName,
+  defaultScopeRegistries,
+} from '@nrz/spec/browser'
+import { stringifyNode } from '../stringify-node.ts'
+import { loadEdges } from '../lockfile/load-edges.ts'
+import { loadNodes } from '../lockfile/load-nodes.ts'
+import type {
+  EdgeLike,
+  GraphLike,
+  NodeLike,
+  DependencyTypeShort,
+  NormalizedManifest,
+} from '@nrz/types'
+import type { LockfileData } from '../lockfile/types.ts'
+import type { DepID } from '@nrz/dep-id/browser'
+import type { Spec, SpecOptionsFilled } from '@nrz/spec/browser'
+
+const loadSpecOptions = (
+  lockfile: LockfileData,
+): SpecOptionsFilled => {
+  const {
+    catalog = {},
+    catalogs = {},
+    registries,
+    registry,
+    'default-registry-alias': defaultRegistryAlias,
+    'git-hosts': gitHosts,
+    'git-host-archives': gitHostArchives,
+    'scoped-registries': scopedRegistriesOption,
+    'jsr-registries': jsrRegistries,
+  } = lockfile.options
+  // backwards-compat: legacy lockfiles wrote this field as `scope-registries`
+  const scopeRegistries =
+    scopedRegistriesOption ??
+    (
+      lockfile.options as {
+        'scope-registries'?: Record<string, string>
+      }
+    )['scope-registries']
+  return {
+    catalog,
+    catalogs,
+    registries: { ...defaultRegistries, ...registries },
+    registry,
+    'default-registry-alias':
+      defaultRegistryAlias ?? defaultRegistryName,
+    'jsr-registries': { ...jsrRegistries },
+    'git-hosts': { ...defaultGitHosts, ...gitHosts },
+    'git-host-archives': {
+      ...defaultGitHostArchives,
+      ...gitHostArchives,
+    },
+    'scoped-registries': {
+      ...defaultScopeRegistries,
+      ...scopeRegistries,
+    },
+  }
+}
+
+type MaybeGraphLike = Pick<
+  GraphLike,
+  | 'importers'
+  | 'edges'
+  | 'nodes'
+  | 'nodesByName'
+  | 'projectRoot'
+  | 'addEdge'
+  | 'addNode'
+> & {
+  mainImporter?: NodeLike
+}
+
+/**
+ * The returned object when loading a graph from a transfer data structure,
+ * including the graph itself, the spec options used to create it, and
+ * the security archive (if any).
+ */
+export type LoadResult = {
+  graph: GraphLike
+  specOptions: SpecOptionsFilled
+  securityArchive: SecurityArchive | undefined
+}
+
+/**
+ * A data structure defining a complete graph to be transfered, including
+ * extra information to the lockfile such as project info and importers.
+ */
+export type TransferData = {
+  importers: {
+    importer: boolean
+    mainImporter: boolean
+    id: string
+    name: string
+    version: string
+    location: string
+    manifest: NormalizedManifest
+    projectRoot?: string
+    integrity?: string
+    resolved?: string
+    dev?: boolean
+    optional?: boolean
+  }[]
+  lockfile: LockfileData
+  projectInfo: {
+    root: string
+    homedirRelativeRoot: string
+    tools?: string[]
+    nrzInstalled?: boolean
+  }
+  securityArchive?: any
+}
+
+export const load = (transfered: TransferData): LoadResult => {
+  const [mainImporter] = transfered.importers
+  const maybeGraph: MaybeGraphLike = {
+    importers: new Set<NodeLike>(),
+    edges: new Set<EdgeLike>(),
+    nodes: new Map<DepID, NodeLike>(),
+    nodesByName: new Map<string, Set<NodeLike>>(),
+    projectRoot: transfered.projectInfo.root,
+    addEdge(
+      type: DependencyTypeShort,
+      spec: Spec,
+      from: NodeLike,
+      to?: NodeLike,
+    ) {
+      const existing = from.edgesOut.get(spec.name)
+      if (existing) {
+        const edge = existing
+        if (
+          edge.type === type &&
+          edge.spec.bareSpec === spec.bareSpec
+        ) {
+          if (to && to !== edge.to) {
+            edge.to = to
+            edge.to.edgesIn.add(edge)
+          }
+          return edge
+        }
+        this.edges.delete(edge)
+      }
+      const edge: EdgeLike = {
+        from,
+        name: spec.name,
+        spec,
+        to,
+        type,
+      }
+      from.edgesOut.set(spec.name, edge)
+      to?.edgesIn.add(edge)
+      this.edges.add(edge)
+      return edge
+    },
+    addNode(id?: DepID, manifest?: NormalizedManifest) {
+      const graph = this as GraphLike
+      if (!id) throw error('id is required', { manifest })
+      if (!manifest) throw error('manifest is required')
+      const node: NodeLike = {
+        id,
+        name: manifest.name,
+        version: manifest.version,
+        manifest,
+        edgesIn: new Set(),
+        edgesOut: new Map(),
+        workspaces: undefined,
+        graph,
+        importer: false,
+        mainImporter: false,
+        projectRoot: graph.projectRoot,
+        dev: false,
+        optional: false,
+        options: transfered.lockfile.options,
+        confused: false,
+        setResolved() {},
+        setConfusedManifest(
+          fixed: NormalizedManifest,
+          confused?: NormalizedManifest,
+        ) {
+          this.manifest = fixed
+          this.rawManifest = confused
+          this.confused = true
+        },
+        maybeSetConfusedManifest() {},
+        toJSON() {
+          return {
+            id: this.id,
+            name: this.name,
+            version: this.version,
+            location: this.location,
+            importer: this.importer,
+            manifest: this.manifest,
+            projectRoot: this.projectRoot,
+            integrity: this.integrity,
+            resolved: this.resolved,
+            dev: this.dev,
+            optional: this.optional,
+            confused: this.confused,
+            ...(this.confused ?
+              { rawManifest: this.rawManifest }
+            : undefined),
+          }
+        },
+        toString() {
+          return stringifyNode(this)
+        },
+      }
+      this.nodes.set(node.id, node)
+      if (node.name) {
+        const allNodesWithThisName =
+          this.nodesByName.get(node.name) ?? new Set()
+        allNodesWithThisName.add(node)
+        this.nodesByName.set(node.name, allNodesWithThisName)
+      }
+      return node
+    },
+  }
+
+  // configure importer nodes
+  for (const importer of transfered.importers) {
+    const id = importer.id as DepID
+    const graph = maybeGraph
+    const node: NodeLike = graph.addNode(id, importer.manifest)
+    node.importer = true
+    node.mainImporter = importer.id === mainImporter?.id
+    node.location = importer.location
+    node.integrity = importer.integrity
+    node.resolved = importer.resolved
+    /* c8 ignore next 2 */
+    node.dev = importer.dev ?? false
+    node.optional = importer.optional ?? false
+    node.confused = false
+    node.toJSON = () => ({
+      id: node.id,
+      name: node.name,
+      version: node.version,
+      location: node.location,
+      importer: node.importer,
+      manifest: node.manifest,
+      projectRoot: node.projectRoot,
+      integrity: node.integrity,
+      resolved: node.resolved,
+      dev: node.dev,
+      optional: node.optional,
+      confused: node.confused,
+    })
+    node.toString = () => stringifyNode(node)
+    // should set the main importer in the first iteration
+    graph.mainImporter ??= node
+    graph.importers.add(node)
+  }
+
+  // populate nodes and edges from loaded data
+  const graph = maybeGraph as GraphLike
+  const specOptions = loadSpecOptions(transfered.lockfile)
+
+  loadNodes(graph, transfered.lockfile.nodes, specOptions, graph)
+  loadEdges(graph, transfered.lockfile.edges, specOptions)
+
+  const securityArchive = SecurityArchive.load(
+    transfered.securityArchive,
+  )
+
+  // validates that all npm-ecosystem nodes have a security archive entry
+  if (securityArchive) {
+    securityArchive.ok = true
+    for (const node of graph.nodes.values()) {
+      if (usesNpmRegistry(node) && !securityArchive.has(node.id)) {
+        securityArchive.ok = false
+        break
+      }
+    }
+  }
+
+  return {
+    graph,
+    specOptions,
+    securityArchive,
+  }
+}

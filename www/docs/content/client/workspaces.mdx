@@ -1,0 +1,286 @@
+---
+title: Using Workspaces in a Monorepo Project with nrz
+sidebar:
+  label: Workspaces
+  order: 6
+---
+
+## Using Workspaces in a Monorepo Project with nrz
+
+When using the `nrz` client, you can define multiple different
+workspaces in a single monorepo project.
+
+The `nrz` client supports workspaces defined by glob patterns, and you
+can also define named groups to perform nrz operations on a specific
+subset of your workspaces.
+
+## Getting Started
+
+It's possible to use the `nrz init` command to create new workspaces
+by using the `--workspace` (or `-w` for short) option, e.g:
+
+```bash
+$ nrz init -w packages/a
+```
+
+This will ensure the folder is created and a `package.json` file is
+added to it, along with adding the required configuration to the
+`nrz.json` file if needed.
+
+### Manually defining Workspaces
+
+If you want to set up new workspaces, it's also possible to use the
+`nrz.json` file in the root of your project with a `workspaces` field.
+
+At its most explicit, the `workspaces` field can be an object with
+`group` names as the keys, and either a single string or an array of
+strings to identify the workspace paths in each group. The strings are
+interpreted as glob patterns, so if a path has glob special characters
+that should be interpreted literally, use the `\` character to escape
+them.
+
+For example:
+
+```json
+{
+  "workspaces": {
+    "www": "www/*"
+    "utils": [
+      "utils/*",
+      "www/utils"
+    ],
+  }
+}
+```
+
+It's perfectly fine for a workspace to be found in multiple groups,
+like the `www/utils` workspace in the example above.
+
+If that level of group detail isn't needed, then you can also just
+point the `workspaces` field at a string or array of string glob
+patterns. For example:
+
+```json
+{
+  "workspaces": ["www/*", "utils/*"]
+}
+```
+
+Or even:
+
+```json
+{
+  "workspaces": "packages/*"
+}
+```
+
+### Using npm/yarn workspaces from package.json
+
+If your project already declares workspaces the npm or yarn way, in
+the `workspaces` field of the root `package.json`, nrz reads them, and
+`nrz install` saves them to `nrz.json` (see
+[Saving workspaces to nrz.json](#saving-workspaces-to-nrzjson)):
+
+```json
+{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
+```
+
+The yarn-classic object form is also understood, including the
+`nohoist` key, which nrz parses and ignores (and drops when saving to
+`nrz.json`):
+
+```json
+{
+  "workspaces": {
+    "packages": ["packages/*"]
+  }
+}
+```
+
+`nrz.json` takes precedence: if it has a `workspaces` field, that is
+the definition nrz uses and the `package.json` field is ignored
+entirely. The two are **not** merged. Note that this is keyed on the
+field, not the file — a `nrz.json` that exists but says nothing about
+workspaces still falls through to `package.json`.
+
+Named groups are a `nrz.json` feature. They are deliberately rejected
+in `package.json`, because a `package.json` using them would be
+meaningless to every other package manager:
+
+```json
+{
+  "workspaces": {
+    "apps": "apps/*"
+  }
+}
+```
+
+Putting that in `package.json` is an error; put it in `nrz.json`
+instead.
+
+### Using pnpm workspaces from pnpm-workspace.yaml
+
+If neither `nrz.json` nor the root `package.json` declares workspaces,
+nrz reads the `packages` list of a root `pnpm-workspace.yaml`, and
+`nrz install` saves it to `nrz.json`:
+
+```yaml
+packages:
+  - 'packages/*'
+  - '!packages/legacy'
+```
+
+Other keys in that file are ignored, so `catalog:` specs still need a
+`catalog` in `nrz.json` (see [Catalogs](/client/catalogs)). Only a
+plain list of strings is read; anything else (anchors, tags, unquoted
+`!` patterns) makes nrz ignore the whole list, so declare the
+workspaces in `nrz.json` instead. Workspace names must be unique (pnpm
+allows duplicates); otherwise list workspaces in `nrz.json` without
+them.
+
+### Saving workspaces to nrz.json
+
+`nrz install` copies workspaces read from `package.json` or
+`pnpm-workspace.yaml` to the `workspaces` field of the project
+`nrz.json` (created if missing, other fields kept), in order, `!`
+exclusions included, and prints:
+
+```
+Saved workspaces from pnpm-workspace.yaml to nrz.json
+```
+
+The source file is left untouched, so other tools keep reading it. An
+existing `workspaces` field in `nrz.json` is never overwritten.
+`nrz init -w` copies them the same way before adding a workspace
+outside these globs. Nothing is written by `nrz ci`,
+`--frozen-lockfile` or `--expect-lockfile`. Commit the updated
+`nrz.json`.
+
+From then on `nrz.json` takes precedence: later edits to
+`package.json` or `pnpm-workspace.yaml` workspaces are ignored by nrz,
+so update `nrz.json` as well. To keep the original file as the only
+source, opt out before the first `nrz install` (or remove the saved
+`workspaces` field) with `--no-migrate-workspaces` or in `nrz.json`:
+
+```json
+{
+  "config": { "migrate-workspaces": false }
+}
+```
+
+`nrz ci` reads workspaces from `nrz.json` only, even with
+`--no-migrate-workspaces`. If they are declared only in `package.json`
+or `pnpm-workspace.yaml`, it warns and ignores them; run `nrz install`
+and commit `nrz.json` first.
+
+### Excluding paths
+
+A pattern beginning with `!` excludes the paths it matches, in
+`nrz.json`, `package.json` and `pnpm-workspace.yaml`:
+
+```json
+{
+  "workspaces": ["packages/*", "!packages/legacy"]
+}
+```
+
+Following npm's behavior, `!packages/legacy` excludes only that
+directory, while `!packages/legacy/**` excludes everything beneath it
+as well. A later positive pattern overrides an earlier exclusion, so
+`["packages/**", "!packages/b/**", "packages/b/a"]` keeps
+`packages/b/a`. To match a directory whose name genuinely begins with
+`!`, escape it as `\!`.
+
+## Working with Workspaces
+
+The simplest way to peform an option on a single workspace is to just
+`cd` into that folder, and then use whatever nrz operation as you
+would normally. Any installations will be added as dependencies to
+that single workspace, scripts will be run in that workspace only,
+etc.
+
+If you want to work with _multiple_ workspaces at one time, there are
+a few options.
+
+### Running Commands on All Workspaces
+
+You can use the `-r --recursive` flag to run a script across all
+workspaces in the monorepo project.
+
+For example:
+
+```bash
+$ nrz run --recursive test
+```
+
+will run the `test` script in all workspaces.
+
+### Running Commands on Specific Workspaces By Path
+
+To run a command on certain workspaces by their path, you can use the
+`-w<path> --workspace=<path>` configuration option.
+
+For example, to run the tests on certain workspaces by path name, you
+can run this:
+
+```bash
+$ nrz --workspace=src/* --workspace=www/components run test
+```
+
+would run the `test` command on all the workspaces under `src/*`, as
+well as the `www/components` workspace.
+
+Note that glob patterns may have to be quoted so that the shell does
+not expand them incorrectly.
+
+### Running Commands on Specific Workspaces By Group
+
+If you had configured your workspaces into named groups, then you can
+reference those groups using the `-g<name> --workspace-group=<name>`
+configuration option.
+
+For example, with the `nrz.json` defined above:
+
+```json
+{
+  "workspaces": {
+    "www": "www/*"
+    "utils": [
+      "utils/*",
+      "www/utils"
+    ],
+  }
+}
+```
+
+we could do:
+
+```bash
+$ nrz -g utils run test
+```
+
+to run tests on all our `utils` workspaces.
+
+### Execution Order
+
+Commands that target multiple workspaces (`run`, `run-exec`, `exec`,
+`exec-local`, `version`, `pack`, `publish`, `pkg`) process them in
+dependency order: a workspace comes after the workspaces it depends
+on. This applies to `--recursive`, `--workspace`, `--workspace-group`
+and `--scope`.
+
+With `--scope`, query order is kept where possible (a dependency may
+move ahead of unrelated matches), and dependencies through workspaces
+the query did not match still count. `--workspace` and
+`--workspace-group` only see dependencies among the selected
+workspaces. Cycles are broken, so order within a cycle is not
+guaranteed.
+
+## See also
+
+- [Affected Dependencies](/client/affected) — running scripts on only
+  the workspaces a change could have broken

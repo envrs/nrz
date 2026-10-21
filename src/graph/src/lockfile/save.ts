@@ -1,25 +1,36 @@
-import { type DepID } from '@nrz/dep-id'
 import {
-  defaultRegistry,
-  defaultRegistries,
-  defaultGitHosts,
+  expandNormalizedManifestSymbols,
+  isRecordStringString,
+} from '@nrz/types'
+import {
   defaultGitHostArchives,
+  defaultGitHosts,
+  defaultJsrRegistries,
+  defaultRegistries,
+  defaultRegistryName,
   defaultScopeRegistries,
-  type SpecOptions,
 } from '@nrz/spec'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { type Edge } from '../edge.ts'
-import { type Graph } from '../graph.ts'
-import { type Node } from '../node.ts'
 import {
   getFlagNumFromNode,
-  type LockfileData,
-  type LockfileEdgeKey,
-  type LockfileEdges,
-  type LockfileEdgeValue,
-  type LockfileNode,
+  getBuildStateFromNode,
+  LOCKFILE_VERSION,
 } from './types.ts'
+import type { DepID } from '@nrz/dep-id'
+import type { SpecOptions } from '@nrz/spec'
+import type { Edge } from '../edge.ts'
+import type { Graph } from '../graph.ts'
+import type { Node } from '../node.ts'
+import type {
+  LockfileData,
+  LockfileEdgeKey,
+  LockfileEdges,
+  LockfileEdgeValue,
+  LockfileNode,
+} from './types.ts'
+import type { GraphModifier } from '../modifiers.ts'
+import { error } from '@nrz/error-cause'
 
 export type SaveOptions = SpecOptions & {
   /**
@@ -27,15 +38,29 @@ export type SaveOptions = SpecOptions & {
    */
   graph: Graph
   /**
+   * The graph modifiers helper object.
+   */
+  modifiers?: GraphModifier
+  /**
    * Should it save manifest data in the lockfile?
    */
   saveManifests?: boolean
+  /**
+   * Should it save build state data in the lockfile?
+   */
+  saveBuildData?: boolean
+  /**
+   * Should it throw an error if a manifest is missing?
+   */
+  throwOnMissingManifest?: boolean
 }
 
 const formatNodes = (
   nodes: Iterable<Node>,
   saveManifests?: boolean,
+  saveBuildData?: boolean,
   registry?: string,
+  throwOnMissingManifest?: boolean,
 ) => {
   // we do not store importers in the lockfile, though we do store
   // their edges. when we load, we always read workspaces/main fresh.
@@ -47,20 +72,15 @@ const formatNodes = (
 
   const res: Record<DepID, LockfileNode> = {}
   for (const node of orderedNodes) {
+    // when no registry is configured, nothing can be reconstructed on
+    // load, so every resolved value has to be persisted
     const customRegistry =
-      node.resolved && registry && !node.resolved.startsWith(registry)
+      node.resolved &&
+      (!registry || !node.resolved.startsWith(registry))
     const resolved = customRegistry ? node.resolved : undefined
     // if it's in a location other than the default, stash that
     const location =
-      (
-        node.id.startsWith('file') ||
-        node.location.endsWith(
-          '/node_modules/.nrz/' +
-            node.id +
-            '/node_modules/' +
-            node.name,
-        )
-      ) ?
+      node.id.startsWith('file') || node.inNrzStore() ?
         undefined
       : node.location
 
@@ -71,7 +91,9 @@ const formatNodes = (
       lockfileNode[2] = node.integrity
     }
 
-    if (resolved) {
+    // skip resolved for remote nodes since
+    // these are already part of the dep id
+    if (resolved && !node.id.startsWith('remote')) {
       lockfileNode[3] = resolved
     }
 
@@ -79,8 +101,37 @@ const formatNodes = (
       lockfileNode[4] = location
     }
 
-    if (saveManifests) {
-      lockfileNode[5] = node.manifest
+    if (saveManifests && node.manifest) {
+      lockfileNode[5] = expandNormalizedManifestSymbols(node.manifest)
+
+      if (node.confused && node.rawManifest) {
+        lockfileNode[6] = expandNormalizedManifestSymbols(
+          node.rawManifest,
+        )
+      }
+    }
+
+    // Throw an error if a manifest is missing and the option is enabled
+    if (throwOnMissingManifest && !node.manifest) {
+      throw error(`Missing manifest for node ${node.id}.`)
+    }
+
+    // Always save platform data for optional dependencies if available
+    if (node.optional && node.platform) {
+      lockfileNode[7] = node.platform
+    }
+
+    // Save bin data if available
+    if (node.bins && Object.keys(node.bins).length) {
+      lockfileNode[8] = node.bins
+    }
+
+    // Save build state data if requested
+    if (saveBuildData) {
+      const buildState = getBuildStateFromNode(node)
+      if (buildState !== undefined) {
+        lockfileNode[9] = buildState
+      }
     }
 
     res[node.id] = lockfileNode
@@ -108,11 +159,6 @@ const formatEdges = (edges: Set<Edge>): LockfileEdges =>
       ]),
   )
 
-const isRecordStringString = (
-  registries: unknown,
-): registries is Record<string, string> =>
-  !(!registries || typeof registries === 'string')
-
 const removeDefaultItems = (
   defaultItems: Record<string, string>,
   items: Record<string, string>,
@@ -128,12 +174,19 @@ const removeDefaultItems = (
 
 export const lockfileData = ({
   graph,
+  catalog,
+  catalogs,
   'git-hosts': gitHosts,
   'git-host-archives': gitHostArchives,
+  modifiers,
   registry,
   registries,
+  'default-registry-alias': defaultRegistryAlias,
   saveManifests,
-  'scope-registries': scopeRegistries,
+  saveBuildData,
+  'scoped-registries': scopeRegistries,
+  'jsr-registries': jsrRegistries,
+  throwOnMissingManifest,
 }: SaveOptions): LockfileData => {
   const cleanGitHosts =
     isRecordStringString(gitHosts) ?
@@ -143,6 +196,10 @@ export const lockfileData = ({
     isRecordStringString(gitHostArchives) ?
       removeDefaultItems(defaultGitHostArchives, gitHostArchives)
     : undefined
+  const cleanModifiers =
+    modifiers && isRecordStringString(modifiers.config) ?
+      modifiers.config
+    : undefined
   const cleanRegistries =
     isRecordStringString(registries) ?
       removeDefaultItems(defaultRegistries, registries)
@@ -151,17 +208,34 @@ export const lockfileData = ({
     isRecordStringString(scopeRegistries) ?
       removeDefaultItems(defaultScopeRegistries, scopeRegistries)
     : undefined
-  const hasItems = (clean: Record<string, string> | undefined) =>
+  const cleanJsrRegistries =
+    isRecordStringString(jsrRegistries) ?
+      removeDefaultItems(defaultJsrRegistries, jsrRegistries)
+    : undefined
+  const hasItems = (clean: Record<string, unknown> | undefined) =>
     clean && Object.keys(clean).length
   return {
+    lockfileVersion: LOCKFILE_VERSION,
     options: {
+      ...(hasItems(cleanModifiers) ?
+        { modifiers: cleanModifiers }
+      : {}),
+      ...(hasItems(catalog) ? { catalog } : {}),
+      ...(hasItems(catalogs) ? { catalogs } : {}),
       ...(hasItems(cleanScopeRegistries) ?
-        { 'scope-registries': cleanScopeRegistries }
+        { 'scoped-registries': cleanScopeRegistries }
       : undefined),
-      ...(registry !== undefined && registry !== defaultRegistry ?
-        { registry }
+      ...(hasItems(cleanJsrRegistries) ?
+        { 'jsr-registries': cleanJsrRegistries }
       : undefined),
-      ...(hasItems(registries) ?
+      ...(registry !== undefined ? { registry } : undefined),
+      ...((
+        defaultRegistryAlias !== undefined &&
+        defaultRegistryAlias !== defaultRegistryName
+      ) ?
+        { 'default-registry-alias': defaultRegistryAlias }
+      : undefined),
+      ...(hasItems(cleanRegistries) ?
         { registries: cleanRegistries }
       : undefined),
       ...(hasItems(cleanGitHosts) ?
@@ -171,7 +245,13 @@ export const lockfileData = ({
         { 'git-host-archives': cleanGitHostArchives }
       : undefined),
     },
-    nodes: formatNodes(graph.nodes.values(), saveManifests, registry),
+    nodes: formatNodes(
+      graph.nodes.values(),
+      saveManifests,
+      saveBuildData,
+      registry,
+      throwOnMissingManifest,
+    ),
     edges: formatEdges(graph.edges),
   }
 }
@@ -193,26 +273,42 @@ export const saveData = (
   data: LockfileData,
   fileName: string,
   saveManifests = false,
-) => {
+): void => {
   const json = JSON.stringify(data, null, 2)
   const content = saveManifests ? json : extraFormat(json)
   writeFileSync(fileName, content)
 }
 
-export const save = (options: SaveOptions) => {
+export const save = (
+  options: Omit<SaveOptions, 'saveManifests'>,
+): void => {
   const { graph } = options
   const data = lockfileData({ ...options, saveManifests: false })
   const fileName = resolve(graph.projectRoot, 'nrz-lock.json')
-  return saveData(data, fileName, false)
+  saveData(data, fileName, false)
 }
 
-export const saveHidden = (options: SaveOptions) => {
+export const saveHidden = (
+  options: Omit<SaveOptions, 'saveManifests' | 'saveBuildData'>,
+): void => {
   const { graph } = options
-  const data = lockfileData({ ...options, saveManifests: true })
+  let data: LockfileData | undefined
+
+  try {
+    data = lockfileData({
+      ...options,
+      saveManifests: true,
+      saveBuildData: true,
+      throwOnMissingManifest: true,
+    })
+  } catch {}
+
+  if (!data) return
+
   const fileName = resolve(
     graph.projectRoot,
     'node_modules/.nrz-lock.json',
   )
   mkdirSync(dirname(fileName), { recursive: true })
-  return saveData(data, fileName, true)
+  saveData(data, fileName, true)
 }

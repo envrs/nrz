@@ -1,0 +1,183 @@
+---
+title: Authentication
+sidebar:
+  label: Authentication
+  order: 2
+---
+
+The nrz client supports logging into multiple different registries.
+When more than one is configured, scope an auth command to a specific
+one with [`nrz registry <alias> <command>`](/client/commands/registry)
+(for example `nrz registry main whoami`). See
+[Targeting a specific registry](/client/registries#targeting-a-specific-registry).
+
+If you're setting up a nrz.io account for the first time, start with
+[`nrz setup`](/client/registries#getting-started-with-nrz-setup) — it
+authenticates and configures your account's registry aliases in one
+step. The commands below cover logging into individual registries
+directly.
+
+## npm Web Login
+
+To log into a registry that supports the npm web login, such as the
+public npm registry, use the `nrz login` command.
+
+For example, to log into the default registry:
+
+<Code code="$ nrz login" title="Terminal" lang="bash" />
+
+To log into a custom registry that supports npm web login, run the
+same command, specifying the registry to log into:
+
+<Code
+  code="$ nrz login --registry=https://my-custom-registry.mycompany.local/"
+  title="Terminal"
+  lang="bash"
+/>
+
+To remove your authorization to a given registry, including attempting
+to destroy the token on the server side, use the `nrz logout` command.
+
+## Other Registries
+
+If your registry provides a bearer token that should be presented for
+authentication, it can be added using the `nrz token add` command.
+
+This will prompt you to paste in the token.
+
+To remove a token from nrz's keychain, use the `nrz token rm` command.
+Note that this will _not_ delete the token from the server; it only
+removes it from the local keychain store.
+
+A token follows redirects that stay on the same origin (scheme, host
+and port), even to paths outside the registry URL, and is dropped when
+a redirect changes origin.
+
+## CI (and Other Headless Environments)
+
+A token for the default registry can be provided in the `NRZ_TOKEN`
+environment variable.
+
+For example:
+
+```
+NRZ_TOKEN="helloworldtokendeadbeef" nrz install
+```
+
+To provide a token for other registries, set a `NRZ_TOKEN_{...}`
+variable named after the registry URL: drop the trailing `/` and
+replace each run of non-alphanumeric characters with `_`. The path is
+part of the name, e.g. `https://registry.nrz.io/acme/main/` becomes
+`NRZ_TOKEN_https_registry_nrz_io_acme_main`.
+
+```
+NRZ_TOKEN_https_my_custom_registry_mycompany_local="helloworldtokendeadbeef" nrz install
+```
+
+These variables apply to configured registries (`registry`,
+`registries`, `scoped-registries` and `jsr-registries`, built-in `gh`
+and `jsr` included) and to registries you've logged in to. The token
+is only sent to URLs under that registry URL (plus same-origin
+redirects, see above).
+
+## OIDC (OpenID Connect)
+
+If your CI provider supports OpenID Connect, nrz can authenticate with
+the registry automatically — no static tokens needed. nrz detects the
+CI environment, requests an OIDC ID token from the provider, and
+exchanges it with the registry for a short-lived publish token.
+Everything happens behind the scenes.
+
+Note that this requires a registry that supports OIDC trusted
+publishing. The nrz.io registry currently does not — use a
+[service token](/registry/publishing/ci) there.
+
+### Supported Providers
+
+- **GitHub Actions** — native support, no extra config
+- **GitLab CI** — via `NPM_ID_TOKEN` environment variable
+- **CircleCI** — via `NPM_ID_TOKEN` environment variable
+
+### GitHub Actions
+
+Add `id-token: write` to the job's permissions and nrz handles the
+rest:
+
+<Code
+  code={`jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nrz/setup-nrz@v1
+      - run: nrz publish`}
+  title="github-actions.yml"
+  lang="yaml"
+/>
+
+### GitLab CI / CircleCI
+
+Set the `NPM_ID_TOKEN` environment variable with the OIDC ID token
+provided by your CI platform. nrz reads it automatically and exchanges
+it for a publish token.
+
+### How It Works
+
+When you run `nrz publish`, nrz checks for an available OIDC ID token
+from the CI environment. It sends that token to the registry's token
+endpoint, which verifies the token and returns a short-lived
+credential. nrz uses that credential for the publish request. No
+tokens are stored, and nothing persists after the job finishes.
+
+### Fallback Behavior
+
+If OIDC isn't available — for example, the registry doesn't support
+it, or the required permissions aren't configured — nrz silently falls
+back to `NRZ_TOKEN` or keychain-based auth. No errors, no
+interruptions.
+
+## OTP
+
+One-time password (OTP) and MFA is supported for non-headless
+environments by opening a web browser or prompting on the command line
+for a OTP from your authenticator app, when the registry prompts for
+multifactor auth.
+
+For headless environments, an OTP token may be provided in the
+`NRZ_OTP` environment variable.
+
+## Why Environment Variables and Not Config
+
+The nrz client is designed to make it less likely that passwords are
+leaked in configuration files that might be checked into source
+control, which is a surprisingly common security failure mode.
+
+With nrz, sensitive information is _only_ kept in a tightly restricted
+keychain file, or in the environment. Of course, perfect security is
+often impossible, but it is nevertheless important to do our best to
+make it less likely that passwords can be leaked by accident.
+
+## Credential Management
+
+Each "identity" in nrz is a set of authentication tokens for known
+registries.
+
+For example, you could have a `corp` identity with the credentials
+that you use for the work on corporate projects, and a `personal`
+account with your own personal npm registry login credentials.
+
+Running `nrz config set identity=corp` will switch into `corp` mode.
+`nrz config set identity=personal` will switch into `personal` mode.
+
+This can also be set in a project root with a `nrz.json` config file,
+to make it easier to set per project. For example, you could have this
+in your `nrz.json` in the project root:
+
+```json
+{
+  "identity": "corp"
+}
+```

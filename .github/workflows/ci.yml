@@ -1,77 +1,152 @@
 name: CI
 
 on:
-  workflow_dispatch:
-    inputs:
-      filter:
-        description: 'run-script filter for tests'
   push:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full-matrix:
+        description: 'Whether to run the full matrix of environments for testing.'
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            src:
+              - '**'
+              - '!www/docs/**'
+              - '!**/*.md'
+  pre-check:
+    name: Pre-Check
+    runs-on: ubuntu-latest
+    outputs:
+      release-pr: ${{ steps.release-pr.outputs.value }}
+      full-matrix: ${{ steps.full-matrix.outputs.value }}
+    steps:
+      - name: Release PR
+        id: release-pr
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" && "$HEAD_REF" == "release" ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Matrix
+        id: full-matrix
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[
+            "${{ github.event_name }}" == "push" ||
+            "${{ steps.release-pr.outputs.value }}" == "true" ||
+            "${{ inputs.full-matrix }}" == "true"
+          ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[
+            "${{ github.event_name }}" == "pull_request" &&
+            "$PR_TITLE" == *"[ci full-matrix]"*
+          ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "value=false" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
-
+    # TODO: use filters to run a subset of lint/format
+    needs: pre-check
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-
       - name: Setup Nodejs
         uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
-          cache: pnpm
+          node-version: '^22.22.0'
           check-latest: true
 
-      - name: Install dependencies
-        run: pnpm install
+      - name: Setup nrz
+        uses: nrz/setup-nrz@v1
 
-      # TODO: if the lint job starts to take too long, it can be sped up
-      # by making any of the steps operate on only changed workspaces.
-      # For now any steps that dont use filters are run from the root
-      # on all workspaces.
+      - name: Install Dependencies with known good version of nrz
+        run: nrz install
+
+      - name: Build source version of nrz
+        run: node --run build:bundle
+
+      - name: Add source version of nrz to PATH
+        run: echo "$GITHUB_WORKSPACE/scripts/bins/bundle" >> $GITHUB_PATH
+
+      - name: Install Dependencies with source of nrz
+        run: |
+          # avoid changes from the bootstrap step. the released nrz used to
+          # bootstrap rewrites nrz-lock.json with its own idea of what the
+          # options should look like, which would otherwise be attributed to
+          # the source build below.
+          ./scripts/rm-node-nodules.ts
+          git checkout -- nrz-lock.json
+          # re-install dependencies
+          nrz install --view=human
+
       - name: Formatting
-        run: pnpm run format:check
         id: format
         continue-on-error: true
+        run: xvn format:check
 
       - name: Linting
-        run: pnpm run lint:check
         id: lint
         continue-on-error: true
+        run: xvn lint:check
 
       - name: Dependencies
-        run: node ./scripts/check-deps.js
         id: deps
         continue-on-error: true
+        run: xvn deps:check
 
       - name: Docs
-        run: pnpm -F docs typedoc:check
         id: docs
         continue-on-error: true
+        run: |
+          xvn --workspace ./www/docs typedoc:check
+          xvn --workspace ./www/docs lint:mdx
 
       - name: Consistent Workspaces
+        id: workspaces
+        continue-on-error: true
         run: |
-          node ./scripts/consistent-package-json.js
+          xvn fix:pkg
           if [ -n "$(git status --porcelain)" ]; then
             git diff
             exit 1
           fi
-        id: workspaces
+
+      - name: Knip
+        id: knip
         continue-on-error: true
+        run: xvn knip
 
       - name: Check Results
         run: |
@@ -81,6 +156,7 @@ jobs:
             [deps]="${{ steps.deps.outcome }}"
             [docs]="${{ steps.docs.outcome }}"
             [workspaces]="${{ steps.workspaces.outcome }}"
+            [knip]="${{ steps.knip.outcome }}"
           )
           STATUS=0
           for STEP in "${!OUTCOMES[@]}"; do
@@ -92,9 +168,55 @@ jobs:
           done
           exit $STATUS
 
+  query-deps:
+    name: Dependency Checks
+    needs: pre-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '^22.22.0'
+          check-latest: true
+
+      - name: Setup nrz
+        uses: nrz/setup-nrz@v1
+
+      - name: Install Dependencies
+        run: nrz install
+
+      - name: Check for malware
+        run: |
+          nrz query ':malware'
+          nrz query ':malware' --expect-results=0
+
+      - name: Check for copyleft licenses
+        run: |
+          nrz query '*:license(copyleft):not(:is([license=MIT],[license=LGPL-3.0-or-later],[license=MPL-2.0],[license=EPL-2.0]))'
+          nrz query '*:license(copyleft):not(:is([license=MIT],[license=LGPL-3.0-or-later],[license=MPL-2.0],[license=EPL-2.0]))' --expect-results=0
+
+      - name: Check for missing licenses
+        run: |
+          nrz query '*:license(none)'
+          nrz query '*:license(none)' --expect-results=0
+
+      # TODO: re-enable this when we remove GUI/VSR from the project
+      # - name: Check for deprecated packages
+      #   run: |
+      #     nrz query '*:deprecated'
+      #     nrz query '*:deprecated' --expect-results=0
+
   test:
     name: Test - ${{ matrix.platform.name }} - ${{ matrix.node-version }}
-
+    needs: [pre-check, changes]
+    if: needs.changes.outputs.src == 'true'
+    runs-on: ${{ matrix.platform.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.platform.shell }}
     strategy:
       matrix:
         node-version: [22.x]
@@ -105,70 +227,127 @@ jobs:
           - name: macOS
             os: macos-latest
             shell: bash
-          - name: macOS Intel
-            os: macos-13
-            shell: bash
           - name: Windows
             os: windows-latest
             shell: bash
-          - name: Windows Powershell
-            os: windows-latest
-            shell: powershell
         exclude:
-          - platform: ${{ fromJSON(github.event_name == 'pull_request' && '{"name":"macOS","os":"macos-latest","shell":"bash"}') }}
-          - platform: ${{ fromJSON(github.event_name == 'pull_request' && '{"name":"macOS Intel","os":"macos-13","shell":"bash"}') }}
-          - platform: ${{ fromJSON(github.event_name == 'pull_request' && '{"name":"Windows Powershell","os":"windows-latest","shell":"powershell"}') }}
+          - platform: ${{ fromJSON(needs.pre-check.outputs.full-matrix == 'false' && '{"name":"macOS","os":"macos-latest","shell":"bash"}') }}
       fail-fast: false
-
-    runs-on: ${{ matrix.platform.os }}
-    defaults:
-      run:
-        shell: ${{ matrix.platform.shell }}
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Fetch base ref
-        if: github.event_name == 'pull_request'
-        run: git fetch --no-tags --prune --depth=1 origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-
-      - name: Use Nodejs ${{ matrix.node-version }}
+      - name: Setup Nodejs
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
+          node-version: '^22.22.0'
           check-latest: true
 
-      - name: Set run-script filters
-        id: filters
-        shell: bash
-        run: ./scripts/run-script-filter "${{ github.event_name }}" "${{ inputs.filter || github.base_ref }}"
+      - name: Setup nrz
+        uses: nrz/setup-nrz@v1
 
-      - name: Install dependencies
-        if: steps.filters.outputs.prepare
-        run: pnpm ${{ steps.filters.outputs.prepare }} install --ignore-scripts
+      - name: Install Dependencies with known good version of nrz
+        run: nrz install
+
+      - name: Build source version of nrz
+        run: node --run build:bundle
+
+      - name: Add source version of nrz to PATH
+        run: echo "$GITHUB_WORKSPACE/scripts/bins/bundle" >> $GITHUB_PATH
+
+      - name: Install Dependencies with source of nrz
+        run: |
+          # avoid changes from the bootstrap step. the released nrz used to
+          # bootstrap rewrites nrz-lock.json with its own idea of what the
+          # options should look like, which would otherwise be attributed to
+          # the source build below.
+          ./scripts/rm-node-nodules.ts
+          git checkout -- nrz-lock.json
+          # re-install dependencies
+          nrz install --view=human
+
+      - name: Fix node-pty spawn-helper permissions
+        if: matrix.platform.name == 'macOS'
+        run: |
+          # node-pty@1.1.0 ships prebuilt spawn-helper binaries for macOS with
+          # 0644 permissions in the npm tarball. The binary needs execute permission
+          # for posix_spawnp to work in the smoke-test TTY tests.
+          chmod +x node_modules/.nrz/~npm~node-pty@*/node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
 
       - name: Prepare
-        if: steps.filters.outputs.prepare
-        run: pnpm ${{ steps.filters.outputs.prepare }} prepare
+        run: xvn --recursive prepare
 
       - name: Run Tests
-        if: steps.filters.outputs.test
+        run: xvn --recursive test
+
+  # clonefile(2) through node:ffi needs macOS and a Node with node:ffi,
+  # which the matrix above never runs on PRs: everywhere else the tests
+  # only see a mock of it
+  clonefile:
+    name: Test - macOS clonefile - 26.x
+    needs: [pre-check, changes]
+    if: needs.changes.outputs.src == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26.x'
+          check-latest: true
+
+      - name: Setup nrz
+        uses: nrz/setup-nrz@v1
+
+      - name: Install Dependencies with known good version of nrz
+        run: nrz install
+
+      - name: Build source version of nrz
+        run: node --run build:bundle
+
+      - name: Add source version of nrz to PATH
+        run: echo "$GITHUB_WORKSPACE/scripts/bins/bundle" >> $GITHUB_PATH
+
+      - name: Install Dependencies with source of nrz
         run: |
-          pnpm config set enable-pre-post-scripts false --location=project
-          pnpm ${{ steps.filters.outputs.test }} --no-bail --aggregate-output test
-          pnpm ${{ steps.filters.outputs.test }} --no-bail --aggregate-output posttest
+          # see the test job
+          ./scripts/rm-node-nodules.ts
+          git checkout -- nrz-lock.json
+          nrz install --view=human
+
+      - name: Prepare
+        run: xvn --recursive prepare
+
+      - name: Run Tests
+        run: |
+          xvn --workspace src/tar test
+          xvn --workspace infra/smoke-test test test/cache-unzip.ts
+
+  on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.pre-check.outputs.release-pr == 'true' && (needs.lint.result == 'failure' || needs.test.result == 'failure') }}
+    needs:
+      - pre-check
+      - lint
+      - test
+    steps:
+      - name: Slack Notify
+        uses: rtCamp/action-slack-notify@v2.3.3
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_GITHUB_ALERTS_WEBHOOK_URL }}
+          SLACK_USERNAME: nrzops
+          SLACK_CHANNEL: github-alerts
+          SLACK_ICON: https://github.com/khulnasoft.png
+          SLACK_COLOR: failure
+          SLACK_FOOTER: ''
+          SLACKIFY_MARKDOWN: true
+          MSG_MINIMAL: 'actions url,commit'
+          SLACK_TITLE: ${{ github.event.pull_request.title }} Lint/Test Failed
+          SLACK_MESSAGE: |
+            [PR ${{ github.event.number }}](https://github.com/${{ github.repository }}/pull/${{ github.event.number }})
+            Lint: ${{ needs.lint.result == 'failure' && ':x:' || ':white_check_mark:' }}
+            Test: ${{ needs.test.result == 'failure' && ':x:' || ':white_check_mark:' }}

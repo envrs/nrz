@@ -1,10 +1,8 @@
-import { type PackageJson } from '@nrz/package-json'
-import { type RollbackRemove } from '@nrz/rollback-remove'
-import { type Manifest } from '@nrz/types'
+import type { RollbackRemove } from '@nrz/rollback-remove'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { type Diff } from '../../src/diff.ts'
-import { type Edge } from '../../src/edge.ts'
+import type { Diff } from '../../src/diff.ts'
+import type { Edge } from '../../src/edge.ts'
 
 t.test('add some edges', async t => {
   const projectRoot = t.testdirName
@@ -12,12 +10,12 @@ t.test('add some edges', async t => {
   const { addEdges } = await t.mockImport<
     typeof import('../../src/reify/add-edges.ts')
   >('../../src/reify/add-edges.ts', {
-    '../../src/reify/add-edge.js': {
+    '../../src/reify/add-edge.ts': {
       addEdge: async (
         edge: Edge,
-        _mani: Manifest,
         _scurry: PathScurry,
         _remover: RollbackRemove,
+        _bins?: Record<string, string>,
       ) => {
         reified.push(edge)
       },
@@ -26,14 +24,11 @@ t.test('add some edges', async t => {
 
   const a = {
     to: {
-      // no manifest
-      resolvedLocation() {
-        return 'some/path'
-      },
+      bins: {},
     },
   }
   const b = {
-    to: { manifest: {} },
+    to: { bins: {} },
   }
   const diff = {
     edges: {
@@ -47,13 +42,11 @@ t.test('add some edges', async t => {
     },
   } as unknown as Diff
   const scurry = new PathScurry(projectRoot)
-  await Promise.all(
-    addEdges(
-      diff,
-      { read: () => ({}) } as unknown as PackageJson,
-      scurry,
-      {} as unknown as RollbackRemove,
-    ),
+  const actions = addEdges(
+    diff,
+    scurry,
+    {} as unknown as RollbackRemove,
   )
+  await Promise.all(actions.map(fn => fn()))
   t.strictSame(new Set(reified), new Set([a, b]))
 })

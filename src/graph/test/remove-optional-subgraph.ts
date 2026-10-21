@@ -1,10 +1,13 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
-import { type Manifest, type DependencyTypeShort } from '@nrz/types'
+import type {
+  NormalizedManifest,
+  DependencyTypeShort,
+} from '@nrz/types'
 import t from 'tap'
 import { Edge } from '../src/edge.ts'
 import { Graph } from '../src/graph.ts'
-import { type Node } from '../src/node.ts'
+import type { Node } from '../src/node.ts'
 import {
   findOptionalSubgraph,
   removeOptionalSubgraph,
@@ -15,7 +18,7 @@ const pp = (
   fromNode: Node,
   depType: DependencyTypeShort,
   spec: Spec,
-  manifest?: Manifest,
+  manifest?: NormalizedManifest,
 ): Node => {
   const node = graph.placePackage(fromNode, depType, spec, manifest)
   if (!node) throw new Error('failed to place package')

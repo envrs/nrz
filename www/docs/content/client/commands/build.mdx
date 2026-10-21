@@ -1,0 +1,220 @@
+---
+title: nrz build
+sidebar:
+  label: build
+---
+
+Usage:
+
+<Code code="$ nrz build [options]" title="Terminal" lang="bash" />
+
+The `nrz build` command represents a fundamental shift in how
+JavaScript package managers handle post-installation tasks. By
+separating the build phase from installation, `nrz` gives you
+unprecedented control over which packages run lifecycle scripts in
+your project.
+
+## Breaking the Traditional Model
+
+Traditional package managers conflate installation with building –
+when you run `npm install`, packages are downloaded, extracted, and
+their lifecycle scripts run automatically. This monolithic approach
+has several drawbacks:
+
+- **Security risks**: Malicious packages can execute arbitrary code
+  during installation
+- **Limited control**: You can't selectively enable or disable scripts
+  for specific packages
+
+With `nrz`, we've reimagined this process as two distinct phases:
+
+1. **`nrz install`** – Downloads and extracts packages into
+   `node_modules`
+2. **`nrz build`** – Runs lifecycle scripts and performs additional
+   binary linking when needed
+
+This separation leverages the full power of our Dependency Selector
+Syntax (DSS) query language, allowing you to precisely control which
+packages are allowed to execute scripts.
+
+## Basic Usage
+
+The simplest workflow mirrors traditional package managers but with
+explicit steps:
+
+<Code
+  code={`# Step 1: Install packages (no scripts run)
+$ nrz install
+
+# Step 2: Build all packages that need building
+
+$ nrz build`} title="Terminal" lang="bash" />
+
+The build process is idempotent – it only performs work that's
+actually needed based on the current state of your dependency graph.
+If a package has already been built, `nrz build` skips it
+automatically.
+
+## Selective Building with DSS Queries
+
+The real power of `nrz build` comes from its integration with our
+query language. You can use any DSS selector to target specific
+packages as a positional argument to the `nrz build` command:
+
+<Code
+  code={`# Build only packages matching a specific target query
+$ nrz build ":root > *"
+
+# Build all packages except those marked as dev dependencies
+
+$ nrz build ":not(:dev)"`} title="Terminal" lang="bash" />
+
+### Using the target option
+
+Use the `--target` option to control precisely which packages to
+build. This gives you fine-grained control over script execution:
+
+<Code
+  code={`# Build only a specific package
+$ nrz build --target="#my-package"
+
+# Build everything except packages with no author
+
+$ nrz build --target=":not([author])"`} title="Terminal" lang="bash"
+/>
+
+If you want to persist target configuration you can store it to your
+`nrz.json` config file using the `nrz config` command:
+
+<Code
+  code={`# Persists a target query to the project nrz.json file
+$ nrz config set "command.build.target=<query>"
+
+# Build (with no args) uses the target info from nrz.json
+
+$ nrz build`} title="Terminal" lang="bash" />
+
+## Default build target
+
+By default `nrz build` uses a target value of
+`:scripts:not(:built):not(:malware)` targetting only not build
+packages that have lifecycle scripts (or a root `binding.gyp`) and do
+not have any malware alerts associated with it.
+
+npm registry packages with no security data, because the request timed
+out or Socket has not scanned them yet, are skipped and reported as
+not built. See
+[Understanding Security Data](/client/security#understanding-security-data).
+
+## Examples
+
+### Excluding malware and any package not from a specific scope
+
+In this example we're only allowing scripts from packages that do not
+have a `malware` alert associated to it and packages from a specific,
+well known scope name.
+
+<Code
+  code={`# Install without running any scripts
+$ nrz install
+
+# Look up if there are packages with malware alerts in my current install
+
+$ nrz query ":malware"
+
+# Look up what packages have build scripts and are not from a known scope
+
+$ nrz query ":scripts:not([name^=@myscope])"
+
+# Build only packages from my known scope that are NOT flagged as malware
+
+$ nrz build --target="\*[name^=@myscope]:not(:malware)"`}
+title="Terminal" lang="bash" />
+
+### Exact dependency names
+
+Maybe you only trust certain critical build tools to run scripts:
+
+<Code
+  code={`# Install packages
+$ nrz install
+
+# Only build the specific tools you trust
+
+$ nrz build --target="#esbuild, #typescript"`} title="Terminal"
+lang="bash" />
+
+## Options
+
+### `--target`
+
+The `--target` option accepts any valid DSS query to filter which
+packages to build:
+
+<Code
+  code={`# Build only direct dependencies
+$ nrz build --target=":root > *"
+
+# Build only packages with native bindings
+
+$ nrz build --target=":has-binary"`} title="Terminal" lang="bash" />
+
+It's usage is interchangeable with a positional argument, you should
+use either one or the other.
+
+### Build State Persistence
+
+The build state is tracked in nrz's `node_modules` metadata. Each
+package node stores its build state (`needed`, `built`, or `failed`).
+
+It's possible to retrieve the already built files using the `:built`
+query selector:
+
+<Code
+  code={`# Query all built packages
+$ nrz query ":built"
+
+# Return all packages that have scripts that needs to be built
+
+$ nrz query ":scripts:not(:built)"`} title="Terminal" lang="bash" />
+
+## Best Practices
+
+1. **Start with `nrz install`** – Always install first, then decide
+   what to build
+2. **Use queries for precision** – Target specific packages or
+   patterns rather than building everything
+3. **Persist your choices** – Save your target query to `nrz.json` for
+   consistent builds
+4. **Review regularly** – Periodically audit your target query to
+   ensure it matches your security requirements, continuing to
+   maintain and evolve it as you add and update packages
+
+## Migration from Traditional Package Managers
+
+If you're coming from npm, running install followed by build is the
+functional equivalent of the traditional package manager behavior:
+
+<Code
+  code={`# Traditional approach
+$ nrz install
+$ nrz build`}
+  title="Terminal"
+  lang="bash"
+/>
+
+The difference being that, as mentioned previously, `nrz build` by
+default protects you from running scripts of dependencies with known
+malware.
+
+If you are really trying to emulate the legacy npm behavior of running
+all lifecycle scripts, you can use the `--allow-scripts="*"` options
+to opt-in to all scripts and have the `nrz` client work as a
+traditional package manager would:
+
+<Code
+  code={`# Bad: Legacy npm-style installation (not recommended)
+$ nrz install --allow-scripts="*"`}
+  title="Terminal"
+  lang="bash"
+/>

@@ -1,5 +1,6 @@
 import t from 'tap'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
 import { Monorepo } from '@nrz/workspaces'
 import { Graph } from '../../src/graph.ts'
 import { jsonOutput } from '../../src/visualization/json-output.ts'
@@ -106,6 +107,7 @@ t.test('json-output', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print json output',
   )
@@ -115,23 +117,30 @@ t.test('actual graph', async t => {
   const graph = loadActualGraph(t)
   t.matchSnapshot(
     jsonOutput({
-      edges: [...graph.edges],
+      edges: [
+        ...graph.edges,
+        ...(graph.mainImporter.workspaces ?
+          graph.mainImporter.workspaces.values()
+        : []),
+      ],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print from an actual loaded graph',
   )
 
   t.test('selected packages', async t => {
     const edges = [...graph.edges].filter(e => e.name === 'baz')
-    const nodes = [
+    const importers = new Set([
       graph.nodes.get(
         joinDepIDTuple(['registry', 'custom', 'baz@1.0.0']),
       )!,
-    ]
+    ])
     t.matchSnapshot(
       jsonOutput({
         edges,
-        nodes,
+        nodes: [...graph.nodes.values()],
+        importers,
       }),
       'should print selected packages',
     )
@@ -145,8 +154,8 @@ t.test('workspaces', async t => {
   }
   const dir = t.testdir({
     'package.json': JSON.stringify(mainManifest),
-    'nrz-workspaces.json': JSON.stringify({
-      packages: ['./packages/*'],
+    'nrz.json': JSON.stringify({
+      workspaces: { packages: ['./packages/*'] },
     }),
     packages: {
       a: {
@@ -174,6 +183,7 @@ t.test('workspaces', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print json workspaces output',
   )
@@ -221,6 +231,7 @@ t.test('cycle', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print cycle json output',
   )
@@ -236,6 +247,7 @@ t.test('nameless package', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should fallback to printing package id if name is missing',
   )
@@ -263,6 +275,7 @@ t.test('versionless package', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should skip printing version number',
   )
@@ -276,20 +289,21 @@ t.test('aliased package', async t => {
       name: 'my-project',
       version: '1.0.0',
       dependencies: {
-        a: '^1.0.0',
+        a: 'npm:@myscope/foo@^1.0.0',
       },
     },
   })
   graph.placePackage(
     graph.mainImporter,
     'optional',
-    Spec.parse('a', '^1.0.0'),
+    Spec.parse('a', 'npm:@myscope/foo@^1.0.0'),
     { name: '@myscope/foo', version: '1.0.0' },
   )
   t.matchSnapshot(
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print both edge and node names',
   )
@@ -316,6 +330,7 @@ t.test('missing optional', async t => {
     jsonOutput({
       edges: [...graph.edges],
       nodes: [...graph.nodes.values()],
+      importers: graph.importers,
     }),
     'should print missing optional package',
   )

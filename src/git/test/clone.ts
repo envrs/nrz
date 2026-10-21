@@ -1,11 +1,12 @@
 import { Spec } from '@nrz/spec'
-import { spawn } from 'child_process'
-import fs from 'fs'
-import { join, resolve } from 'path'
-import t, { type Test } from 'tap'
-import { pathToFileURL } from 'url'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import { join, resolve } from 'node:path'
+import t from 'tap'
+import type { Test } from 'tap'
+import { pathToFileURL } from 'node:url'
 import { clone } from '../src/clone.ts'
-import { type GitOptions } from '../src/index.ts'
+import type { GitOptions } from '../src/index.ts'
 import { revs } from '../src/revs.ts'
 import { spawn as spawnGit } from '../src/spawn.ts'
 
@@ -26,7 +27,6 @@ const submodsRemote = `git://localhost:${port}/submodule-repo`
 const repo = resolve(me, 'repo')
 const repoUrl = String(pathToFileURL(repo))
 
-t.setTimeout(120000)
 t.test('create repo', { bail: true }, async () => {
   const git = (...cmd: string[]) => spawnGit(cmd, { cwd: repo })
   const write = (f: string, c: string) =>

@@ -8,6 +8,7 @@ import {
   gte,
   highest,
   inc,
+  intersects,
   lowest,
   lt,
   lte,
@@ -30,6 +31,7 @@ import {
   sortedLowest,
   sortMethod,
   stable,
+  subset,
   valid,
   validRange,
   Version,
@@ -44,11 +46,6 @@ t.test('parse, valid', t => {
   t.equal(valid('1.2.3'), true)
   t.equal(parse('adsfhasoe'), undefined)
   t.equal(valid('adsfhasoe'), false)
-
-  //@ts-expect-error
-  t.strictSame(parse({ toString: () => '1.2.3' }), v)
-  //@ts-expect-error
-  t.equal(valid({ toString: () => '1.2.3' }), true)
   t.end()
 })
 
@@ -64,6 +61,54 @@ t.test('parseRange, validRange', t => {
   t.equal(validRange('>=1.3'), true)
   t.strictSame(parseRange('>='), undefined)
   t.equal(validRange('>='), false)
+  t.end()
+})
+
+t.test('parseRange caching', t => {
+  const raw = '^7.6.5-unique-parse-range-cache-test'
+
+  const first = parseRange(raw)
+  const second = parseRange(raw)
+  t.equal(
+    first,
+    second,
+    'repeated calls with the same raw+includePrerelease return the cached Range instance',
+  )
+
+  const withPrerelease = parseRange(raw, true)
+  t.not(
+    withPrerelease,
+    first,
+    'includePrerelease flips the cache key to a distinct entry',
+  )
+  t.strictSame(
+    withPrerelease,
+    new Range(raw, true),
+    'cached entry with includePrerelease still parses correctly',
+  )
+
+  const invalid = '>=not-a-valid-range<<'
+  t.equal(
+    parseRange(invalid),
+    undefined,
+    'invalid raw string parses to undefined',
+  )
+  t.equal(
+    parseRange(invalid),
+    undefined,
+    'invalid result is itself cached and still returns undefined',
+  )
+
+  // force the bounded cache past its cap so the clear-on-cap branch runs
+  for (let i = 0; i < 4200; i++) {
+    parseRange(`>=1.0.${i} <2.0.${i}`)
+  }
+  t.strictSame(
+    parseRange(raw),
+    new Range(raw),
+    'still parses correctly for a fresh key after the cache has been cleared',
+  )
+
   t.end()
 })
 
@@ -303,5 +348,742 @@ t.test('extracting fields', t => {
 t.test('stable filter', t => {
   const versions = ['1.2.3-foo', '2.3.4', 'asdf']
   t.strictSame(stable(versions), ['2.3.4'])
+  t.end()
+})
+
+t.test('intersects', t => {
+  const cases: [string, string, boolean, boolean?][] = [
+    // Basic intersection cases
+    ['1.2.3', '1.2.3', true],
+    ['1.2.3', '1.2.4', false],
+
+    // Range intersections
+    ['^1.2.3', '^1.2.4', true], // Both allow 1.2.4 and above
+    ['^1.2.3', '^2.0.0', false], // No overlap
+    ['~1.2.3', '~1.2.4', true], // ~1.2.3 allows >=1.2.3 <1.3.0, ~1.2.4 allows >=1.2.4 <1.3.0, overlap from 1.2.4 to 1.3.0
+    ['~1.2', '~1.2.3', true], // ~1.2 allows 1.2.x, ~1.2.3 allows 1.2.x
+
+    // Greater than / less than
+    ['>1.2.3', '<2.0.0', true], // Overlap in between
+    ['>2.0.0', '<1.0.0', false], // No overlap
+    ['>=1.2.3', '<=1.2.3', true], // Exact match at boundary
+    ['>1.2.3', '<=1.2.3', false], // No overlap at boundary
+
+    // Complex ranges
+    ['>=1.2.3 <2.0.0', '>=1.5.0 <3.0.0', true], // Overlap from 1.5.0 to 2.0.0
+    ['>=1.2.3 <1.5.0', '>=1.5.0 <2.0.0', false], // No overlap
+    ['>=1.2.3 <1.5.1', '>=1.5.0 <2.0.0', true], // Overlap from 1.5.0 to 1.5.1
+
+    // OR ranges
+    ['1.2.3 || 2.0.0', '1.2.3', true], // First part matches
+    ['1.2.3 || 2.0.0', '2.0.0', true], // Second part matches
+    ['1.2.3 || 2.0.0', '1.5.0', false], // No match
+    ['1.2.3 || 2.0.0', '^1.2.0', true], // ^1.2.0 includes 1.2.3
+
+    // Any range
+    ['*', '1.2.3', true],
+    ['1.2.3', '*', true],
+    ['*', '*', true],
+
+    // X-ranges
+    ['1.2.x', '1.2.3', true],
+    ['1.2.x', '1.3.0', false],
+    ['1.x', '1.2.3', true],
+    ['1.x', '2.0.0', false],
+
+    // Prerelease versions
+    ['1.2.3-alpha', '1.2.3-alpha', true],
+    ['1.2.3-alpha', '1.2.3-beta', false],
+    ['^1.2.3-alpha', '1.2.3-alpha.1', true, true], // With prerelease flag
+    ['^1.2.3-alpha', '1.2.3-alpha.1', true, false], // Without prerelease flag - should still intersect as both have prereleases
+  ]
+
+  for (const [r1, r2, expected, includePrerelease] of cases) {
+    t.equal(
+      intersects(r1, r2, includePrerelease),
+      expected,
+      `intersects(${r1}, ${r2}${includePrerelease !== undefined ? `, ${includePrerelease}` : ''}) = ${expected}`,
+    )
+
+    // Test symmetry: intersects(a, b) === intersects(b, a)
+    t.equal(
+      intersects(r2, r1, includePrerelease),
+      expected,
+      `intersects(${r2}, ${r1}${includePrerelease !== undefined ? `, ${includePrerelease}` : ''}) = ${expected} (symmetric)`,
+    )
+  }
+
+  // Test with Range objects directly
+  t.test('with Range objects', t => {
+    const range1 = parseRange('^1.2.3')
+    const range2 = parseRange('^1.2.4')
+    t.ok(range1, 'parsed range1')
+    t.ok(range2, 'parsed range2')
+    if (range1 && range2) {
+      t.equal(
+        intersects(range1, range2),
+        true,
+        'Range objects intersect',
+      )
+    }
+    t.end()
+  })
+
+  // Test invalid ranges
+  t.test('invalid ranges', t => {
+    t.equal(
+      intersects('invalid', '1.2.3'),
+      false,
+      'invalid r1 returns false',
+    )
+    t.equal(
+      intersects('1.2.3', 'invalid'),
+      false,
+      'invalid r2 returns false',
+    )
+    t.equal(
+      intersects('invalid', 'alsoinvalid'),
+      false,
+      'both invalid returns false',
+    )
+    t.end()
+  })
+
+  // Test edge cases for better coverage
+  t.test('edge cases', t => {
+    // Test exact version conflicts
+    t.equal(
+      intersects('=1.2.3', '=1.2.4'),
+      false,
+      'different exact versions do not intersect',
+    )
+    t.equal(
+      intersects('=1.2.3', '=1.2.3'),
+      true,
+      'same exact versions intersect',
+    )
+
+    // Test bounds edge cases
+    t.equal(
+      intersects('>=1.2.3', '<1.2.3'),
+      false,
+      'no overlap between >= and <',
+    )
+    t.equal(
+      intersects('>1.2.3', '<=1.2.3'),
+      false,
+      'no overlap between > and <=',
+    )
+    t.equal(
+      intersects('>=1.2.3', '<=1.2.2'),
+      false,
+      'lower bound greater than upper bound',
+    )
+
+    // Test with exact version within bounds
+    t.equal(
+      intersects('>=1.2.0 <=1.2.5', '=1.2.3'),
+      true,
+      'exact version within bounds',
+    )
+    t.equal(
+      intersects('>=1.2.0 <1.2.3', '=1.2.3'),
+      false,
+      'exact version at exclusive upper bound',
+    )
+    t.equal(
+      intersects('>1.2.3 <=1.2.5', '=1.2.3'),
+      false,
+      'exact version at exclusive lower bound',
+    )
+
+    // Test more exact version edge cases for better coverage
+    t.equal(
+      intersects('=1.2.3', '>=1.2.4'),
+      false,
+      'exact version below lower bound',
+    )
+    t.equal(
+      intersects('=1.2.5', '<=1.2.4'),
+      false,
+      'exact version above upper bound',
+    )
+
+    // Test specific edge cases to hit uncovered lines
+    t.equal(
+      intersects('=1.2.3', '>1.2.3'),
+      false,
+      'exact version at exclusive lower bound',
+    )
+    t.equal(
+      intersects('=1.2.3', '<1.2.3'),
+      false,
+      'exact version at exclusive upper bound',
+    )
+
+    // Test cases based on node-semver fixtures to improve coverage
+    t.equal(
+      intersects('1.3.0', '>=1.3.0'),
+      true,
+      'Version matches lower bound',
+    )
+    t.equal(
+      intersects('1.3.0', '>1.3.0'),
+      false,
+      'Version at exclusive lower bound',
+    )
+    t.equal(
+      intersects('>=1.3.0', '1.3.0'),
+      true,
+      'Lower bound matches version',
+    )
+    t.equal(
+      intersects('>1.3.0', '1.3.0'),
+      false,
+      'Exclusive lower bound vs version',
+    )
+
+    // Same direction increasing
+    t.equal(
+      intersects('>1.3.0', '>1.2.0'),
+      true,
+      'Same direction increasing',
+    )
+    t.equal(
+      intersects('>1.2.0', '>1.3.0'),
+      true,
+      'Same direction increasing reversed',
+    )
+    t.equal(
+      intersects('>=1.2.0', '>1.3.0'),
+      true,
+      'Mixed inclusive/exclusive increasing',
+    )
+    t.equal(
+      intersects('>1.2.0', '>=1.3.0'),
+      true,
+      'Mixed exclusive/inclusive increasing',
+    )
+
+    // Same direction decreasing
+    t.equal(
+      intersects('<1.3.0', '<1.2.0'),
+      true,
+      'Same direction decreasing',
+    )
+    t.equal(
+      intersects('<1.2.0', '<1.3.0'),
+      true,
+      'Same direction decreasing reversed',
+    )
+    t.equal(
+      intersects('<=1.2.0', '<1.3.0'),
+      true,
+      'Mixed inclusive/exclusive decreasing',
+    )
+    t.equal(
+      intersects('<1.2.0', '<=1.3.0'),
+      true,
+      'Mixed exclusive/inclusive decreasing',
+    )
+
+    // Different directions, same semver and inclusive operator
+    t.equal(
+      intersects('>=1.3.0', '<=1.3.0'),
+      true,
+      'Inclusive bounds at same version',
+    )
+    t.equal(
+      intersects('>=1.3.0', '>=1.3.0'),
+      true,
+      'Same lower bounds',
+    )
+    t.equal(
+      intersects('<=1.3.0', '<=1.3.0'),
+      true,
+      'Same upper bounds',
+    )
+    t.equal(
+      intersects('>1.3.0', '<=1.3.0'),
+      false,
+      'Exclusive lower vs inclusive upper at same version',
+    )
+    t.equal(
+      intersects('>=1.3.0', '<1.3.0'),
+      false,
+      'Inclusive lower vs exclusive upper at same version',
+    )
+
+    // Opposite matching directions
+    t.equal(
+      intersects('>1.0.0', '<2.0.0'),
+      true,
+      'Opposite bounds with gap',
+    )
+    t.equal(
+      intersects('>=1.0.0', '<2.0.0'),
+      true,
+      'Inclusive lower, exclusive upper with gap',
+    )
+    t.equal(
+      intersects('>=1.0.0', '<=2.0.0'),
+      true,
+      'Both inclusive with gap',
+    )
+    t.equal(
+      intersects('>1.0.0', '<=2.0.0'),
+      true,
+      'Exclusive lower, inclusive upper with gap',
+    )
+    t.equal(
+      intersects('<=2.0.0', '>1.0.0'),
+      true,
+      'Reversed opposite bounds',
+    )
+    t.equal(
+      intersects('<=1.0.0', '>=2.0.0'),
+      false,
+      'No overlap between bounds',
+    )
+
+    // Empty range tests
+    t.equal(intersects('', ''), true, 'Both empty ranges')
+    t.equal(
+      intersects('', '>1.0.0'),
+      true,
+      'Empty range with constraint',
+    )
+    t.equal(
+      intersects('<=2.0.0', ''),
+      true,
+      'Constraint with empty range',
+    )
+
+    // Edge cases with very low versions
+    t.equal(
+      intersects('<0.0.0', '<0.1.0'),
+      true,
+      'Both less than - they intersect since <0.0.0 is subset of <0.1.0',
+    )
+    t.equal(
+      intersects('<0.1.0', '<0.0.0'),
+      true,
+      'Both less than - they intersect since <0.0.0 is subset of <0.1.0',
+    )
+
+    // Boundary conditions that might trigger special logic
+    t.equal(
+      intersects('>=1.2.3', '<=1.2.3'),
+      true,
+      'Inclusive bounds at same version',
+    )
+    t.equal(
+      intersects('>=1.2.3', '<1.2.4'),
+      true,
+      'Lower bound with tight upper bound',
+    )
+    t.equal(
+      intersects('>1.2.2', '<=1.2.3'),
+      true,
+      'Exclusive lower with inclusive upper',
+    )
+
+    // Test intersecting with multiple exact versions in OR ranges
+    t.equal(
+      intersects('1.2.3 || 1.2.4', '1.2.3 || 1.2.5'),
+      true,
+      'OR ranges with common version',
+    )
+    t.equal(
+      intersects('1.2.3 || 1.2.4', '1.2.5 || 1.2.6'),
+      false,
+      'OR ranges with no common versions',
+    )
+
+    t.end()
+  })
+
+  // Test comparator-specific edge cases
+  t.test('comparator edge cases', t => {
+    // Test cases where comparators have no tuples (which shouldn't happen but let's be safe)
+    t.equal(intersects('*', '*'), true, 'Both any ranges')
+
+    // Test ranges that result in empty comparator sets
+    t.equal(
+      intersects('>=1.0.0 <1.0.0', '1.0.0'),
+      false,
+      'Impossible range vs version',
+    )
+    t.equal(
+      intersects('>1.0.0 <1.0.0', '>=1.0.0'),
+      false,
+      'Impossible range vs constraint',
+    )
+
+    // Test with bounds that are equal but different inclusivity
+    t.equal(
+      intersects('>=1.2.3', '<=1.2.3'),
+      true,
+      'Equal bounds, both inclusive',
+    )
+    t.equal(
+      intersects('>1.2.3', '<1.2.3'),
+      false,
+      'Equal bounds, both exclusive',
+    )
+    t.equal(
+      intersects('>=1.2.3', '<1.2.3'),
+      false,
+      'Equal bounds, mixed inclusivity',
+    )
+    t.equal(
+      intersects('>1.2.3', '<=1.2.3'),
+      false,
+      'Equal bounds, mixed inclusivity reversed',
+    )
+
+    // Test specific branches that might not be covered
+    t.equal(
+      intersects('', '1.0.0'),
+      true,
+      'Empty range vs version (should hit no tuples branch)',
+    )
+    t.equal(
+      intersects('1.0.0', ''),
+      true,
+      'Version vs empty range (should hit no tuples branch)',
+    )
+
+    t.equal(intersects('>=1.2.3', '>=1.2.3'), true, 'Same >= bounds')
+    t.equal(
+      intersects('>=1.2.3', '>=1.2.2'),
+      true,
+      'Different >= bounds, first higher',
+    )
+    t.equal(
+      intersects('>=1.2.2', '>=1.2.3'),
+      true,
+      'Different >= bounds, second higher',
+    )
+    t.equal(
+      intersects('>=1.2.3', '>1.2.2'),
+      true,
+      '>= vs > with same effective bound',
+    )
+    t.equal(
+      intersects('>1.2.2', '>=1.2.3'),
+      true,
+      '> vs >= with same effective bound',
+    )
+
+    t.equal(
+      intersects('<=1.2.3', '<=1.2.4'),
+      true,
+      '<= bounds, first lower',
+    )
+    t.equal(
+      intersects('<=1.2.4', '<=1.2.3'),
+      true,
+      '<= bounds, second lower',
+    )
+    t.equal(intersects('<=1.2.3', '<1.2.4'), true, '<= vs < bounds')
+    t.equal(intersects('<1.2.4', '<=1.2.3'), true, '< vs <= bounds')
+
+    // Additional edge cases for satisfiableRange function
+    t.equal(
+      intersects('>=1.2.3 <=1.2.3', '>=1.2.3 <=1.2.3'),
+      true,
+      'Identical exact ranges',
+    )
+    t.equal(
+      intersects('>=1.2.3 <=1.2.2', '1.2.3'),
+      false,
+      'Invalid range (lower > upper) vs version',
+    )
+    t.equal(
+      intersects('>1.2.3 <1.2.3', '1.2.3'),
+      false,
+      'Invalid range (exclusive bounds equal) vs version',
+    )
+
+    // Cases with multiple constraints to hit different paths
+    t.equal(
+      intersects('>=1.0.0 <=2.0.0', '>=1.5.0 <=1.8.0'),
+      true,
+      'Overlapping constrained ranges',
+    )
+    t.equal(
+      intersects('>=1.0.0 <1.5.0', '>=1.5.0 <=2.0.0'),
+      false,
+      'Adjacent non-overlapping ranges',
+    )
+    t.equal(
+      intersects('>1.0.0 <=1.5.0', '>=1.5.0 <2.0.0'),
+      true,
+      'Adjacent ranges with inclusive boundary',
+    )
+
+    // Try with complex ranges that might create empty tuple scenarios
+    t.equal(
+      intersects('>=1.0.0 <1.0.0 || >=2.0.0', '1.5.0'),
+      false,
+      'Complex range with impossible first part',
+    )
+    t.equal(
+      intersects('>=1.0.0 <1.0.0', '2.0.0'),
+      false,
+      'Impossible range vs version',
+    )
+
+    // Try edge cases with prerelease versions that might trigger different code paths
+    t.equal(
+      intersects('>=1.0.0-alpha <=1.0.0-beta', '1.0.0-alpha.1', true),
+      true,
+      'Prerelease bounds with prerelease version',
+    )
+    t.equal(
+      intersects('>=1.0.0-alpha <1.0.0-alpha', '1.0.0-alpha', true),
+      false,
+      'Impossible prerelease range',
+    )
+
+    t.end()
+  })
+
+  // Test the memoization cache
+  t.test('caching', t => {
+    // string and Range object inputs share the same cache entry, since
+    // parseRange() dedupes instances and the cache is keyed on identity
+    const range1 = parseRange('^2.2.2-intersects-cache-test')
+    const range2 = parseRange('^2.2.3-intersects-cache-test')
+    t.ok(range1, 'parsed range1')
+    t.ok(range2, 'parsed range2')
+
+    const fromStrings = intersects(
+      '^2.2.2-intersects-cache-test',
+      '^2.2.3-intersects-cache-test',
+    )
+    if (range1 && range2) {
+      t.equal(
+        intersects(range1, range2),
+        fromStrings,
+        'Range-object call hits the same cache entry as the string call',
+      )
+      // same range1 against a new range2 reuses range1's inner map
+      t.equal(
+        intersects(range1, '^3.0.0-intersects-cache-test'),
+        false,
+        'fresh second range against a cached first range computes correctly',
+      )
+      t.equal(
+        intersects(range1, '^3.0.0-intersects-cache-test'),
+        false,
+        'and is itself cached on a repeat call',
+      )
+    }
+
+    // includePrerelease is part of the cache key, so it must not be
+    // conflated with a call for the same ranges without the flag: `^1`'s
+    // lower bound drops from `>=1.0.0` to `>=1.0.0-0` when the flag is
+    // set, which changes whether it intersects an exact prerelease
+    t.equal(
+      intersects('^1', '=1.0.0-beta'),
+      false,
+      'without includePrerelease, ^1 does not intersect =1.0.0-beta',
+    )
+    t.equal(
+      intersects('^1', '=1.0.0-beta', true),
+      true,
+      'with includePrerelease, ^1 does intersect =1.0.0-beta (cached separately)',
+    )
+    // repeat in reverse call order to prove neither entry evicted the other
+    t.equal(
+      intersects('^1', '=1.0.0-beta', true),
+      true,
+      'includePrerelease result is stable on a second call',
+    )
+    t.equal(
+      intersects('^1', '=1.0.0-beta'),
+      false,
+      'no-flag result is unaffected by the cached includePrerelease entry',
+    )
+
+    // the identity-keyed cache has no size cap (entries are GC'd with
+    // their ranges), but exercise a large batch of distinct pairs to
+    // confirm results stay correct as the cache grows
+    for (let i = 0; i < 4200; i++) {
+      intersects(`>=1.0.${i}`, `<2.0.${i}`)
+    }
+    t.equal(
+      intersects('^1.2.3', '^1.2.4'),
+      true,
+      'still computes correctly for a fresh pair after many insertions',
+    )
+
+    t.end()
+  })
+
+  t.end()
+})
+
+t.test('subset', t => {
+  t.equal(
+    subset('^1.2.0', '>=1.0.0'),
+    true,
+    '^1.2.0 is subset of >=1.0.0',
+  )
+  t.equal(subset('~2.2.0', '^2'), true, '~2.2.0 is subset of ^2')
+  t.equal(subset('^2', '~2.2.0'), false, '^2 is not subset of ~2.2.0')
+  t.equal(subset('>=1.0.0', '*'), true, 'any range is subset of *')
+  t.equal(
+    subset('*', '>=1.0.0'),
+    false,
+    '* is not subset of a bounded range',
+  )
+  t.equal(
+    subset('1.2.3', '>=1.0.0 <2.0.0'),
+    true,
+    'exact version subset of range',
+  )
+  t.equal(
+    subset('>=2.0.0', '>=1.0.0'),
+    true,
+    '>=2.0.0 is subset of >=1.0.0',
+  )
+  t.equal(
+    subset('>=1.0.0', '>=2.0.0'),
+    false,
+    '>=1.0.0 is not subset of >=2.0.0',
+  )
+  t.equal(
+    subset('<2.0.0', '<3.0.0'),
+    true,
+    '<2.0.0 is subset of <3.0.0',
+  )
+  t.equal(
+    subset('<3.0.0', '<2.0.0'),
+    false,
+    '<3.0.0 is not subset of <2.0.0',
+  )
+  t.equal(
+    subset('>1.0.0 <2.0.0', '>=1.0.0 <=2.0.0'),
+    true,
+    'exclusive inside inclusive',
+  )
+  t.equal(
+    subset('>=1.0.0 <=2.0.0', '>1.0.0 <2.0.0'),
+    false,
+    'inclusive not inside exclusive',
+  )
+  t.equal(
+    subset('1.0.0 || 2.0.0', '>=1.0.0 <=2.0.0'),
+    true,
+    'OR range subset',
+  )
+  t.equal(
+    subset('1.0.0 || 3.0.0', '>=1.0.0 <2.0.0'),
+    false,
+    'OR range not subset',
+  )
+  t.equal(
+    subset('invalid', '>=1.0.0'),
+    false,
+    'invalid range returns false',
+  )
+  t.equal(
+    subset('>=1.0.0', 'invalid'),
+    false,
+    'invalid second range returns false',
+  )
+  t.equal(
+    subset('1.0.0', '1.0.0'),
+    true,
+    'exact same version is subset',
+  )
+  t.equal(
+    subset('1.0.0', '2.0.0'),
+    false,
+    'different exact versions not subset',
+  )
+  t.equal(
+    subset('>1.0.0 <2.0.0', '>1.0.0 <1.5.0'),
+    false,
+    'wider not subset of narrower upper',
+  )
+  t.equal(
+    subset('>=1.0.0 <=2.0.0', '>=1.0.0 <2.0.0'),
+    false,
+    'inclusive upper not subset of exclusive upper at same point',
+  )
+  t.equal(
+    subset('>=1.0.0 <2.0.0', '>=1.0.0 <=2.0.0'),
+    true,
+    'exclusive upper subset of inclusive upper at same point',
+  )
+  t.equal(
+    subset('>1.0.0', '>=1.0.0'),
+    true,
+    'exclusive lower is subset of inclusive lower at same point',
+  )
+  t.equal(
+    subset('>=1.0.0', '>1.0.0'),
+    false,
+    'inclusive lower not subset of exclusive lower at same point',
+  )
+  t.equal(
+    subset('>=1.0.0 <=1.0.0', '1.0.0'),
+    true,
+    'range that reduces to exact is subset of exact',
+  )
+  t.equal(
+    subset('1.5.0', '>1.0.0 <2.0.0'),
+    true,
+    'exact version in exclusive bounds',
+  )
+  t.equal(
+    subset('1.0.0', '>1.0.0 <2.0.0'),
+    false,
+    'exact version at exclusive lower bound',
+  )
+  t.equal(
+    subset('2.0.0', '>1.0.0 <2.0.0'),
+    false,
+    'exact version at exclusive upper bound',
+  )
+  t.equal(
+    subset('>=1.0.0 <=2.0.0', '1.5.0'),
+    false,
+    'range not subset of exact version it does not collapse to',
+  )
+  t.equal(
+    subset(parseRange('^1.2.0')!, parseRange('>=1.0.0')!),
+    true,
+    'Range objects passed directly',
+  )
+  t.equal(
+    subset('>=2.0.0 <1.0.0', '>=1.0.0'),
+    true,
+    'unsatisfiable range is subset of anything',
+  )
+  t.equal(
+    subset('<3.0.0', '>=1.0.0 <=5.0.0'),
+    false,
+    'range without lower bound not subset of bounded range',
+  )
+  t.equal(
+    subset('>=1.0.0', '>=1.0.0 <5.0.0'),
+    false,
+    'range without upper bound not subset of bounded range',
+  )
+  t.equal(
+    subset('>1.0.0 >2.0.0', '>2.0.0'),
+    true,
+    'multiple > operators in same comparator set',
+  )
+  t.equal(
+    subset('<5.0.0 <3.0.0', '<3.0.0'),
+    true,
+    'multiple < operators in same comparator set',
+  )
   t.end()
 })

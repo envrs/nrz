@@ -1,0 +1,27 @@
+name: ✨ Feature Request
+description: Propose a new feature or enhancement
+title: '[FEATURE] '
+labels: ['enhancement', 'feature']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🚀 Feature Request
+        Thanks for taking the time to suggest a new feature! Please provide detailed information to help us understand and evaluate your proposal.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 📋 Description
+      description: Provide a clear and concise description of the feature you'd like to see implemented.
+      placeholder: 'Describe the feature...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: research
+    attributes:
+      label: 🔍 Research & Prior Art
+      description: Any relevant research, existing implementations, or prior art to consider?
+      placeholder: 'Links to similar implementations, research papers, or reference materials...'

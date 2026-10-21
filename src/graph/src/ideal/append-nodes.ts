@@ -1,20 +1,57 @@
-import { joinDepIDTuple, type DepID } from '@nrz/dep-id'
+import {
+  baseDepID,
+  getTuple,
+  hydrate,
+  joinDepIDTuple,
+  joinExtra,
+  splitDepID,
+} from '@nrz/dep-id'
+import type { DepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
-import { type PackageInfoClient } from '@nrz/package-info'
-import { Spec, type SpecOptions } from '@nrz/spec'
+import type { PackageInfoClient } from '@nrz/package-info'
+import { Spec } from '@nrz/spec'
+import type { SpecOptions } from '@nrz/spec'
+import { satisfies } from '@nrz/satisfies'
+import { parse as parseVersion } from '@nrz/semver'
+import { longDependencyTypes, normalizeManifest } from '@nrz/types'
+import type { DependencySaveType, Manifest } from '@nrz/types'
+import type { PathScurry } from 'path-scurry'
+import { fixupAddedNames } from '../fixup-added-names.ts'
 import {
-  longDependencyTypes,
-  type DependencyTypeLong,
-} from '@nrz/types'
-import { type PathScurry } from 'path-scurry'
-import {
-  asDependency,
+  addKey,
+  asDependencySpecError,
   shorten,
-  type Dependency,
+  shouldInstallDepType,
 } from '../dependencies.ts'
-import { type Graph } from '../graph.ts'
-import { type Node } from '../node.ts'
+import type { Dependency } from '../dependencies.ts'
+import type { Graph } from '../graph.ts'
+import type { Node } from '../node.ts'
 import { removeOptionalSubgraph } from '../remove-optional-subgraph.ts'
+import { isPathSecurityError } from '../path-security-error.ts'
+import type {
+  GraphModifier,
+  ModifierActiveEntry,
+} from '../modifiers.ts'
+import type { ExtractResult } from '../reify/extract-node.ts'
+import { extractNode } from '../reify/extract-node.ts'
+import type { RollbackRemove } from '@nrz/rollback-remove'
+import {
+  checkPeerEdgesCompatible,
+  endPeerPlacement,
+  forkPeerContext,
+  postPlacementPeerCheck,
+  startPeerPlacement,
+} from './peers.ts'
+import { compareByHasPeerDeps } from './sorting.ts'
+import type {
+  ExplicitAddMap,
+  PeerContext,
+  PeerContextEntryInput,
+  AppendNodeEntry,
+  ProcessPlacementResult,
+  TransientAddMap,
+  TransientRemoveMap,
+} from './types.ts'
 
 type FileTypeInfo = {
   id: DepID
@@ -22,17 +59,43 @@ type FileTypeInfo = {
   isDirectory: boolean
 }
 
+/** A dependency with the spec it is placed with after modifiers. */
+type DepEntry = {
+  spec: Spec
+  type: DependencySaveType
+  fileTypeInfo?: FileTypeInfo
+  activeModifier?: ModifierActiveEntry
+  queryModifier?: string
+  /** the user named this dependency on the command line */
+  isExplicit: boolean
+  /** ... and asked for a dist-tag, so the tag must be resolved */
+  explicitTag: boolean
+  /**
+   * the node the resolution step lands on: the live edge target when it
+   * still satisfies, else the lock target when it still fits, else the
+   * first satisfying node by name
+   */
+  candidate?: Node
+}
+
 /**
- * Only install devDeps for git dependencies and importers
- * Everything else always gets installed
+ * Task for reusing an existing node (deferred edge creation).
  */
-const shouldInstallDepType = (
-  node: Node,
-  depType: DependencyTypeLong,
-) =>
-  depType !== 'devDependencies' ||
-  node.importer ||
-  node.id.startsWith('git')
+type ReuseTask = {
+  type: DependencySaveType
+  spec: Spec
+  fromNode: Node
+  toNode: Node
+}
+
+/**
+ * Result of fetching manifests for dependencies.
+ */
+type FetchResult = {
+  placementTasks: NodePlacementTask[]
+  reuseTasks: ReuseTask[]
+  forkRequests: PeerContextEntryInput[]
+}
 
 /**
  * Retrieve the {@link DepID} and location for a `file:` type {@link Node}.
@@ -68,8 +131,867 @@ const getFileTypeInfo = (
 const isStringArray = (a: unknown): a is string[] =>
   Array.isArray(a) && !a.some(b => typeof b !== 'string')
 
+const actualBases = new WeakMap<Graph, Set<DepID>>()
+const hasActualBase = (actual: Graph, id: DepID): boolean => {
+  let bases = actualBases.get(actual)
+  if (!bases) {
+    bases = new Set([...actual.nodes.keys()].map(baseDepID))
+    actualBases.set(actual, bases)
+  }
+  return bases.has(baseDepID(id))
+}
+
+/**
+ * Represents a manifest fetch operation with all the context needed.
+ */
+type ManifestFetchTask = {
+  spec: Spec
+  type: DependencySaveType
+  fromNode: Node
+  fileTypeInfo?: FileTypeInfo
+  activeModifier?: ModifierActiveEntry
+  queryModifier?: string
+  edgeOptional: boolean
+  manifestPromise: Promise<Manifest | undefined>
+  depth: number
+  peerContext: PeerContext
+}
+
+/**
+ * Represents a node placement operation that depends on a resolved manifest.
+ */
+type NodePlacementTask = {
+  fetchTask: ManifestFetchTask
+  manifest: Manifest | undefined
+  node?: Node
+  childDeps?: Dependency[]
+  childModifierRefs?: Map<string, ModifierActiveEntry>
+  childPeerContext?: PeerContext
+}
+
+/**
+ * Can the lockfile target still serve this spec? Exact for sources
+ * satisfies() understands; loose fallback for sources it cannot verify
+ * (named jsr registries, dist-tags): only for a registry node stamped
+ * with the same type+registry segments a fresh node for this spec would
+ * get, so a locked node from another source is never reused.
+ */
+const lockedFits = (
+  n: Node,
+  spec: Spec,
+  fromNode: Node,
+  graph: Graph,
+): boolean => {
+  const final = spec.final
+  if (
+    satisfies(
+      n.id,
+      final,
+      fromNode.location,
+      graph.projectRoot,
+      graph.monorepo,
+    )
+  ) {
+    return true
+  }
+  if (final.type !== 'registry') return false
+  const [idType, idRegistry] = splitDepID(n.id)
+  if (idType !== 'registry') return false
+  const expected = getTuple(spec, {
+    name: n.name,
+    version: n.version,
+  })
+  if (idRegistry !== expected[1]) return false
+  // the package the final spec resolves, never the edge name: an alias
+  // (`foo@npm:bar@^1`, `semver@jsr:@std/semver@^1`) points the same edge
+  // at a different package, and `final.name` already carries the jsr
+  // registry form of the name
+  if (n.name !== final.name) return false
+  if (!final.range) return true
+  /* c8 ignore next */
+  if (!n.version) return false
+  const version = parseVersion(n.version)
+  return !!version && final.range.test(version)
+}
+
+/**
+ * The lockfile target captured for `fromNode → name` before resetEdges().
+ * A peer-fork rebuild gives fromNode a provisional `peer.N` id that
+ * misses the canonical id key, so retry with the base id key, recorded
+ * only when unambiguous across peer copies.
+ */
+const findLockedNode = (
+  graph: Graph,
+  fromNode: Node,
+  name: string,
+): Node | undefined => {
+  const locked = graph.lockedResolutions
+  if (!locked) return
+  let id = locked.get(`${fromNode.id}\0${name}`)
+  if (id === undefined) {
+    const baseFrom = baseDepID(fromNode.id)
+    if (baseFrom !== fromNode.id) {
+      id = locked.get(`${baseFrom}\0${name}`)
+    }
+  }
+  return id ? graph.nodes.get(id) : undefined
+}
+
+/**
+ * Try to find a compatible resolution for a dependency, checking peer context.
+ * If the first resolution candidate is incompatible with the peer context,
+ * try other candidates.
+ */
+const findCompatibleResolution = (
+  spec: Spec,
+  fromNode: Node,
+  graph: Graph,
+  peerContext: PeerContext,
+  candidate?: Node,
+  pending?: Map<string, Dependency>,
+) => {
+  const final = spec.final
+
+  // the candidate was picked in the pass before the hydrations
+  let existingNode: Node | undefined = candidate
+
+  let peerCompatResult =
+    existingNode ?
+      checkPeerEdgesCompatible(
+        existingNode,
+        fromNode,
+        peerContext,
+        graph,
+        pending,
+      )
+    : { compatible: true }
+
+  // CANDIDATE FALLBACK: If first candidate is peer-incompatible, try others
+  // Lazy-load candidates only when fallback needed
+  if (existingNode && !peerCompatResult.compatible) {
+    const candidates = graph.nodesByName.get(final.name)
+    if (candidates && candidates.size > 1) {
+      for (const alt of candidates) {
+        if (alt === existingNode) continue
+        if (alt.detached) continue
+        if (
+          !satisfies(
+            alt.id,
+            final,
+            fromNode.location,
+            graph.projectRoot,
+            graph.monorepo,
+          )
+        ) {
+          continue
+        }
+
+        const compat = checkPeerEdgesCompatible(
+          alt,
+          fromNode,
+          peerContext,
+          graph,
+          pending,
+        )
+        if (compat.compatible) {
+          existingNode = alt
+          peerCompatResult = compat
+          break
+        }
+      }
+    }
+  }
+
+  return { existingNode, peerCompatResult }
+}
+
+/**
+ * A detached lockfile node without a manifest still knows its exact
+ * version through its DepID. Rebuild the spec that produced it so the
+ * manifest fetch pins the locked version instead of re-resolving the
+ * range to the newest satisfying release. Only registry nodes carry a
+ * version; anything else keeps the range fetch.
+ */
+const lockedVersionFetch = (
+  node: Node,
+  spec: Spec,
+  options: SpecOptions,
+): { spec: Spec; version: string } | undefined => {
+  if (spec.final.type !== 'registry' || !node.version) return
+  // hydrate() reproduces alias / named / URL / jsr forms from the DepID
+  // but memoizes per (name, id) ignoring options, so re-parse its
+  // bareSpec with the current options
+  const bare = hydrate(node.id, spec.name, options).bareSpec
+  const exact = Spec.parse(spec.name, bare, options)
+  // lockedFits only compares the DepID registry name segment; never
+  // fetch a locked version from a source other than the one the edge
+  // resolves to right now
+  if (exact.final.registry !== spec.final.registry) return
+  return { spec: exact, version: node.version }
+}
+
+/**
+ * A rebuild without node_modules loads lockfile nodes with no manifest.
+ * Fetch the locked version up front and hydrate the node so the reuse
+ * and peer compatibility decisions see exactly what the hidden-lockfile
+ * path sees; on any miss the node stays bare and the range fetch runs as
+ * before. Hydrations are shared across the parallel fetches of one
+ * appendNodes run so each node is fetched once.
+ */
+const hydrateLockedNode = (
+  node: Node,
+  spec: Spec,
+  graph: Graph,
+  packageInfo: PackageInfoClient,
+  options: SpecOptions,
+  from: string,
+  hydrations: Map<DepID, Promise<void>>,
+): Promise<void> | undefined => {
+  const seen = hydrations.get(node.id)
+  if (seen) return seen
+  const locked = lockedVersionFetch(node, spec, options)
+  if (!locked) return
+  const hydration = packageInfo
+    .manifest(locked.spec, { from })
+    .then(
+      manifest => manifest as Manifest | undefined,
+      () => undefined,
+    )
+    .then(manifest => {
+      if (manifest?.version !== locked.version) return
+      node.manifest = normalizeManifest(manifest, String(locked.spec))
+      graph.manifests.set(node.id, node.manifest)
+    })
+  hydrations.set(node.id, hydration)
+  return hydration
+}
+
+/**
+ * Fetch manifests for dependencies and create placement tasks.
+ *
+ * This is Phase 1 of the breadth-first graph building process. For each
+ * dependency at the current level:
+ * 1. Apply any active modifiers (spec swapping)
+ * 2. Try to find an existing node to reuse (with peer compatibility check)
+ * 3. If no reusable node, start a manifest fetch (in parallel)
+ * 4. Create placement tasks for Phase 2
+ *
+ * The result is sorted to process non-peer-dependent packages first,
+ * ensuring peer dependencies can resolve to already-placed siblings.
+ *
+ * **Read-only**: This function no longer mutates the graph. It returns
+ * tasks that will be applied serially in the BFS loop for deterministic ordering.
+ */
+const fetchManifestsForDeps = async (
+  packageInfo: PackageInfoClient,
+  graph: Graph,
+  fromNode: Node,
+  deps: Dependency[],
+  scurry: PathScurry,
+  options: SpecOptions,
+  hydrations: Map<DepID, Promise<void>>,
+  peerContext: PeerContext,
+  modifierRefs?: Map<string, ModifierActiveEntry>,
+  depth = 0,
+  explicit?: ExplicitAddMap,
+): Promise<FetchResult> => {
+  const fetchTasks: ManifestFetchTask[] = []
+  const placementTasks: NodePlacementTask[] = []
+  const reuseTasks: ReuseTask[] = []
+  const forkRequests: PeerContextEntryInput[] = []
+
+  // resolve the spec each dep is placed with before any lookup
+  const entries: DepEntry[] = []
+  for (const { spec: originalSpec, type } of deps) {
+    let spec = originalSpec
+    const fileTypeInfo = getFileTypeInfo(spec, fromNode, scurry)
+    const activeModifier = modifierRefs?.get(spec.name)
+    const isExplicit = !!explicit
+      ?.get(fromNode.id)
+      ?.has(addKey(originalSpec))
+
+    // MODIFIER HANDLING: Swap spec if an edge modifier is fully matched
+    // Example: `nrz install --override "react:^19"` changes react's spec
+    const queryModifier = activeModifier?.modifier.query
+    const completeModifier =
+      activeModifier &&
+      activeModifier.interactiveBreadcrumb.current ===
+        activeModifier.modifier.breadcrumb.last
+    if (
+      queryModifier &&
+      completeModifier &&
+      'spec' in activeModifier.modifier
+    ) {
+      spec = activeModifier.modifier.spec
+      // bareSpec of '-' means "remove this dependency"
+      if (spec.bareSpec === '-') {
+        // nothing to install or save for an explicit request
+        if (isExplicit) {
+          throw error(
+            `Cannot add ${originalSpec.name}: it is removed by a graph modifier`,
+            { code: 'ECONFIG', found: queryModifier },
+          )
+        }
+        continue
+      }
+    }
+    entries.push({
+      spec,
+      type,
+      fileTypeInfo,
+      activeModifier,
+      queryModifier,
+      isExplicit,
+      // read after the modifier swap, so an --override that replaces the
+      // tag with a range keeps today's reuse
+      explicitTag: isExplicit && !!spec.final.distTag,
+    })
+  }
+
+  // everything this parent places at this level, by name: the provision
+  // source for optional peers of reuse candidates, explicit adds included
+  const pendingDeps = new Map<string, Dependency>()
+  for (const e of entries) pendingDeps.set(e.spec.name, e)
+
+  // pick the reuse candidate once, here, so the placement loop below
+  // does not repeat the lookup, and hydrate it when it is a bare
+  // detached copy from a lockfile loaded without node_modules
+  const from = scurry.resolve(fromNode.location)
+  const pending: Promise<void>[] = []
+  for (const e of entries) {
+    // prefer the existing edge target when it still satisfies: lockfile
+    // resolutions are preserved rather than re-picked. a rebuild reset
+    // every edge, so this only fires when there was no reset, where no
+    // node is detached and there is nothing to hydrate either
+    const existing = fromNode.edgesOut.get(e.spec.name)?.to
+    if (
+      existing &&
+      !existing.detached &&
+      satisfies(
+        existing.id,
+        e.spec.final,
+        fromNode.location,
+        graph.projectRoot,
+        graph.monorepo,
+      )
+    ) {
+      e.candidate = existing
+      continue
+    }
+    const locked = findLockedNode(graph, fromNode, e.spec.name)
+    e.candidate =
+      locked && lockedFits(locked, e.spec, fromNode, graph) ? locked
+      : graph.findResolution(e.spec, fromNode, e.queryModifier)
+    // the tag is fetched below anyway, the locked version is dead weight
+    if (e.explicitTag) continue
+    if (e.candidate?.detached && !e.candidate.manifest) {
+      const hydration = hydrateLockedNode(
+        e.candidate,
+        e.spec,
+        graph,
+        packageInfo,
+        options,
+        from,
+        hydrations,
+      )
+      if (hydration) pending.push(hydration)
+    }
+  }
+  await Promise.all(pending)
+
+  for (const {
+    spec,
+    type,
+    fileTypeInfo,
+    activeModifier,
+    queryModifier,
+    isExplicit,
+    explicitTag,
+    candidate,
+  } of entries) {
+    const peer = type === 'peer' || type === 'peerOptional'
+
+    // NODE REUSE LOGIC with peer compatibility
+    const resolved = findCompatibleResolution(
+      spec,
+      fromNode,
+      graph,
+      peerContext,
+      candidate,
+      pendingDeps,
+    )
+
+    // a dist-tag satisfies any node of that name, so reuse is what
+    // installs an arbitrary version for an explicit `pkg@tag` request.
+    // drop the candidate and fetch the tag instead; a registry spec
+    // naming a workspace still links that workspace.
+    const dropForTag =
+      explicitTag &&
+      !!resolved.existingNode &&
+      !resolved.existingNode.importer
+    const existingNode =
+      dropForTag ? undefined : resolved.existingNode
+    const peerCompatResult =
+      dropForTag ? { compatible: true } : resolved.peerCompatResult
+
+    // Accumulate fork request if incompatible peer edges detected (defer actual fork)
+    const effectivePeerContext = peerContext
+    if (!peerCompatResult.compatible && peerCompatResult.forkEntry) {
+      forkRequests.push(peerCompatResult.forkEntry)
+      // All fork entries from this fromNode will be applied together in Phase B
+    }
+
+    // Locked detached nodes still go through placePackage so
+    // their child edges are rebuilt after resetEdges().
+    const validExistingNode =
+      existingNode &&
+      !existingNode.detached &&
+      // Regular deps can always reuse.
+      // Peer deps can reuse as well if their peer edges are compatible.
+      /* c8 ignore start */
+      (!peer || peerCompatResult.compatible) &&
+      // Check if existing node's peer edges are compatible with new parent
+      peerCompatResult.compatible
+    /* c8 ignore stop */
+
+    if (
+      validExistingNode ||
+      // importers are handled at the ./refresh-ideal-graph.ts top-level
+      // so we should just skip whenever we find one
+      existingNode?.importer
+    ) {
+      // Defer edge creation to Phase B for deterministic ordering.
+      // Previously added immediately, but this caused race conditions when
+      // parallel fetches completed in different orders.
+      reuseTasks.push({ type, spec, fromNode, toNode: existingNode })
+      continue
+    }
+
+    // workspace: specs can only resolve to local workspace packages.
+    // If we didn't find a matching workspace node above, it means either
+    // the workspace doesn't exist or its version doesn't satisfy the range.
+    if (spec.final.type === 'workspace') {
+      const wsVersion = graph.nodesByName
+        .get(spec.name)
+        ?.values()
+        .next().value?.version
+      throw error(
+        wsVersion ?
+          `workspace dependency ${spec} does not match the ` +
+            `local workspace version (${wsVersion})`
+        : `no workspace found matching ${spec}`,
+        { spec },
+      )
+    }
+
+    // is the current edge pointint go an optional dependency?
+    const edgeOptional =
+      type === 'optional' || type === 'peerOptional'
+
+    // Start manifest fetch immediately for parallel processing
+    const manifestPromise =
+      // the "detached" node state means that it has already been load as
+      // part of a graph (either lockfile or actual), or was hydrated with
+      // its locked version above, and it has valid manifest data so we
+      // shortcut the package info manifest fetch here
+      // `keepVersion` marks a fork that only differs by an optional peer
+      // link, so the copy keeps the version it forked from instead of
+      // re-resolving the range to the newest satisfying release
+      (
+        existingNode?.manifest &&
+        (existingNode.detached || peerCompatResult.keepVersion)
+      ) ?
+        Promise.resolve(existingNode.manifest as Manifest | undefined)
+        // this is the entry point to fetch calls to retrieve manifests
+        // from the build ideal graph point of view
+      : packageInfo
+          // an explicit tag add revalidates before use
+          .manifest(
+            spec,
+            isExplicit ?
+              { from }
+            : { from, backgroundRevalidate: true },
+          )
+          .then(manifest => manifest as Manifest | undefined)
+          .catch((er: unknown) => {
+            // optional deps ignored if inaccessible, but a dep that tried
+            // to escape the project is never silently dropped
+            if (isPathSecurityError(er)) throw er
+            // an explicit request has no version to save if it never
+            // resolved, so it fails the install even when optional
+            if (!isExplicit && (edgeOptional || fromNode.optional)) {
+              return undefined
+            }
+            throw er
+          })
+
+    // awaited below; a throw before that must not leave it unhandled
+    manifestPromise.catch(() => {})
+
+    const fetchTask: ManifestFetchTask = {
+      spec,
+      type,
+      fromNode,
+      fileTypeInfo,
+      activeModifier,
+      queryModifier,
+      edgeOptional,
+      manifestPromise,
+      depth,
+      peerContext: effectivePeerContext,
+    }
+
+    fetchTasks.push(fetchTask)
+  }
+
+  // fail on the first rejection, not once the ones before it settle
+  await Promise.all(fetchTasks.map(t => t.manifestPromise))
+
+  // Create placement tasks from fetch tasks
+  for (const fetchTask of fetchTasks) {
+    const manifest = await fetchTask.manifestPromise
+
+    placementTasks.push({
+      fetchTask,
+      manifest,
+    })
+  }
+
+  // sort placement tasks: non-peer dependencies first, then peer dependencies
+  // so that peer dependencies can easily reuse already placed regular
+  // dependencies as part of peer context set resolution also makes sure to
+  // sort by the manifest name for deterministic order.
+  placementTasks.sort(compareByHasPeerDeps)
+
+  return { placementTasks, reuseTasks, forkRequests }
+}
+
+/**
+ * Process placement tasks and collect child dependencies.
+ *
+ * This is Phase 2 of the breadth-first graph building process. For each
+ * resolved manifest:
+ * 1. Handle missing manifests (optional vs required deps)
+ * 2. Start peer placement process (collect sibling context)
+ * 3. Place the node in the graph with appropriate flags
+ * 4. Trigger early extraction if eligible (performance optimization)
+ * 5. Collect child dependencies for the next BFS level
+ * 6. End peer placement (setup context update functions)
+ *
+ * Early extraction: When `actual` graph is provided, nodes destined for the
+ * nrz store are extracted immediately (in parallel) instead of waiting for
+ * the full ideal graph to be built. This significantly improves install time.
+ */
+const processPlacementTasks = async (
+  graph: Graph,
+  options: SpecOptions,
+  placementTasks: NodePlacementTask[],
+  add?: Map<string, Dependency>,
+  modifiers?: GraphModifier,
+  scurry?: PathScurry,
+  packageInfo?: PackageInfoClient,
+  extractPromises?: Promise<ExtractResult>[],
+  actual?: Graph,
+  seenExtracted?: Set<DepID>,
+  remover?: RollbackRemove,
+  transientAdd?: TransientAddMap,
+  transientRemove?: TransientRemoveMap,
+): Promise<ProcessPlacementResult> => {
+  const childDepsToProcess: ProcessPlacementResult = []
+
+  // Note: placementTasks are already sorted by fetchManifestsForDeps
+  // using compareByHasPeerDeps to ensure non-peer deps are processed first.
+  // We don't sort again here to preserve that ordering.
+
+  for (const placementTask of placementTasks) {
+    const { fetchTask, manifest } = placementTask
+    let {
+      activeModifier,
+      edgeOptional,
+      fileTypeInfo,
+      fromNode,
+      peerContext,
+      queryModifier,
+      spec,
+      type,
+    } = fetchTask
+
+    // fix the name in the `add` map when needed. This allows the upcoming
+    // reify step to properly update the package.json file dependencies
+    // using the correct names retrieved from the manifest data
+    const additiveMap =
+      fromNode.importer ? add : transientAdd?.get(fromNode.id)
+    spec = fixupAddedNames(additiveMap, manifest, options, spec)
+
+    // handles missing manifest resolution
+    if (!manifest) {
+      if (!edgeOptional && fromNode.isOptional()) {
+        // failed resolution of a non-optional dep of an optional node
+        // have to clean up the dependents
+        removeOptionalSubgraph(graph, fromNode)
+        continue
+      } else if (edgeOptional) {
+        // failed resolution of an optional dep, just ignore it,
+        // nothing to prune because we never added it in the first place.
+        continue
+      } else {
+        throw error('failed to resolve dependency', {
+          spec,
+          from: fromNode.location,
+        })
+      }
+    }
+
+    // start peer deps placement process, populating the peer context with
+    // dependency data; adding the parent node deps and this manifest's
+    // peer deps references to the current peer context set
+    const peerPlacement = startPeerPlacement(
+      peerContext,
+      manifest,
+      fromNode,
+      options,
+    )
+    const peerSetHash = peerPlacement.peerSetHash
+    const queuedEntries = peerPlacement.queuedEntries
+
+    // places a new node in the graph representing a newly seen dependency
+    const node = graph.placePackage(
+      fromNode,
+      type,
+      spec,
+      // report broken manifest names against the dependency spec
+      normalizeManifest(manifest, String(spec)),
+      fileTypeInfo?.id,
+      joinExtra({ peerSetHash, modifier: queryModifier }),
+    )
+
+    /* c8 ignore start - not possible, already ensured manifest */
+    if (!node) {
+      throw error('failed to place package', {
+        from: fromNode.location,
+        spec,
+      })
+    }
+    /* c8 ignore stop */
+
+    // update the node modifier tracker
+    if (activeModifier) {
+      modifiers?.updateActiveEntry(node, activeModifier)
+    }
+
+    const eligibleForExtraction =
+      type !== 'peer' &&
+      type !== 'peerOptional' &&
+      remover &&
+      extractPromises &&
+      actual &&
+      scurry &&
+      packageInfo &&
+      node.inNrzStore() &&
+      !node.isOptional() &&
+      // this fixes an issue with installing `file:pathname` specs
+      /* c8 ignore next */ !fileTypeInfo?.isDirectory &&
+      !node.importer &&
+      // provisional peer suffixes are rewritten by canonicalizePeerIds,
+      // which moves the store dir into place. Skip when a dir for this
+      // package version already exists: the rewrite most likely lands
+      // back on it, and re-extracting would be pure waste.
+      (!node.peerSetHash ||
+        !!fileTypeInfo ||
+        !hasActualBase(actual, node.id))
+
+    // extract the node if it meets the criteria for early extraction
+    if (eligibleForExtraction) {
+      /* c8 ignore start */
+      if (seenExtracted?.has(node.id)) {
+        continue
+      }
+      /* c8 ignore stop */
+      seenExtracted?.add(node.id)
+      const actualNode = actual.nodes.get(node.id)
+      if (!actualNode?.equals(node)) {
+        // extract the node without awaiting - push the promise to the array
+        const extractPromise = extractNode(
+          node,
+          scurry,
+          remover,
+          options,
+          packageInfo,
+        )
+        extractPromises.push(extractPromise)
+      }
+    }
+
+    // updates graph node information
+    if (fileTypeInfo?.path && fileTypeInfo.isDirectory) {
+      node.location = fileTypeInfo.path
+    }
+    // Do not clobber lockfile-provided resolved values.
+    // `setResolved()` cannot infer a tarball without a manifest,
+    // which can cause `resolved` to become undefined and the
+    // main lockfile to mutate across installs.
+    if (!node.resolved) {
+      node.setResolved()
+    }
+
+    // collect child dependencies for processing in the next level
+    const nextPeerDeps = new Map<string, Dependency>()
+
+    // compute deps normally
+    const bundleDeps = manifest.bundleDependencies
+    const bundled = new Set<string>(
+      (
+        node.id.startsWith('git') ||
+          node.importer ||
+          !isStringArray(bundleDeps)
+      ) ?
+        []
+      : bundleDeps,
+    )
+
+    // setup next level to process all child dependencies in the manifest
+    // Use a Map keyed by name so that later dependency types override
+    // earlier ones. This matches npm semantics where entries in
+    // `optionalDependencies` override entries of the same name in
+    // `dependencies`. Without this, a package listed in both
+    // (e.g. esbuild@0.18.20, typescript@7.0.2) would first be placed
+    // as a regular (non-optional) dep, and the later optional entry
+    // could not recover the `optional` flag due to the `&&=` operator
+    // in `placePackage`.
+    const nextDepsMap = new Map<string, Dependency>()
+
+    // traverse actual dependency declarations in the manifest
+    // creating dependency entries for them
+    for (const depTypeName of longDependencyTypes) {
+      const depRecord: Record<string, string> | undefined =
+        manifest[depTypeName]
+
+      if (depRecord && shouldInstallDepType(node, depTypeName)) {
+        // Sort Object.entries for deterministic iteration
+        const sortedEntries = Object.entries(depRecord).sort(
+          ([a], [b]) => a.localeCompare(b, 'en'),
+        )
+        for (const [name, bareSpec] of sortedEntries) {
+          // might need to skip already placed peer deps here
+          if (bundled.has(name)) continue
+          const type = shorten(depTypeName, name, manifest)
+          let depSpec: Spec
+          try {
+            depSpec = Spec.parse(name, bareSpec, {
+              ...options,
+              // git/file/remote parents have no spec.registry, so fall
+              // back to the configured one. see nrz/nrz#1580.
+              registry: spec.registry ?? options.registry,
+            })
+          } catch (er) {
+            throw asDependencySpecError(er, node, type)
+          }
+          const dep = { type, spec: depSpec }
+          if (depTypeName === 'peerDependencies') {
+            nextPeerDeps.set(name, dep)
+          } else {
+            nextDepsMap.set(name, dep)
+          }
+        }
+      }
+    }
+
+    const nextDeps = [...nextDepsMap.values()]
+
+    // Inject transient dependencies for non-importer nodes (nested folders)
+    // These are deps that were added from a nested folder context using
+    // relative file: specs that should resolve relative to that folder
+    const transientDeps = transientAdd?.get(node.id)
+    if (transientDeps) {
+      for (const [, dep] of transientDeps) {
+        if (dep.type === 'peer' || dep.type === 'peerOptional') {
+          nextPeerDeps.set(dep.spec.name, dep)
+          continue
+        }
+
+        // remove the dependency from nextDeps if it already exists
+        const index = nextDeps.findIndex(
+          d => d.spec.name === dep.spec.name,
+        )
+        if (index !== -1) {
+          nextDeps.splice(index, 1)
+        }
+
+        nextDeps.push(dep)
+      }
+    }
+
+    // Remove transient removals when needed
+    const transientRemovals = transientRemove?.get(node.id)
+    if (transientRemovals) {
+      for (const depName of transientRemovals) {
+        const index = nextDeps.findIndex(
+          dep => dep.spec.name === depName,
+        )
+        if (index !== -1) {
+          nextDeps.splice(index, 1)
+          continue
+        }
+
+        if (nextPeerDeps.has(depName)) {
+          nextPeerDeps.delete(depName)
+        }
+      }
+    }
+
+    // a name declared both as a regular dependency (manifest or
+    // transient) and as a peer is the package's own dependency: placing
+    // it once, as the regular type, keeps the edge type independent of
+    // when the peer would have resolved
+    for (const dep of nextDeps) nextPeerDeps.delete(dep.spec.name)
+
+    // finish peer placement for this node, resolving satisfied peers
+    // to seen nodes from the peer context and adding unsatisfied peers
+    // to `nextDeps` so they get processed along regular dependencies
+    const updateContext = endPeerPlacement(
+      peerContext,
+      nextDeps,
+      nextPeerDeps,
+      graph,
+      spec,
+      fromNode,
+      node,
+      type,
+      queuedEntries,
+    )
+
+    childDepsToProcess.push({
+      node,
+      deps: nextDeps,
+      modifierRefs: modifiers?.tryDependencies(node, nextDeps),
+      peerContext,
+      updateContext,
+    })
+  }
+
+  return childDepsToProcess
+}
+
+/**
+ * Append new nodes in the given `graph` for dependencies specified at `add`
+ * and missing dependencies from the `deps` parameter.
+ *
+ * Uses **breadth-first traversal** (BFS) with **deterministic ordering** to
+ * ensure reproducible builds. The algorithm:
+ *
+ * 1. Process all deps at the current level in parallel
+ * 2. After each level, run `postPlacementPeerCheck` to handle peer contexts
+ * 3. Collect child deps for the next level, each node once
+ * 4. Repeat until no more deps to process
+ *
+ * **Peer Context Isolation**: Each workspace importer gets its own peer context
+ * to prevent cross-workspace leakage. Without this, `react@^18` from workspace A
+ * could incorrectly satisfy `react@^19` peer deps in workspace B.
+ *
+ * **Early Extraction**: When `actual` graph is provided, nodes are extracted
+ * to the nrz store during graph construction (not after), improving performance.
+ */
 export const appendNodes = async (
-  add: Map<string, Dependency>,
   packageInfo: PackageInfoClient,
   graph: Graph,
   fromNode: Node,
@@ -77,139 +999,196 @@ export const appendNodes = async (
   scurry: PathScurry,
   options: SpecOptions,
   seen: Set<DepID>,
+  add?: Map<string, Dependency>,
+  modifiers?: GraphModifier,
+  modifierRefs?: Map<string, ModifierActiveEntry>,
+  extractPromises?: Promise<ExtractResult>[],
+  actual?: Graph,
+  seenExtracted?: Set<DepID>,
+  remover?: RollbackRemove,
+  transientAdd?: TransientAddMap,
+  transientRemove?: TransientRemoveMap,
+  explicit?: ExplicitAddMap,
 ) => {
+  // Cycle detection: skip if already processed
   /* c8 ignore next */
   if (seen.has(fromNode.id)) return
   seen.add(fromNode.id)
 
-  await Promise.all(
-    deps.map(async ({ spec, type }) => {
-      // see if there's a satisfying node in the graph currently
-      const fileTypeInfo = getFileTypeInfo(spec, fromNode, scurry)
-      const existingNode = graph.findResolution(spec, fromNode)
-      if (existingNode) {
-        graph.addEdge(type, spec, fromNode, existingNode)
-        return
-      }
-      const edgeOptional =
-        type === 'optional' || type === 'peerOptional'
-      const mani = await packageInfo
-        .manifest(spec, { from: scurry.resolve(fromNode.location) })
-        .catch((er: unknown) => {
-          // optional deps ignored if inaccessible
-          if (edgeOptional || fromNode.optional) {
-            return undefined
-          }
-          throw er
-        })
+  // locked lockfile nodes hydrated with their exact manifest, at most
+  // once per node across the parallel fetches
+  const hydrations = new Map<DepID, Promise<void>>()
 
-      // when an user is adding a nameless dependency, e.g: `github:foo/bar`,
-      // `file:./foo/bar`, we need to update the `add` option value to set the
-      // correct name once we have it, so that it can properly be stored in
-      // the `package.json` file at the end of reify.
-      if (mani?.name && spec.name === '(unknown)') {
-        const s = add.get(String(spec))
-        if (s) {
-          // removes the previous, placeholder entry key
-          add.delete(String(spec))
-          // replaces spec with a version with the correct name
-          spec = Spec.parse(mani.name, spec.bareSpec, options)
-          // updates the add map with the fixed up spec
-          const n = asDependency({
-            ...s,
-            spec,
-          })
-          add.set(mani.name, n)
-        }
-      }
+  // PEER CONTEXT ISOLATION: Each workspace importer needs its own context
+  // to prevent peer targets from one workspace affecting another.
+  // The main importer (index 0) uses the initial context; others get fresh ones.
+  let initialPeerContext = graph.peerContexts[0]
+  /* c8 ignore start - impossible */
+  if (!initialPeerContext)
+    throw error('no initial peer context found in graph')
+  /* c8 ignore stop */
+  if (fromNode.importer && fromNode !== graph.mainImporter) {
+    // Create isolated peer context for this workspace importer
+    const nextPeerContext: PeerContext = new Map()
+    nextPeerContext.index = graph.nextPeerContextIndex()
+    graph.peerContexts[nextPeerContext.index] = nextPeerContext
+    initialPeerContext = nextPeerContext
+  }
 
-      if (!mani) {
-        if (!edgeOptional && fromNode.isOptional()) {
-          // failed resolution of a non-optional dep of an optional node
-          // have to clean up the dependents
-          removeOptionalSubgraph(graph, fromNode)
-          return
-        } else if (edgeOptional) {
-          // failed resolution of an optional dep, just ignore it,
-          // nothing to prune because we never added it in the first place.
-          return
-        } else {
-          throw error('failed to resolve dependency', {
-            spec,
-            from: fromNode.location,
-          })
-        }
-      }
-
-      const node = graph.placePackage(
-        fromNode,
-        type,
-        spec,
-        mani,
-        fileTypeInfo?.id,
-      )
-
-      /* c8 ignore start - not possible, already ensured manifest */
-      if (!node) {
-        throw error('failed to place package', {
-          from: fromNode.location,
-          spec,
-        })
-      }
+  // BFS queue: process deps level by level for deterministic builds
+  let currentLevelDeps: AppendNodeEntry[] = [
+    {
+      node: fromNode,
+      deps,
+      modifierRefs,
+      depth: 0,
+      peerContext: initialPeerContext,
+      /* c8 ignore start */
+      updateContext: {
+        putEntries: () => undefined,
+        resolvePeerDeps: () => {},
+      },
       /* c8 ignore stop */
+    },
+  ]
 
-      if (fileTypeInfo?.path && fileTypeInfo.isDirectory) {
-        node.location = fileTypeInfo.path
-      }
-      node.setResolved()
-      const nestedAppends: Promise<unknown>[] = []
+  // BFS MAIN LOOP: Process level by level until no more deps
+  while (currentLevelDeps.length > 0) {
+    const nextLevelDeps: AppendNodeEntry[] = []
 
-      const bundleDeps = node.manifest?.bundleDependencies
-      const bundled = new Set<string>(
-        (
-          node.id.startsWith('git') ||
-          node.importer ||
-          !isStringArray(bundleDeps)
-        ) ?
-          []
-        : bundleDeps,
-      )
-
-      const nextDeps: Dependency[] = []
-
-      for (const depTypeName of longDependencyTypes) {
-        const depRecord: Record<string, string> | undefined =
-          mani[depTypeName]
-
-        if (depRecord && shouldInstallDepType(node, depTypeName)) {
-          for (const [name, bareSpec] of Object.entries(depRecord)) {
-            if (bundled.has(name)) continue
-            nextDeps.push({
-              type: shorten(depTypeName, name, mani),
-              spec: Spec.parse(name, bareSpec, {
-                ...options,
-                registry: spec.registry,
-              }),
-            })
-          }
-        }
-      }
-
-      if (nextDeps.length) {
-        nestedAppends.push(
-          appendNodes(
-            add,
+    // ============================================================
+    // PHASE A: PARALLEL FETCH (READ-ONLY)
+    // ============================================================
+    // Fetch all manifests at this level in parallel without mutating the graph.
+    // This phase is read-only to avoid race conditions from network timing.
+    const fetchResults = await Promise.all(
+      currentLevelDeps.map(
+        async ({
+          node,
+          deps: nodeDeps,
+          modifierRefs: nodeModifierRefs,
+          peerContext,
+          depth,
+        }: AppendNodeEntry) => {
+          // Fetch manifests and collect tasks (no graph mutations)
+          const result = await fetchManifestsForDeps(
             packageInfo,
             graph,
             node,
-            nextDeps,
+            // Sort by name for deterministic ordering (reproducible builds)
+            nodeDeps.sort((a, b) =>
+              a.spec.name.localeCompare(b.spec.name, 'en'),
+            ),
             scurry,
             options,
-            seen,
-          ),
+            hydrations,
+            peerContext,
+            nodeModifierRefs,
+            depth,
+            explicit,
+          )
+
+          return {
+            entry: {
+              node,
+              deps: nodeDeps,
+              modifierRefs: nodeModifierRefs,
+              peerContext,
+              depth,
+            },
+            result,
+          }
+        },
+      ),
+    )
+
+    // ============================================================
+    // PHASE B: SERIAL MUTATIONS (DETERMINISTIC ORDER)
+    // ============================================================
+    // Sort results by stable identifiers to ensure deterministic ordering
+    // regardless of which manifest fetch completed first
+    const sortedResults = fetchResults.sort((a, b) => {
+      // Sort by node ID (DepID-based, stable) and depth
+      const keyA = `${a.entry.node.id}::${a.entry.depth}`
+      const keyB = `${b.entry.node.id}::${b.entry.depth}`
+      return keyA.localeCompare(keyB, 'en')
+    })
+
+    // Apply all mutations serially in deterministic order
+    const levelResults: ProcessPlacementResult[] = []
+    for (const { entry, result } of sortedResults) {
+      // Apply accumulated fork requests if any (from Phase A deferred forks)
+      if (result.forkRequests.length > 0) {
+        const forkedContext = forkPeerContext(
+          graph,
+          entry.peerContext,
+          result.forkRequests,
         )
+        entry.peerContext = forkedContext
+        // Update peer context in all placement tasks to use forked context
+        for (const task of result.placementTasks) {
+          task.fetchTask.peerContext = forkedContext
+        }
       }
-      await Promise.all(nestedAppends)
-    }),
-  )
+
+      // Apply reuse edges in deterministic order (before placement)
+      // Sort reuse tasks by spec name for stability
+      const sortedReuseTasks = result.reuseTasks.sort((a, b) =>
+        a.spec.name.localeCompare(b.spec.name, 'en'),
+      )
+      for (const {
+        type,
+        spec,
+        fromNode,
+        toNode,
+      } of sortedReuseTasks) {
+        graph.addEdge(type, spec, fromNode, toNode)
+      }
+
+      // Place nodes and collect child deps
+      const placed = await processPlacementTasks(
+        graph,
+        options,
+        result.placementTasks,
+        add,
+        modifiers,
+        scurry,
+        packageInfo,
+        extractPromises,
+        actual,
+        seenExtracted,
+        remover,
+        transientAdd,
+        transientRemove,
+      )
+
+      levelResults.push(placed)
+    }
+
+    // ============================================================
+    // PHASE C: POST-PLACEMENT PEER CHECK
+    // ============================================================
+    // After all nodes at this level are placed, update peer contexts,
+    // fork as needed, and resolve peer deps that can be satisfied.
+    // This must happen AFTER placement so sibling nodes are available.
+    postPlacementPeerCheck(graph, levelResults)
+
+    // ============================================================
+    // STEP 3: COLLECT CHILD DEPS FOR NEXT LEVEL
+    // ============================================================
+    /* c8 ignore next */
+    const nextDepth = (currentLevelDeps[0]?.depth ?? 0) + 1
+    for (const childDepsToProcess of levelResults) {
+      for (const childDep of childDepsToProcess) {
+        // seen at enqueue: skips cycles and same-level duplicates
+        // (first in sorted order wins)
+        if (seen.has(childDep.node.id)) continue
+        seen.add(childDep.node.id)
+        nextLevelDeps.push({ ...childDep, depth: nextDepth })
+      }
+    }
+
+    // Advance to next BFS level
+    currentLevelDeps = nextLevelDeps
+  }
 }

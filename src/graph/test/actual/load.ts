@@ -1,12 +1,24 @@
+import { existsSync, rmSync } from 'fs'
+import { resolve } from 'node:path'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { PackageJson } from '@nrz/package-json'
-import { type SpecOptions } from '@nrz/spec'
+import { Spec } from '@nrz/spec'
+import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { load } from '../../src/actual/load.ts'
+import {
+  load,
+  getPathBasedId,
+  asStoreConfigObject,
+  verifyImporterNodeModules,
+} from '../../src/actual/load.ts'
+import { loadHidden } from '../../src/lockfile/load.ts'
 import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
 import { actualGraph } from '../fixtures/actual.ts'
+import { GraphModifier } from '../../src/modifiers.ts'
+import type { Path } from 'path-scurry'
+import type { SpecOptions } from '@nrz/spec'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',
@@ -18,10 +30,13 @@ const configData = {
 
 t.test('load actual', async t => {
   const projectRoot = actualGraph(t)
+  t.chdir(projectRoot)
+  unload('project')
 
+  const scurry = new PathScurry(projectRoot)
   const fullGraph = load({
     projectRoot,
-    scurry: new PathScurry(projectRoot),
+    scurry,
     packageJson: new PackageJson(),
     monorepo: Monorepo.maybeLoad(projectRoot),
     loadManifests: true,
@@ -40,10 +55,15 @@ t.test('load actual', async t => {
     'should load an actual graph containing missing deps info',
   )
 
+  // remove any hidden lockfile to test loading without manifests
+  rmSync(scurry.resolve('node_modules/.nrz-lock.json'), {
+    recursive: true,
+  })
+
   t.matchSnapshot(
     objectLikeOutput(
       load({
-        scurry: new PathScurry(projectRoot),
+        scurry,
         packageJson: new PackageJson(),
         monorepo: Monorepo.maybeLoad(projectRoot),
         projectRoot,
@@ -68,6 +88,7 @@ t.test('cycle', async t => {
         a: '^1.0.0',
       },
     }),
+    'nrz.json': '{}',
     node_modules: {
       '.nrz': {
         [joinDepIDTuple(['registry', '', 'a@1.0.0'])]: {
@@ -117,10 +138,13 @@ t.test('cycle', async t => {
       ),
     },
   })
+  t.chdir(projectRoot)
+  unload('project')
+  const scurry = new PathScurry(projectRoot)
   t.matchSnapshot(
     objectLikeOutput(
       load({
-        scurry: new PathScurry(projectRoot),
+        scurry,
         packageJson: new PackageJson(),
         monorepo: Monorepo.maybeLoad(projectRoot),
         projectRoot,
@@ -130,10 +154,16 @@ t.test('cycle', async t => {
     ),
     'should load an actual graph with cycle containing missing deps info',
   )
+
+  // remove any hidden lockfile to test loading without manifests
+  rmSync(scurry.resolve('node_modules/.nrz-lock.json'), {
+    recursive: true,
+  })
+
   t.matchSnapshot(
     objectLikeOutput(
       load({
-        scurry: new PathScurry(projectRoot),
+        scurry,
         packageJson: new PackageJson(),
         monorepo: Monorepo.maybeLoad(projectRoot),
         projectRoot,
@@ -147,6 +177,7 @@ t.test('cycle', async t => {
 
 t.test('uninstalled dependencies', async t => {
   const projectRoot = t.testdir({
+    'nrz.json': '{}',
     'package.json': JSON.stringify({
       name: 'my-project',
       version: '1.0.0',
@@ -155,6 +186,8 @@ t.test('uninstalled dependencies', async t => {
       },
     }),
   })
+  t.chdir(projectRoot)
+  unload('project')
   t.matchSnapshot(
     objectLikeOutput(
       load({
@@ -181,4 +214,1812 @@ t.test('uninstalled dependencies', async t => {
     ),
     'should load an actual graph with missing deps with no manifest info',
   )
+})
+
+t.test('getPathBasedId', async t => {
+  t.matchSnapshot(
+    [
+      [
+        Spec.parse('foo', '^1.0.0'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['registry', '', 'foo@1.0.0'])}`,
+        ).cwd,
+      ],
+      [
+        Spec.parse('foo', '^1.0.0'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['registry', '', 'foo@1.0.0', 'deadbeef'])}`,
+        ).cwd,
+      ],
+      [
+        Spec.parse('b', 'github:a/b'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['git', 'github:a/b', ''])}`,
+        ).cwd,
+      ],
+      [
+        Spec.parse('b', 'github:a/b'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['git', 'github:a/b', '', 'deadbeef'])}`,
+        ).cwd,
+      ],
+      // file deps are not located in the node_modules/.nrz store folder
+      [
+        Spec.parse('foo', 'file:./foo'),
+        {
+          relativePosix() {
+            return 'foo'
+          },
+        },
+      ],
+      [
+        Spec.parse('foo', 'file:./foo'),
+        {
+          relativePosix() {
+            return 'foo'
+          },
+        },
+      ],
+      // workspaces are not located in the node_modules/.nrz store folder
+      [
+        Spec.parse('a', 'workspace:*'),
+        {
+          relativePosix() {
+            return 'packages/a'
+          },
+        },
+      ],
+      [
+        Spec.parse('a', 'workspace:*'),
+        {
+          relativePosix() {
+            return 'packages/a'
+          },
+        },
+      ],
+      [
+        Spec.parse('x', 'https://example.com/x.tgz'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['remote', 'https://example.com/x.tgz'])}`,
+        ).cwd,
+      ],
+      [
+        Spec.parse('x', 'https://example.com/x.tgz'),
+        new PathScurry(
+          `node_modules/.nrz/${joinDepIDTuple(['remote', 'https://example.com/x.tgz', 'deadbeef'])}`,
+        ).cwd,
+      ],
+    ].map(([spec, path]) =>
+      getPathBasedId(spec as Spec, path as Path),
+    ),
+    'should get path based id for various dep ids',
+  )
+})
+
+t.test('extra parameter in DepID', async t => {
+  // Define DepIDs upfront so we can reference them consistently
+  const depIdA = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+  const depIdB = joinDepIDTuple([
+    'registry',
+    '',
+    'b@1.0.0',
+    ':root > #b',
+  ])
+  const depIdC = joinDepIDTuple([
+    'registry',
+    '',
+    'c@1.0.0',
+    ':root > #c > #d',
+  ])
+
+  // Create a project with dependencies that have extra params in their DepIDs
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'extra-param-project',
+      version: '1.0.0',
+      dependencies: {
+        a: '^1.0.0',
+        b: '^1.0.0',
+        c: '^1.0.0',
+        d: 'file:packages/d',
+      },
+    }),
+    'nrz.json': '{}',
+    packages: {
+      d: {
+        'package.json': JSON.stringify({
+          name: 'd',
+          version: '1.0.0',
+        }),
+      },
+    },
+    node_modules: {
+      '.nrz': {
+        // Regular dependency without extra parameter
+        [depIdA]: {
+          node_modules: {
+            a: {
+              'package.json': JSON.stringify({
+                name: 'a',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+        // With extra parameter - selector path
+        [depIdB]: {
+          node_modules: {
+            b: {
+              'package.json': JSON.stringify({
+                name: 'b',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+        // With extra parameter - nested selector path
+        [depIdC]: {
+          node_modules: {
+            c: {
+              'package.json': JSON.stringify({
+                name: 'c',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+      },
+      a: t.fixture('symlink', '.nrz/' + depIdA + '/node_modules/a'),
+      b: t.fixture('symlink', '.nrz/' + depIdB + '/node_modules/b'),
+      c: t.fixture('symlink', '.nrz/' + depIdC + '/node_modules/c'),
+      // For file type, create a real symlink to the packages dir
+      d: t.fixture('symlink', '../packages/d'),
+    },
+  })
+
+  t.chdir(projectRoot)
+  unload('project')
+
+  const graph = load({
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    projectRoot,
+    loadManifests: true,
+    ...configData,
+  })
+
+  // Get nodes directly by their DepIDs
+  const nodeA = graph.nodes.get(depIdA)
+  const nodeB = graph.nodes.get(depIdB)
+  const nodeC = graph.nodes.get(depIdC)
+  const nodeD = graph.nodes.get(
+    joinDepIDTuple(['file', 'packages/d']),
+  )
+
+  // Verify nodes exist with the correct names and IDs
+  t.ok(nodeA, 'regular node a exists')
+  t.equal(nodeA?.name, 'a', 'node a has correct name')
+
+  t.ok(nodeB, 'node b with selector extra parameter exists')
+  t.equal(nodeB?.name, 'b', 'node b has correct name')
+
+  t.ok(nodeC, 'node c with nested selector extra parameter exists')
+  t.equal(nodeC?.name, 'c', 'node c has correct name')
+
+  t.ok(nodeD, 'file-type node d exists')
+  t.equal(nodeD?.name, 'd', 'node d has correct name')
+
+  // Generate the serialized graph and check for the correct structure
+  const serializedGraph = objectLikeOutput(graph)
+  t.matchSnapshot(
+    serializedGraph,
+    'should preserve extra parameters in DepIDs when loading the graph',
+  )
+})
+
+t.test('skipLoadingNodesOnModifiersChange behavior', async t => {
+  // Modifiers have changed - should not load dependencies
+  await t.test(
+    'modifiers changed - should skip loading dependencies',
+    async t => {
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-test-project',
+          version: '1.0.0',
+          dependencies: {
+            a: '^1.0.0',
+          },
+        }),
+        // Project-level nrz.json with some modifiers
+        'nrz.json': JSON.stringify({
+          modifiers: { ':root > #a': '^2.0.0' },
+        }),
+        node_modules: {
+          '.nrz': {
+            // Store config with no modifiers (empty object) - this should be different
+            'nrz.json': JSON.stringify({
+              modifiers: {},
+            }),
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', '.nrz/${aDepID}/node_modules/a'),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipLoadingNodesOnModifiersChange: true, // This is the key option
+        modifiers,
+        ...configData,
+      })
+
+      // Since modifiers changed, dependencies should not be loaded
+      // since it's using skipLoadingNodesOnModifiersChange=true
+      const nodeA = graph.nodes.get(aDepID)
+      t.notOk(
+        nodeA,
+        'dependency "a" should not be loaded because modifiers changed',
+      )
+      t.equal(
+        graph.nodes.size,
+        1,
+        'graph should contain just the root node',
+      )
+    },
+  )
+
+  // Modifiers haven't changed - should load dependencies
+  await t.test(
+    'modifiers unchanged - should load dependencies',
+    async t => {
+      const bDepID = joinDepIDTuple(['registry', '', 'b@1.0.0'])
+      const modifiersConfig = JSON.stringify({
+        modifiers: { ':root > #b': '^1.0.0' },
+      })
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-test-project-2',
+          version: '1.0.0',
+          dependencies: {
+            b: '^1.0.0',
+          },
+        }),
+        // Project-level nrz.json with same modifiers as store
+        'nrz.json': modifiersConfig,
+        node_modules: {
+          '.nrz': {
+            // Store config with same modifiers as project
+            'nrz.json': modifiersConfig,
+            [bDepID]: {
+              node_modules: {
+                b: {
+                  'package.json': JSON.stringify({
+                    name: 'b',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          b: t.fixture('symlink', `.nrz/${bDepID}/node_modules/b`),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipLoadingNodesOnModifiersChange: true, // This is the key option
+        modifiers,
+        ...configData,
+      })
+
+      // Since modifiers are the same, dependencies should be loaded
+      // even though skipLoadingNodesOnModifiersChange=true
+      const nodeB = graph.nodes.get(bDepID)
+      t.ok(
+        nodeB,
+        'dependency "b" should be loaded because modifiers are unchanged ' +
+          'even though skipLoadingNodesOnModifiersChange is true',
+      )
+      t.equal(
+        nodeB?.name,
+        'b',
+        'loaded node should have correct name',
+      )
+      t.equal(
+        graph.nodes.size,
+        2,
+        'graph should contain loaded nodes',
+      )
+    },
+  )
+
+  // Test scenario 3: skipLoadingNodesOnModifiersChange disabled - should always load
+  await t.test(
+    'skipLoadingNodesOnModifiersChange disabled - should always load',
+    async t => {
+      const modifiersConfig = { ':root > #c': '^1.0.0' }
+
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-test-project-3',
+          version: '1.0.0',
+          dependencies: {
+            c: '^1.0.0',
+          },
+        }),
+        // Project-level nrz.json with same modifiers as store
+        'nrz.json': JSON.stringify({
+          modifiers: modifiersConfig,
+        }),
+        node_modules: {
+          '.nrz': {
+            // Store config with same modifiers as project
+            'nrz.json': JSON.stringify({
+              modifiers: modifiersConfig,
+            }),
+            [joinDepIDTuple(['registry', '', 'c@1.0.0'])]: {
+              node_modules: {
+                c: {
+                  'package.json': JSON.stringify({
+                    name: 'c',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          c: t.fixture(
+            'symlink',
+            '.nrz/' +
+              joinDepIDTuple(['registry', '', 'c@1.0.0']) +
+              '/node_modules/c',
+          ),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      // Create modifiers - it will load from the project-level nrz.json
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipLoadingNodesOnModifiersChange: false, // Disabled - should always load
+        modifiers,
+        ...configData,
+      })
+
+      // Even with same modifiers, dependencies should be loaded because skipLoadingNodesOnModifiersChange: false
+      const nodeC = graph.nodes.get(
+        joinDepIDTuple(['registry', '', 'c@1.0.0']),
+      )
+      t.ok(
+        nodeC,
+        'dependency "c" should be loaded because skipLoadingNodesOnModifiersChange is disabled',
+      )
+      t.equal(
+        nodeC?.name,
+        'c',
+        'loaded node should have correct name',
+      )
+      t.equal(
+        graph.nodes.size > 1,
+        true,
+        'graph should contain more than just the root node',
+      )
+    },
+  )
+
+  await t.test(
+    'store config file missing - should skip loading dependencies',
+    async t => {
+      const dDepID = joinDepIDTuple(['registry', '', 'd@1.0.0'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-test-project-4',
+          version: '1.0.0',
+          dependencies: {
+            d: '^1.0.0',
+          },
+        }),
+        // Project-level nrz.json with modifiers
+        'nrz.json': JSON.stringify({
+          modifiers: { ':root > #d': '^1.0.0' },
+        }),
+        node_modules: {
+          '.nrz': {
+            // NOTE: No nrz.json file in the store - this is the key difference
+            // The store config will default to { modifiers: undefined }
+            [dDepID]: {
+              node_modules: {
+                d: {
+                  'package.json': JSON.stringify({
+                    name: 'd',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          d: t.fixture('symlink', `.nrz/${dDepID}/node_modules/d`),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipLoadingNodesOnModifiersChange: true, // This is the key option
+        modifiers,
+        ...configData,
+      })
+
+      // Since store config file is missing (defaults to no modifiers) but project has modifiers,
+      // they are different, so dependencies should not be loaded
+      const nodeD = graph.nodes.get(dDepID)
+      t.notOk(
+        nodeD,
+        'dependency "d" should not be loaded because store config file is missing ' +
+          '(causing modifiers comparison to fail)',
+      )
+      t.equal(
+        graph.nodes.size,
+        1,
+        'graph should contain just the root node',
+      )
+    },
+  )
+})
+
+t.test('modifiers integration', async t => {
+  await t.test(
+    'should apply modifiers when loading actual graph',
+    async t => {
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const bDepID = joinDepIDTuple(['registry', '', 'b@2.0.0']) // Modified version
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-actual-test',
+          version: '1.0.0',
+          dependencies: {
+            a: '^1.0.0',
+            b: '^1.0.0', // Will be modified to 2.0.0
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          modifiers: {
+            ':root > #b': '^2.0.0', // Override b to use 2.0.0
+          },
+        }),
+        node_modules: {
+          '.nrz': {
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+            [bDepID]: {
+              node_modules: {
+                b: {
+                  'package.json': JSON.stringify({
+                    name: 'b',
+                    version: '2.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+          b: t.fixture('symlink', `.nrz/${bDepID}/node_modules/b`),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        modifiers,
+        ...configData,
+      })
+
+      // Check that 'a' was loaded normally
+      const nodeA = graph.nodes.get(aDepID)
+      t.ok(nodeA, 'dependency "a" should be loaded normally')
+      t.equal(nodeA?.name, 'a', 'node a has correct name')
+      t.equal(nodeA?.version, '1.0.0', 'node a has correct version')
+
+      // Check that 'b' was loaded with modified spec (2.0.0 instead of 1.0.0)
+      const nodeB = graph.nodes.get(bDepID)
+      t.ok(
+        nodeB,
+        'dependency "b" should be loaded with modified spec',
+      )
+      t.equal(nodeB?.name, 'b', 'node b has correct name')
+      t.equal(
+        nodeB?.version,
+        '2.0.0',
+        'node b has modified version 2.0.0',
+      )
+      t.equal(
+        nodeB?.modifier,
+        ':root > #b',
+        'node b has correct modifier path',
+      )
+
+      // Check that the edge from root to 'b' has the modified spec
+      const rootNode = graph.mainImporter
+      const edgeToB = rootNode.edgesOut.get('b')
+      t.ok(edgeToB, 'edge to b should exist')
+      t.equal(
+        edgeToB?.spec.bareSpec,
+        '^2.0.0',
+        'edge spec should be modified',
+      )
+      t.equal(
+        edgeToB?.spec.overridden,
+        true,
+        'edge spec should be marked as overridden',
+      )
+    },
+  )
+
+  await t.test(
+    'should apply modifiers for missing dependencies',
+    async t => {
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-missing-test',
+          version: '1.0.0',
+          dependencies: {
+            missing: '^1.0.0', // This will be missing but modified
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          modifiers: {
+            ':root > #missing': '^2.0.0', // Override missing to use 2.0.0
+          },
+        }),
+        // No node_modules for missing dependency
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        modifiers,
+        ...configData,
+      })
+
+      // Check that the missing dependency edge has the modified spec
+      const rootNode = graph.mainImporter
+      const edgeToMissing = rootNode.edgesOut.get('missing')
+      t.ok(edgeToMissing, 'edge to missing should exist')
+      t.equal(
+        edgeToMissing?.spec.bareSpec,
+        '^2.0.0',
+        'missing dep spec should be modified',
+      )
+      t.notOk(
+        edgeToMissing?.to,
+        'missing dep should have no target node',
+      )
+      t.ok(
+        edgeToMissing?.spec.overridden,
+        'missing dep spec should still be marked as overridden',
+      )
+    },
+  )
+
+  await t.test(
+    'a "-" modifier does not mark a dependency as missing',
+    async t => {
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-removed-test',
+          version: '1.0.0',
+          dependencies: {
+            removed: '^1.0.0',
+            missing: '^1.0.0',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          modifiers: { ':root > #removed': '-' },
+        }),
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        modifiers: new GraphModifier({ ...configData }),
+        ...configData,
+      })
+
+      const { edgesOut } = graph.mainImporter
+      t.notOk(edgesOut.get('removed'), 'no edge for removed dep')
+      t.ok(edgesOut.get('missing'), 'unmodified dep still missing')
+      t.notOk(edgesOut.get('missing')?.to)
+    },
+  )
+
+  await t.test(
+    'should apply modifiers when loadManifests=false',
+    async t => {
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const bDepID = joinDepIDTuple(['registry', '', 'b@2.0.0'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'modifiers-no-manifest-test',
+          version: '1.0.0',
+          dependencies: {
+            a: '^1.0.0',
+            b: '^1.0.0',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          modifiers: {
+            ':root > #b': '^2.0.0',
+          },
+        }),
+        node_modules: {
+          '.nrz': {
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+            [bDepID]: {
+              node_modules: {
+                b: {
+                  'package.json': JSON.stringify({
+                    name: 'b',
+                    version: '2.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+          b: t.fixture('symlink', `.nrz/${bDepID}/node_modules/b`),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const modifiers = new GraphModifier({
+        ...configData,
+      })
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: false, // This is the key difference
+        modifiers,
+        ...configData,
+      })
+
+      // Even without loading manifests, modifiers should still apply
+      const nodeA = graph.nodes.get(aDepID)
+      t.ok(nodeA, 'dependency "a" should be loaded')
+
+      const nodeB = graph.nodes.get(bDepID)
+      t.ok(
+        nodeB,
+        'dependency "b" should be loaded with modified spec',
+      )
+      t.equal(
+        nodeB?.modifier,
+        ':root > #b',
+        'node b has correct modifier path',
+      )
+
+      // Check that edges have been created
+      const rootNode = graph.mainImporter
+      const edgeToA = rootNode.edgesOut.get('a')
+      const edgeToB = rootNode.edgesOut.get('b')
+      t.ok(edgeToA, 'edge to a should exist')
+      t.ok(edgeToB, 'edge to b should exist')
+      t.ok(
+        edgeToB?.spec.overridden,
+        'edge to b should be marked as overridden',
+      )
+    },
+  )
+
+  await t.test('should handle nested modifier queries', async t => {
+    const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+    const bDepID = joinDepIDTuple(['registry', '', 'b@1.0.0'])
+    const cDepID = joinDepIDTuple(['registry', '', 'c@2.0.0']) // Modified
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'modifiers-nested-test',
+        version: '1.0.0',
+        dependencies: {
+          a: '^1.0.0',
+        },
+      }),
+      'nrz.json': JSON.stringify({
+        modifiers: {
+          ':root > #a > #c': '^2.0.0', // Nested modifier
+        },
+      }),
+      node_modules: {
+        '.nrz': {
+          [aDepID]: {
+            node_modules: {
+              a: {
+                'package.json': JSON.stringify({
+                  name: 'a',
+                  version: '1.0.0',
+                  dependencies: {
+                    b: '^1.0.0',
+                    c: '^1.0.0', // Will be modified
+                  },
+                }),
+              },
+              b: t.fixture(
+                'symlink',
+                `../../${bDepID}/node_modules/b`,
+              ),
+              c: t.fixture(
+                'symlink',
+                `../../${cDepID}/node_modules/c`,
+              ),
+            },
+          },
+          [bDepID]: {
+            node_modules: {
+              b: {
+                'package.json': JSON.stringify({
+                  name: 'b',
+                  version: '1.0.0',
+                }),
+              },
+            },
+          },
+          [cDepID]: {
+            node_modules: {
+              c: {
+                'package.json': JSON.stringify({
+                  name: 'c',
+                  version: '2.0.0',
+                }),
+              },
+            },
+          },
+        },
+        a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+      },
+    })
+
+    t.chdir(projectRoot)
+    unload('project')
+
+    const modifiers = new GraphModifier({
+      ...configData,
+    })
+
+    const graph = load({
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      projectRoot,
+      loadManifests: true,
+      modifiers,
+      ...configData,
+    })
+
+    const nodeA = graph.nodes.get(aDepID)
+    const nodeB = graph.nodes.get(bDepID)
+    const nodeC = graph.nodes.get(cDepID)
+
+    t.ok(nodeA, 'dependency "a" should be loaded')
+    t.ok(nodeB, 'dependency "b" should be loaded normally')
+    t.ok(nodeC, 'dependency "c" should be loaded with modified spec')
+
+    t.equal(
+      nodeA?.modifier,
+      ':root > #a > #c',
+      'should have correct modifier path for affected nodes',
+    )
+    t.equal(
+      nodeC?.modifier,
+      ':root > #a > #c',
+      'should have correct modifier path for affected nodes',
+    )
+
+    // Check that c has the modified version
+    t.equal(
+      nodeC?.version,
+      '2.0.0',
+      'node c should have modified version',
+    )
+
+    // Check that the edge from a to c has modified spec
+    const edgeToA = graph.mainImporter.edgesOut.get('a')
+    const edgeToC = nodeA?.edgesOut.get('c')
+    t.ok(edgeToA, 'edge from root to a should exist')
+    t.notOk(
+      edgeToA?.spec.overridden,
+      'an edge that is not the target of a modifier should not be overridden',
+    )
+    t.ok(edgeToC, 'edge from a to c should exist')
+    t.equal(
+      edgeToC?.spec.bareSpec,
+      '^2.0.0',
+      'edge spec should be modified',
+    )
+    t.ok(
+      edgeToC?.spec.overridden,
+      'the target of a modifier should be overridden',
+    )
+  })
+})
+
+t.test('hidden lockfile', async t => {
+  await t.test('should use hidden lockfile by default', async t => {
+    const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+    const projectRoot = t.testdir({
+      'package.json': JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {
+          a: '^1.0.0',
+        },
+      }),
+      'nrz.json': '{}',
+      node_modules: {
+        '.nrz-lock.json': JSON.stringify({
+          lockfileVersion: 1,
+          options: configData,
+          nodes: {
+            [aDepID]: [
+              0,
+              'a',
+              null,
+              null,
+              null,
+              {
+                name: 'a',
+                version: '1.0.0',
+              },
+            ],
+          },
+          edges: {
+            'file:. a': `prod ^1.0.0 ${aDepID}`,
+          },
+        }),
+        '.nrz': {
+          [aDepID]: {
+            node_modules: {
+              a: {
+                'package.json': JSON.stringify({
+                  name: 'a',
+                  version: '1.0.0',
+                }),
+              },
+            },
+          },
+        },
+        a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+      },
+    })
+
+    t.chdir(projectRoot)
+    unload('project')
+
+    const graph = load({
+      scurry: new PathScurry(projectRoot),
+      packageJson: new PackageJson(),
+      monorepo: Monorepo.maybeLoad(projectRoot),
+      projectRoot,
+      loadManifests: true,
+      ...configData,
+    })
+
+    // Should load the node from hidden lockfile
+    const nodeA = graph.nodes.get(aDepID)
+    t.ok(nodeA, 'should load node from hidden lockfile')
+    t.equal(nodeA?.name, 'a', 'node should have correct name')
+    t.equal(
+      nodeA?.version,
+      '1.0.0',
+      'node should have correct version',
+    )
+  })
+
+  await t.test(
+    'should handle missing hidden lockfile gracefully',
+    async t => {
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-project-3',
+          version: '1.0.0',
+          dependencies: {
+            a: '^1.0.0',
+          },
+        }),
+        'nrz.json': '{}',
+        // No node_modules directory
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      })
+
+      // Should create a graph with missing dependencies
+      t.ok(graph, 'should create graph even without node_modules')
+      t.equal(graph.nodes.size, 1, 'should contain only root node')
+    },
+  )
+
+  await t.test(
+    'should regenerate on hidden lockfile version mismatch',
+    async t => {
+      const { LOCKFILE_VERSION } = await t.mockImport<
+        typeof import('../../src/lockfile/types.ts')
+      >('../../src/lockfile/types.ts')
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+          dependencies: {
+            a: '^1.0.0',
+          },
+        }),
+        'nrz.json': '{}',
+        node_modules: {
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: LOCKFILE_VERSION + 1, // Newer version
+            options: configData,
+            nodes: {},
+            edges: {},
+          }),
+          '.nrz': {
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      })
+
+      // Should regenerate from filesystem despite version mismatch
+      const nodeA = graph.nodes.get(aDepID)
+      t.ok(nodeA, 'should load node from filesystem')
+      t.equal(nodeA?.name, 'a', 'node should have correct name')
+      t.equal(
+        nodeA?.version,
+        '1.0.0',
+        'node should have correct version',
+      )
+    },
+  )
+
+  await t.test(
+    'should invalidate hidden lockfile when workspace node_modules is missing',
+    async t => {
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const wsDepID = joinDepIDTuple(['workspace', 'packages/my-ws'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'my-monorepo',
+          version: '1.0.0',
+          dependencies: {
+            'my-ws': 'workspace:*',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          workspaces: { packages: ['./packages/*'] },
+        }),
+        packages: {
+          'my-ws': {
+            'package.json': JSON.stringify({
+              name: 'my-ws',
+              version: '1.0.0',
+              dependencies: {
+                a: '^1.0.0',
+              },
+            }),
+            // no node_modules here — simulates deletion
+          },
+        },
+        node_modules: {
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: configData,
+            nodes: {
+              [aDepID]: [
+                0,
+                'a',
+                null,
+                null,
+                null,
+                {
+                  name: 'a',
+                  version: '1.0.0',
+                },
+              ],
+            },
+            edges: {
+              [`${wsDepID} a`]: `prod ^1.0.0 ${aDepID}`,
+              'file:. my-ws': `prod workspace:* ${wsDepID}`,
+            },
+          }),
+          '.nrz': {
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+          'my-ws': t.fixture('symlink', '../packages/my-ws'),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      })
+
+      // The hidden lockfile should be invalidated because the
+      // workspace node_modules is missing. The graph should be
+      // rebuilt from the filesystem, showing workspace dep 'a'
+      // as missing (no node_modules/a under packages/my-ws).
+      const wsNode = graph.nodes.get(wsDepID)
+      t.ok(wsNode, 'workspace importer node should exist')
+      // The workspace's dep 'a' should be missing since its
+      // node_modules was deleted
+      const edgeA = wsNode?.edgesOut.get('a')
+      t.ok(edgeA, 'workspace should have edge for a')
+      t.notOk(edgeA?.to, 'edge to a should be unresolved (missing)')
+    },
+  )
+
+  await t.test(
+    'should keep hidden lockfile when dep-less workspace has no node_modules',
+    async t => {
+      const bDepID = joinDepIDTuple(['registry', '', 'b@1.0.0'])
+      const wsDepID = joinDepIDTuple(['workspace', 'packages/my-ws'])
+      const rootDepID = joinDepIDTuple(['file', '.'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'my-monorepo',
+          version: '1.0.0',
+          dependencies: {
+            'my-ws': 'workspace:*',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          workspaces: { packages: ['./packages/*'] },
+        }),
+        packages: {
+          'my-ws': {
+            'package.json': JSON.stringify({
+              name: 'my-ws',
+              version: '1.0.0',
+            }),
+            // no node_modules — dep-less workspace never gets one
+          },
+        },
+        node_modules: {
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: configData,
+            nodes: {
+              [bDepID]: [
+                2,
+                'b',
+                'sha512-abc',
+                null,
+                null,
+                {
+                  name: 'b',
+                  version: '1.0.0',
+                },
+              ],
+            },
+            edges: {
+              [`${rootDepID} b`]: `dev ^1.0.0 ${bDepID}`,
+              [`${rootDepID} my-ws`]: `prod workspace:* ${wsDepID}`,
+            },
+          }),
+          'my-ws': t.fixture('symlink', '../packages/my-ws'),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      })
+
+      // Phantom node exists only in the hidden lockfile; FS traversal
+      // would never find it. Surviving here means the fast path was used.
+      const nodeB = graph.nodes.get(bDepID)
+      t.ok(nodeB, 'should load lockfile-only node via fast path')
+      t.equal(nodeB?.integrity, 'sha512-abc', 'integrity preserved')
+      t.ok(nodeB?.dev, 'dev flag preserved')
+      t.equal(
+        nodeB?.manifest?.version,
+        '1.0.0',
+        'lockfile manifest preserved',
+      )
+      t.equal(
+        graph.mainImporter.edgesOut.get('b')?.to,
+        nodeB,
+        'root edge to lockfile-only node preserved',
+      )
+    },
+  )
+})
+
+t.test('various DepID types with peerSetHash', async t => {
+  const peerSetHash = 'peer.1'
+  const modifier = ':root > #a'
+
+  // Build extra metadata combining modifier and peerSetHash
+  const { joinExtra } = await import('@nrz/dep-id')
+  const registryExtra = joinExtra({ modifier, peerSetHash })
+  const peerSetOnly = joinExtra({ peerSetHash })
+
+  // Create DepIDs with various types
+  const registryDepID = joinDepIDTuple([
+    'registry',
+    '',
+    'a@1.0.0',
+    registryExtra,
+  ])
+  const gitDepID = joinDepIDTuple([
+    'git',
+    'github:user/repo',
+    'main',
+    peerSetOnly,
+  ])
+  const remoteDepID = joinDepIDTuple([
+    'remote',
+    'https://example.com/pkg.tgz',
+    peerSetOnly,
+  ])
+
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'depid-types-test',
+      version: '1.0.0',
+      dependencies: {
+        a: '^1.0.0',
+        b: 'github:user/repo',
+        c: 'https://example.com/pkg.tgz',
+        d: 'file:packages/d',
+        e: 'workspace:*',
+      },
+    }),
+    'nrz.json': JSON.stringify({
+      modifiers: {
+        [modifier]: '^1.0.0',
+      },
+    }),
+    packages: {
+      d: {
+        'package.json': JSON.stringify({
+          name: 'd',
+          version: '1.0.0',
+        }),
+      },
+      e: {
+        'package.json': JSON.stringify({
+          name: 'e',
+          version: '1.0.0',
+        }),
+      },
+    },
+    node_modules: {
+      '.nrz': {
+        [registryDepID]: {
+          node_modules: {
+            a: {
+              'package.json': JSON.stringify({
+                name: 'a',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+        [gitDepID]: {
+          node_modules: {
+            b: {
+              'package.json': JSON.stringify({
+                name: 'b',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+        [remoteDepID]: {
+          node_modules: {
+            c: {
+              'package.json': JSON.stringify({
+                name: 'c',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+      },
+      a: t.fixture('symlink', `.nrz/${registryDepID}/node_modules/a`),
+      b: t.fixture('symlink', `.nrz/${gitDepID}/node_modules/b`),
+      c: t.fixture('symlink', `.nrz/${remoteDepID}/node_modules/c`),
+      d: t.fixture('symlink', '../packages/d'),
+      e: t.fixture('symlink', '../packages/e'),
+    },
+  })
+
+  t.chdir(projectRoot)
+  unload('project')
+
+  const graph = load({
+    scurry: new PathScurry(projectRoot),
+    packageJson: new PackageJson(),
+    monorepo: Monorepo.maybeLoad(projectRoot),
+    projectRoot,
+    loadManifests: true,
+    ...configData,
+  })
+
+  // Verify all node types were loaded
+  const nodeA = graph.nodes.get(registryDepID)
+  const nodeB = graph.nodes.get(gitDepID)
+  const nodeC = graph.nodes.get(remoteDepID)
+  const nodeD = graph.nodes.get(
+    joinDepIDTuple(['file', 'packages/d']),
+  )
+  const nodeE = graph.nodes.get(
+    joinDepIDTuple(['workspace', 'packages/e']),
+  )
+
+  t.ok(nodeA, 'registry node with peerSetHash + modifier loaded')
+  t.equal(nodeA?.name, 'a', 'registry node has correct name')
+  t.equal(
+    nodeA?.peerSetHash,
+    peerSetHash,
+    'registry node has peerSetHash',
+  )
+
+  t.ok(nodeB, 'git node with peerSetHash loaded')
+  t.equal(nodeB?.name, 'b', 'git node has correct name')
+  t.equal(nodeB?.peerSetHash, peerSetHash, 'git node has peerSetHash')
+
+  t.ok(nodeC, 'remote node with peerSetHash loaded')
+  t.equal(nodeC?.name, 'c', 'remote node has correct name')
+  t.equal(
+    nodeC?.peerSetHash,
+    peerSetHash,
+    'remote node has peerSetHash',
+  )
+
+  t.ok(nodeD, 'file node loaded')
+  t.equal(nodeD?.name, 'd', 'file node has correct name')
+
+  t.ok(nodeE, 'workspace node loaded')
+  t.equal(nodeE?.name, 'e', 'workspace node has correct name')
+
+  t.matchSnapshot(
+    objectLikeOutput(graph),
+    'should load graph with various DepID types and peerSetHash',
+  )
+})
+
+t.test('invalid DepID handling', async t => {
+  // Create a malformed DepID that will fail parsing
+  const invalidDepID = '~~~~id~~with~~too~~many~~separators'
+
+  const projectRoot = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'invalid-depid-test',
+      version: '1.0.0',
+      dependencies: {
+        a: '^1.0.0',
+      },
+    }),
+    'nrz.json': '{}',
+    node_modules: {
+      '.nrz': {
+        [invalidDepID]: {
+          node_modules: {
+            a: {
+              'package.json': JSON.stringify({
+                name: 'a',
+                version: '1.0.0',
+              }),
+            },
+          },
+        },
+      },
+      a: t.fixture('symlink', `.nrz/${invalidDepID}/node_modules/a`),
+    },
+  })
+
+  t.chdir(projectRoot)
+  unload('project')
+
+  t.throws(
+    () =>
+      load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      }),
+    /Expected dep id/,
+    'should throw when encountering invalid DepID',
+  )
+})
+
+t.test('asStoreConfigObject', async t => {
+  t.strictSame(
+    asStoreConfigObject({ modifiers: { '#a': '1' } }),
+    { modifiers: { '#a': '1' } },
+    'should convert simple selector to store config object',
+  )
+  t.throws(
+    () => asStoreConfigObject({ modifiers: '#a' }),
+    /Expected a store config object, got/,
+    'should throw on invalid selector',
+  )
+  t.throws(
+    () => asStoreConfigObject({ foo: 'foo' }),
+    /Expected a store config object, got/,
+    'should throw on invalid selector',
+  )
+})
+
+t.test('verifyImporterNodeModules', async t => {
+  await t.test(
+    'should pass when all importer node_modules exist',
+    async t => {
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-project',
+          version: '1.0.0',
+        }),
+        'nrz.json': '{}',
+        node_modules: {},
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipHiddenLockfile: true,
+        ...configData,
+      })
+
+      // Should not throw when root node_modules exists
+      t.doesNotThrow(
+        () => verifyImporterNodeModules(graph, projectRoot),
+        'should pass when node_modules exists',
+      )
+    },
+  )
+
+  await t.test(
+    'should skip dep-less importer missing node_modules',
+    async t => {
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'my-monorepo',
+          version: '1.0.0',
+          dependencies: {
+            'my-ws': 'workspace:*',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          workspaces: { packages: ['./packages/*'] },
+        }),
+        packages: {
+          'my-ws': {
+            'package.json': JSON.stringify({
+              name: 'my-ws',
+              version: '1.0.0',
+            }),
+            // no node_modules — workspace has no deps
+          },
+        },
+        node_modules: {},
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const graph = load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        skipHiddenLockfile: true,
+        ...configData,
+      })
+
+      t.doesNotThrow(
+        () => verifyImporterNodeModules(graph, projectRoot),
+        'should skip dep-less workspace without node_modules',
+      )
+    },
+  )
+
+  await t.test(
+    'should throw when importer with resolved edges is missing node_modules',
+    async t => {
+      const aDepID = joinDepIDTuple(['registry', '', 'a@1.0.0'])
+      const wsDepID = joinDepIDTuple(['workspace', 'packages/my-ws'])
+      const rootDepID = joinDepIDTuple(['file', '.'])
+      const projectRoot = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'my-monorepo',
+          version: '1.0.0',
+          dependencies: {
+            'my-ws': 'workspace:*',
+          },
+        }),
+        'nrz.json': JSON.stringify({
+          workspaces: { packages: ['./packages/*'] },
+        }),
+        packages: {
+          'my-ws': {
+            'package.json': JSON.stringify({
+              name: 'my-ws',
+              version: '1.0.0',
+              dependencies: {
+                a: '^1.0.0',
+              },
+            }),
+            // no node_modules — workspace node_modules deleted
+          },
+        },
+        node_modules: {
+          '.nrz-lock.json': JSON.stringify({
+            lockfileVersion: 1,
+            options: configData,
+            nodes: {
+              [aDepID]: [
+                0,
+                'a',
+                null,
+                null,
+                null,
+                {
+                  name: 'a',
+                  version: '1.0.0',
+                },
+              ],
+            },
+            edges: {
+              [`${wsDepID} a`]: `prod ^1.0.0 ${aDepID}`,
+              [`${rootDepID} my-ws`]: `prod workspace:* ${wsDepID}`,
+            },
+          }),
+          '.nrz': {
+            [aDepID]: {
+              node_modules: {
+                a: {
+                  'package.json': JSON.stringify({
+                    name: 'a',
+                    version: '1.0.0',
+                  }),
+                },
+              },
+            },
+          },
+          a: t.fixture('symlink', `.nrz/${aDepID}/node_modules/a`),
+          'my-ws': t.fixture('symlink', '../packages/my-ws'),
+        },
+      })
+
+      t.chdir(projectRoot)
+      unload('project')
+
+      const packageJson = new PackageJson()
+      const graph = loadHidden({
+        scurry: new PathScurry(projectRoot),
+        packageJson,
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        mainManifest: packageJson.read(projectRoot),
+        ...configData,
+      })
+
+      t.ok(graph.nodes.get(wsDepID), 'workspace node should exist')
+      t.ok(
+        graph.nodes.get(wsDepID)?.edgesOut.get('a')?.to,
+        'workspace should have a resolved edge',
+      )
+
+      t.throws(
+        () => verifyImporterNodeModules(graph, projectRoot),
+        /Missing node_modules for importer/,
+        'should throw when workspace node_modules is missing',
+      )
+    },
+  )
+})
+
+t.test(
+  'hidden lockfile cache write requires the nrz store',
+  async t => {
+    const manifest = JSON.stringify({
+      name: 'p',
+      version: '1.0.0',
+      dependencies: { foo: '^1.0.0' },
+    })
+    const foo = () => ({
+      'package.json': JSON.stringify({
+        name: 'foo',
+        version: '1.0.0',
+      }),
+    })
+    // one fixture with two roots: a second t.testdir() in the same test
+    // would rmdir the first while it is still cwd, which fails on Windows
+    const dir = t.testdir({
+      foreign: {
+        'package.json': manifest,
+        'nrz.json': '{}',
+        node_modules: { foo: foo() },
+      },
+      nrz: {
+        'package.json': manifest,
+        'nrz.json': '{}',
+        node_modules: { '.nrz': {}, foo: foo() },
+      },
+    })
+    const run = (projectRoot: string) => {
+      t.chdir(projectRoot)
+      unload('project')
+      return load({
+        scurry: new PathScurry(projectRoot),
+        packageJson: new PackageJson(),
+        monorepo: Monorepo.maybeLoad(projectRoot),
+        projectRoot,
+        loadManifests: true,
+        ...configData,
+      })
+    }
+
+    const foreign = resolve(dir, 'foreign')
+    run(foreign)
+    t.notOk(
+      existsSync(`${foreign}/node_modules/.nrz-lock.json`),
+      'walking a node_modules not built by nrz writes no hidden lockfile',
+    )
+
+    const nrz = resolve(dir, 'nrz')
+    run(nrz)
+    t.ok(
+      existsSync(`${nrz}/node_modules/.nrz-lock.json`),
+      'walking a nrz node_modules caches the hidden lockfile',
+    )
+  },
+)
+
+t.test('catalog spec errors', async t => {
+  t.test('missing dependency', async t => {
+    const projectRoot = t.testdir({
+      'nrz.json': '{"workspaces":"packages/*"}',
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+      }),
+      packages: {
+        a: {
+          'package.json': JSON.stringify({
+            name: 'a',
+            version: '1.0.0',
+            dependencies: { abbrev: 'catalog:' },
+          }),
+        },
+      },
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    t.throws(
+      () =>
+        load({
+          scurry: new PathScurry(projectRoot),
+          packageJson: new PackageJson(),
+          monorepo: Monorepo.maybeLoad(projectRoot),
+          projectRoot,
+          loadManifests: true,
+          catalogs: { dev: { abbrev: '^2.0.0' } },
+          ...configData,
+        }),
+      {
+        message: 'Default catalog not found for abbrev@catalog:',
+        cause: {
+          code: 'ECONFIG',
+          from: './packages/a/package.json (dependencies)',
+          wanted: ['catalog:dev'],
+          validOptions: ['catalog:dev'],
+        },
+      },
+    )
+  })
+
+  t.test('installed dependency', async t => {
+    const projectRoot = t.testdir({
+      'nrz.json': '{}',
+      'package.json': JSON.stringify({
+        name: 'my-project',
+        version: '1.0.0',
+        devDependencies: { abbrev: 'catalog:x' },
+      }),
+      vendor: {
+        abbrev: {
+          'package.json': JSON.stringify({
+            name: 'abbrev',
+            version: '2.0.0',
+          }),
+        },
+      },
+      // readDir only follows symlinks
+      node_modules: {
+        abbrev: t.fixture('symlink', '../vendor/abbrev'),
+      },
+    })
+    t.chdir(projectRoot)
+    unload('project')
+    t.throws(
+      () =>
+        load({
+          scurry: new PathScurry(projectRoot),
+          packageJson: new PackageJson(),
+          monorepo: Monorepo.maybeLoad(projectRoot),
+          projectRoot,
+          loadManifests: true,
+          ...configData,
+        }),
+      {
+        message: 'Catalog "x" not found for abbrev@catalog:x',
+        cause: {
+          code: 'ECONFIG',
+          from: './package.json (devDependencies)',
+        },
+      },
+    )
+  })
 })

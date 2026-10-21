@@ -1,0 +1,139 @@
+---
+title: Authentication & Tokens
+sidebar:
+  label: Authentication & Tokens
+  order: 4
+---
+
+Every request to the nrz registry is authenticated with a bearer
+token, apart from the endpoints used by the login flow itself. Tokens
+belong to an **account** — one token works for both of the account's
+registries (`main` and `npm`).
+
+## Log in from the CLI
+
+The registry supports the npm web login flow. Point your client at
+your registry and log in:
+
+<Code
+  code="$ nrz login --registry=https://registry.nrz.io/acme/main/"
+  title="Terminal"
+  lang="bash"
+/>
+
+Your browser opens nrz.io to confirm the login, and the client stores
+the resulting token in the nrz keychain. npm works the same way:
+
+<Code
+  code="$ npm login --auth-type=web --registry=https://registry.nrz.io/acme/main/"
+  title="Terminal"
+  lang="bash"
+/>
+
+See [Authentication](/client/auth) for everything the nrz client
+supports around credential storage and identities.
+
+## Personal and service tokens
+
+There are two kinds of tokens:
+
+- **Personal tokens** are bound to your user. Writes made with a
+  personal token are subject to the account's two-factor (OTP)
+  requirement. Logging in from the CLI mints a personal token scoped
+  to `package:read` and `package:write`.
+- **Service tokens** belong to the account rather than a person. They
+  are meant for CI and automation, and they are not subject to OTP
+  prompts. Creating service tokens requires an owner or admin role.
+
+Tokens start with the `nrz_1_` prefix. The registry stores only a hash
+of each token, so the full value is shown once at creation — copy it
+then.
+
+## Privileges and expiry
+
+Every token carries a set of privileges, such as `package:read`,
+`package:write`, `token:read`, or `member:write`. A request succeeds
+only if **both** the token and the requesting user's account role
+grant the privilege, so a read-only token stays read-only no matter
+who uses it, and a token can never grant more than its creator's own
+role allows.
+
+For example, a CI token that only installs packages needs just
+`package:read`; a publish token needs `package:write` as well.
+
+Tokens can optionally be given an expiration date, after which they
+stop working. Expired and revoked tokens are rejected on every
+request.
+
+## Managing tokens
+
+Create, inspect, and revoke tokens from your account's token settings
+in the [dashboard](https://www.nrz.io/). Members can create and revoke
+their own personal tokens; owners and admins can also manage service
+tokens.
+
+<Aside type="note">
+  The dashboard is the easiest place to manage tokens, but the npm
+  `token` subcommands (`npm token list`, `npm token create`) also work
+  against your registry. `pnpm token` does not — pnpm reports `Not
+  implemented in pnpm. Use the npm CLI directly`.
+</Aside>
+
+## Using tokens in CI
+
+Provide a token through the environment rather than a config file. The
+portable form is `NRZ_TOKEN` alongside `NRZ_REGISTRY`:
+
+<Code
+  code={`NRZ_REGISTRY=https://registry.nrz.io/acme/main/ \\
+NRZ_TOKEN="<service token>" nrz install`}
+  title="Terminal"
+  lang="bash"
+/>
+
+To authenticate more than one registry, set a per-registry
+`NRZ_TOKEN_*` variable for each configured registry, named after its
+URL with the trailing `/` dropped and each run of non-alphanumeric
+characters replaced by `_`:
+
+<Code
+  code={`NRZ_TOKEN_https_registry_nrz_io_acme_npm="<service token>" \\
+NRZ_TOKEN_https_registry_nrz_io_acme_main="<service token>" \\
+nrz install`}
+  title="Terminal"
+  lang="bash"
+/>
+
+This applies to `registries` and `scoped-registries` alike.
+
+See
+[Authentication — CI](/client/auth#ci-and-other-headless-environments)
+for details, and [CI & automation](/registry/publishing/ci) for the
+publish workflow.
+
+With npm, use the standard `.npmrc` auth entry, ideally referencing an
+environment variable:
+
+<Code
+  code={`@acme:registry=https://registry.nrz.io/acme/main/
+//registry.nrz.io/acme/main/:_authToken=\${NPM_TOKEN}`}
+  title=".npmrc"
+  lang="ini"
+/>
+
+That form works for npm — an unset variable is sent as the literal
+string, so a missing secret fails like a bad token. **pnpm ignores
+`${...}` in a project `.npmrc`**; see
+[pnpm in CI](/registry/publishing/ci#pnpm-needs-a-different-approach).
+Never commit a literal token, or have CI write one into the project
+`.npmrc`. For which tool reads what, Vercel and agent sandboxes, see
+[CI & automation](/registry/publishing/ci#who-reads-what).
+
+## Removing credentials
+
+- `nrz logout --registry=...` removes the token from your keychain,
+  under every registry key holding it (e.g. both `npm` and `main`).
+  Revoke the token itself in the dashboard.
+- `nrz token rm` removes a token from your local keychain only.
+- Revoking a token in the dashboard invalidates it everywhere,
+  immediately.

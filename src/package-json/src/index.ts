@@ -1,42 +1,61 @@
-import { error, type ErrorCauseObject } from '@nrz/error-cause'
+import { error } from '@nrz/error-cause'
+import type { ErrorCauseOptions } from '@nrz/error-cause'
 import {
   asManifest,
-  type Manifest,
   longDependencyTypes,
+  normalizeManifest,
 } from '@nrz/types'
-import { readFileSync, writeFileSync } from 'node:fs'
+import type { NormalizedManifest } from '@nrz/types'
+import { readFileSync, writeFileSync, lstatSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { parse, stringify } from 'polite-json'
+import { walkUp } from 'walk-up-path'
+
+const exists = (path: string): boolean => {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export class PackageJson {
   /**
    * cache of `package.json` loads
    */
-  #cache = new Map<string, Manifest>()
+  #cache = new Map<string, NormalizedManifest>()
 
   /**
    * cache of `package.json` paths by manifest
    */
-  #pathCache = new Map<Manifest, string>()
+  #pathCache = new Map<NormalizedManifest, string>()
 
   /**
    * cache of load errors
    */
-  #errCache = new Map<string, ErrorCauseObject>()
+  #errCache = new Map<string, ErrorCauseOptions>()
 
   /**
    * Reads and parses contents of a `package.json` file at a directory `dir`.
    * `reload` will optionally skip reading from the cache when set to `true`.
    */
-  read(dir: string, { reload }: { reload?: boolean } = {}): Manifest {
+  read(
+    dir: string,
+    { reload }: { reload?: boolean } = {},
+  ): NormalizedManifest {
     const cachedPackageJson = !reload && this.#cache.get(dir)
     if (cachedPackageJson) {
       return cachedPackageJson
     }
 
-    const filename = resolve(dir, 'package.json')
+    const filename =
+      dir.endsWith('package.json') ?
+        resolve(dir)
+      : resolve(dir, 'package.json')
 
-    const fail = (err: ErrorCauseObject) =>
+    const fail = (err: ErrorCauseOptions) =>
       error('Could not read package.json file', err, this.read)
 
     const cachedError = !reload && this.#errCache.get(dir)
@@ -45,14 +64,17 @@ export class PackageJson {
     }
 
     try {
-      const res: Manifest = asManifest(
-        parse(readFileSync(filename, { encoding: 'utf8' })),
+      const res = normalizeManifest(
+        asManifest(
+          parse(readFileSync(filename, { encoding: 'utf8' })),
+        ),
+        filename,
       )
       this.#cache.set(dir, res)
       this.#pathCache.set(res, dir)
       return res
     } catch (err) {
-      const ec: ErrorCauseObject = {
+      const ec: ErrorCauseOptions = {
         path: filename,
         cause: err,
       }
@@ -61,8 +83,30 @@ export class PackageJson {
     }
   }
 
-  write(dir: string, manifest: Manifest, indent?: number): void {
-    const filename = resolve(dir, 'package.json')
+  /**
+   * Optionally reads and parses contents of a `package.json` file at a
+   * directory `dir`. Returns `undefined` if it could not be read.
+   */
+  maybeRead(
+    dir: string,
+    { reload }: { reload?: boolean } = {},
+  ): NormalizedManifest | undefined {
+    try {
+      return this.read(dir, { reload })
+    } catch {
+      return undefined
+    }
+  }
+
+  write(
+    dir: string,
+    manifest: NormalizedManifest,
+    indent?: number,
+  ): void {
+    const filename =
+      dir.endsWith('package.json') ?
+        resolve(dir)
+      : resolve(dir, 'package.json')
     this.fix(manifest)
 
     try {
@@ -87,7 +131,7 @@ export class PackageJson {
     }
   }
 
-  save(manifest: Manifest): void {
+  save(manifest: NormalizedManifest): void {
     const dir = this.#pathCache.get(manifest)
     if (!dir) {
       throw error(
@@ -101,7 +145,7 @@ export class PackageJson {
     this.write(dir, manifest)
   }
 
-  fix(manifest: Manifest): void {
+  fix(manifest: NormalizedManifest): void {
     for (const depType of longDependencyTypes) {
       const deps = manifest[depType]
       if (deps) {
@@ -111,6 +155,26 @@ export class PackageJson {
             a.localeCompare(b, 'en'),
           ),
         )
+      }
+    }
+  }
+
+  /**
+   * Walks up the directory tree from the current working directory
+   * and returns the path to the first `package.json` file found.
+   * Returns undefined if no package.json is found.
+   */
+  find(
+    cwd: string = process.cwd(),
+    home: string = homedir(),
+  ): string | undefined {
+    for (const dir of walkUp(cwd)) {
+      // don't look in home directory
+      if (dir === home) break
+
+      const packageJsonPath = resolve(dir, 'package.json')
+      if (exists(packageJsonPath)) {
+        return packageJsonPath
       }
     }
   }
