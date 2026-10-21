@@ -1,7 +1,7 @@
 {
   "name": "@nrz/output",
   "description": "Generate output from the nrz CLI",
-  "version": "1.5.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",

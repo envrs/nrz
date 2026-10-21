@@ -1,7 +1,7 @@
 {
   "name": "@nrz/graph",
   "description": "A library that helps understanding & expressing what happens on an install",
-  "version": "1.5.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",

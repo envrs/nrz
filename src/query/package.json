@@ -1,7 +1,7 @@
 {
   "name": "@nrz/query",
   "description": "Query syntax parser that retrieves items from a graph",
-  "version": "1.5.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",

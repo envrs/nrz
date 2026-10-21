@@ -219,7 +219,7 @@ Array [
     "name": "bar",
     "optional": true,
     "resolved": "https://registry.npmjs.org/bar/-/bar-1.5.0.tgz",
-    "version": "1.5.0",
+    "version": "1.0.0",
   },
   Object {
     "dev": true,
