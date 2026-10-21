@@ -49,6 +49,7 @@
     "nrx": "./scripts/bins/nrx",
     "nrxl": "./scripts/bins/nrxl",
     "nrz": "./scripts/bins/nrz",
+    "publish:changed": "./scripts/publish-changed.sh",
     "xvn": "./scripts/bins/xvn",
     "xvnx": "./scripts/bins/xvnx"
   },
