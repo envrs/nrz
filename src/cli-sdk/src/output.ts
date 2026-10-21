@@ -4,28 +4,28 @@ import {
   styleText as utilStyleText,
 } from 'node:util'
 import { createSupportsColor } from 'supports-color'
-import { defaultView } from './config/definition.ts'
-import type { LoadedConfig } from './config/index.ts'
-import type { Command } from './index.ts'
-import { printErr, formatOptions } from './print-err.ts'
+import { defaultView } from './config/definition.js'
+import type { LoadedConfig } from './config/index.js'
+import type { Command } from './index.js'
+import { printErr, formatOptions } from './print-err.js'
 import {
   hasConfiguredRegistry,
   hasNpmRegistry,
   missingNpmRegistryError,
   missingRegistryError,
-} from './require-registry.ts'
-import type { LazyView, View, ViewOptions, Views } from './view.ts'
-import { isLazyView, isViewClass, loadLazyView } from './view.ts'
+} from './require-registry.js'
+import type { LazyView, View, ViewOptions, Views } from './view.js'
+import { isLazyView, isViewClass, loadLazyView } from './view.js'
 import {
   generateDefaultHelp,
   generateFullHelp,
-} from './custom-help.ts'
+} from './custom-help.js'
 import {
   flush as flushTelemetry,
   trackCommand,
   trackError,
-} from './telemetry.ts'
-import { startRequestLog } from './verbose-log.ts'
+} from './telemetry.js'
+import { startRequestLog } from './verbose-log.js'
 
 /* c8 ignore start - CI env detection is a best-effort heuristic */
 const isCI = (): boolean =>

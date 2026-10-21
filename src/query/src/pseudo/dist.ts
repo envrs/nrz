@@ -12,9 +12,9 @@ import {
   removeDanglingEdges,
   removeNode,
   removeQuotes,
-} from './helpers.ts'
+} from './helpers.js'
 import type { NodeLike, Packument } from '@nrz/types'
-import type { ParserState } from '../types.ts'
+import type { ParserState } from '../types.js'
 
 /**
  * Fetches the dist-tags of a package from the registry.

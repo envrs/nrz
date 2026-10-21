@@ -6,9 +6,9 @@ import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { inspect } from 'node:util'
 import t from 'tap'
-import { Edge } from '../src/edge.ts'
-import { Graph } from '../src/graph.ts'
-import type { Node } from '../src/node.ts'
+import { Edge } from '../src/edge.js'
+import { Graph } from '../src/graph.js'
+import type { Node } from '../src/node.js'
 
 t.cleanSnapshot = s =>
   s

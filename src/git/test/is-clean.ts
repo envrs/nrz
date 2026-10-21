@@ -1,8 +1,8 @@
 import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { isClean } from '../src/is-clean.ts'
-import { spawn } from '../src/spawn.ts'
+import { isClean } from '../src/is-clean.js'
+import { spawn } from '../src/spawn.js'
 
 const repo = t.testdir()
 const o = { cwd: repo }

@@ -1,8 +1,8 @@
 import { RegistryClient } from '@nrz/registry-client'
-import { configWriteTarget } from '../config/index.ts'
-import { commandUsage } from '../config/usage.ts'
-import { missingRegistryError } from '../require-registry.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
+import { configWriteTarget } from '../config/index.js'
+import { commandUsage } from '../config/usage.js'
+import { missingRegistryError } from '../require-registry.js'
+import type { CommandFn, CommandUsage } from '../index.js'
 
 export const usage: CommandUsage = () =>
   commandUsage({

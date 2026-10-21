@@ -1,12 +1,12 @@
 import t from 'tap'
-import { diff, packageHasChanges } from '../../src/pseudo/diff.ts'
-import { pseudo } from '../../src/pseudo.ts'
-import { walk } from '../../src/index.ts'
+import { diff, packageHasChanges } from '../../src/pseudo/diff.js'
+import { pseudo } from '../../src/pseudo.js'
+import { walk } from '../../src/index.js'
 import {
   getPathBasedGraph,
   getSimpleGraph,
-} from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
 import type { GraphLike, NodeLike } from '@nrz/types'
 import { parse } from '@nrz/dss-parser'
 

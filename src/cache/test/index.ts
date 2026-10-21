@@ -4,7 +4,7 @@ import type { Stats } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { Cache } from '../src/index.ts'
+import { Cache } from '../src/index.js'
 import type { Integrity } from '@nrz/types'
 
 const makeValueIntegrity = (

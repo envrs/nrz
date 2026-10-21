@@ -1,7 +1,7 @@
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { UninstallResult } from '../../src/commands/uninstall.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { UninstallResult } from '../../src/commands/uninstall.js'
 
 const options = { scurry: new PathScurry() }
 let log = ''

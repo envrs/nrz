@@ -14,14 +14,14 @@ import { join, resolve } from 'node:path'
 import { brotliCompressSync, gzipSync } from 'node:zlib'
 import type { Test } from 'tap'
 import t from 'tap'
-import { explode } from '../src/explode.ts'
+import { explode } from '../src/explode.js'
 import {
   encodeEntry,
   hexOf,
   integrityOf,
   makeTar,
   pkgTar,
-} from './fixtures/entry.ts'
+} from './fixtures/entry.js'
 
 const isWin = process.platform === 'win32'
 process.umask(0o022)

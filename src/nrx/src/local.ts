@@ -15,9 +15,9 @@ import {
 } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { dirExists } from './dir-exists.ts'
-import type { NrxInfo } from './index.ts'
-import { inferDefaultExecutable } from './infer-default-executable.ts'
+import { dirExists } from './dir-exists.js'
+import type { NrxInfo } from './index.js'
+import { inferDefaultExecutable } from './infer-default-executable.js'
 
 /**
  * Absolute path if the spec is a local directory (relative to cwd)

@@ -1,7 +1,7 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { pseudoClassNames } from '@nrz/dss-parser'
-import { pseudo, pseudoSelectorNames } from '../src/pseudo.ts'
+import { pseudo, pseudoSelectorNames } from '../src/pseudo.js'
 import {
   getCycleGraph,
   getMissingManifestsGraph,
@@ -10,18 +10,18 @@ import {
   getSimpleGraph,
   getSingleWorkspaceGraph,
   getPathBasedGraph,
-} from './fixtures/graph.ts'
+} from './fixtures/graph.js'
 import {
   copyGraphSelectionState,
   getGraphSelectionState,
   selectorFixture,
-} from './fixtures/selector.ts'
+} from './fixtures/selector.js'
 import type { PostcssNodeWithChildren } from '@nrz/dss-parser'
-import type { TestCase } from './fixtures/types.ts'
+import type { TestCase } from './fixtures/types.js'
 import type {
   GraphSelectionState,
   ParserState,
-} from '../src/types.ts'
+} from '../src/types.js'
 
 const testPseudo = selectorFixture(pseudo)
 

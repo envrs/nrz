@@ -1,12 +1,12 @@
 import { error } from '@nrz/error-cause'
-import { commandUsage } from '../config/usage.ts'
-import type { CommandFn, CommandUsage } from '../load-command.ts'
-import { loadCommand } from '../load-command.ts'
-import { getCommand } from '../config/definition.ts'
+import { commandUsage } from '../config/usage.js'
+import type { CommandFn, CommandUsage } from '../load-command.js'
+import { loadCommand } from '../load-command.js'
+import { getCommand } from '../config/definition.js'
 import {
   generateDefaultHelp,
   generateFullHelp,
-} from '../custom-help.ts'
+} from '../custom-help.js'
 
 export const usage: CommandUsage = () =>
   commandUsage({

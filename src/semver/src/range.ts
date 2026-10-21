@@ -1,6 +1,6 @@
 import { fastSplit } from '@nrz/fast-split'
-import { Comparator } from './comparator.ts'
-import type { Version } from './version.ts'
+import { Comparator } from './comparator.js'
+import type { Version } from './version.js'
 import { asError } from '@nrz/types'
 
 export const isRange = (range: unknown): range is Range => {

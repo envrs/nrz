@@ -22,27 +22,27 @@ import { join } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import type { Test } from 'tap'
-import { clientCache } from '../fixtures/client-cache.ts'
-import { load as loadActual } from '../../src/actual/load.ts'
+import { clientCache } from '../fixtures/client-cache.js'
+import { load as loadActual } from '../../src/actual/load.js'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { buildIdealFromStartingGraph } from '../../src/ideal/build-ideal-from-starting-graph.ts'
+} from '../../src/dependencies.js'
+import { buildIdealFromStartingGraph } from '../../src/ideal/build-ideal-from-starting-graph.js'
 import type {
   LockfileData,
   LockfileEdgeKey,
   LockfileEdges,
   LockfileNode,
-} from '../../src/index.ts'
-import { Graph } from '../../src/graph.ts'
-import { GraphModifier } from '../../src/modifiers.ts'
-import { load as loadVirtual } from '../../src/lockfile/load.ts'
-import { lockfileData } from '../../src/lockfile/save.ts'
-import { updatePackageJson } from '../../src/reify/update-importers-package-json.ts'
-import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
+} from '../../src/index.js'
+import { Graph } from '../../src/graph.js'
+import { GraphModifier } from '../../src/modifiers.js'
+import { load as loadVirtual } from '../../src/lockfile/load.js'
+import { lockfileData } from '../../src/lockfile/save.js'
+import { updatePackageJson } from '../../src/reify/update-importers-package-json.js'
+import { objectLikeOutput } from '../../src/visualization/object-like-output.js'
 import { RollbackRemove } from '@nrz/rollback-remove'
-import { assertOptionalPeerProvisions } from '../fixtures/peer-provisions.ts'
+import { assertOptionalPeerProvisions } from '../fixtures/peer-provisions.js'
 
 const edgeKey = (from: DepIDTuple, to: string): LockfileEdgeKey =>
   `${joinDepIDTuple(from)} ${to}`

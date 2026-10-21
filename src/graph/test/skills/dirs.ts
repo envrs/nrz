@@ -7,9 +7,9 @@ import {
   AGENT_ROOTS,
   assertSkillsDirs,
   skillsDirs,
-} from '../../src/skills/dirs.ts'
-import type { SkillsDirsOptions } from '../../src/skills/dirs.ts'
-import { norm } from '../../src/skills/mounts.ts'
+} from '../../src/skills/dirs.js'
+import type { SkillsDirsOptions } from '../../src/skills/dirs.js'
+import { norm } from '../../src/skills/mounts.js'
 
 type Dir = NonNullable<Parameters<typeof t.testdir>[0]>
 

@@ -1,6 +1,6 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import { parse, escapeScopedNamesSlashes } from '../src/parser.ts'
+import { parse, escapeScopedNamesSlashes } from '../src/parser.js'
 
 t.test('escapeScopedNamesSlashes', async t => {
   t.equal(

@@ -1,6 +1,6 @@
 import { asManifest } from '@nrz/types'
-import type { ParserState } from '../types.ts'
-import { removeNode, removeDanglingEdges } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeNode, removeDanglingEdges } from './helpers.js'
 
 /**
  * :private Pseudo-Selector will only match packages that have

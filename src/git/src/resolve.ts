@@ -1,7 +1,7 @@
 import type { RevDoc } from '@nrz/types'
 import { pickManifest } from '@nrz/pick-manifest'
-import type { GitOptions } from './index.ts'
-import { revs } from './revs.ts'
+import type { GitOptions } from './index.js'
+import { revs } from './revs.js'
 
 /**
  * Given a repo and either a ref or a git specifier Spec object, resolve the

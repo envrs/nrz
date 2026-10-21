@@ -1,7 +1,7 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { hostname } from '../../src/pseudo/hostname.ts'
+import type { ParserState } from '../../src/types.js'
+import { hostname } from '../../src/pseudo/hostname.js'
 import {
   getSimpleGraph,
   getAliasedGraph,
@@ -12,7 +12,7 @@ import {
   getHttpsGitGraph,
   getBrokenGitGraph,
   getUnknownRegistryGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects nodes by hostname', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

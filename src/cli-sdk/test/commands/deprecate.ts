@@ -1,7 +1,7 @@
 import { assertOk, requestError } from '@nrz/registry-client'
 import t from 'tap'
 import { defaultRegistries, defaultRegistryName } from '@nrz/spec'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 import type { Packument } from '@nrz/types'
 
 let requestUrl: string | URL = ''

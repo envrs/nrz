@@ -6,7 +6,7 @@ import type { Test } from 'tap'
 import t from 'tap'
 import type { Agent as AgentType } from 'undici'
 import { Agent, EnvHttpProxyAgent, request } from 'undici'
-import { getDispatcher } from '../src/proxy.ts'
+import { getDispatcher } from '../src/proxy.js'
 
 const proxyKeys = [
   'http_proxy',

@@ -14,9 +14,9 @@ import {
   splitDepID,
 } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
-import { symlinkSyncMkdirp } from '../reify/symlink-sync.ts'
-import type { SkillsDir } from './dirs.ts'
-import type { Skill } from './discover.ts'
+import { symlinkSyncMkdirp } from '../reify/symlink-sync.js'
+import type { SkillsDir } from './dirs.js'
+import type { Skill } from './discover.js'
 
 /**
  * A nrz link in an agent skills dir.

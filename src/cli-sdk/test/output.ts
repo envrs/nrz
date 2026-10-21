@@ -11,11 +11,11 @@ t.intercept(process, 'env', {
 })
 
 import type { Jack } from 'jackspeak'
-import type { LoadedConfig } from '../src/config/index.ts'
-import type { Command } from '../src/index.ts'
-import type { ViewFn, ViewOptions } from '../src/view.ts'
-import * as view from '../src/view.ts'
-import * as printErr from '../src/print-err.ts'
+import type { LoadedConfig } from '../src/config/index.js'
+import type { Command } from '../src/index.js'
+import type { ViewFn, ViewOptions } from '../src/view.js'
+import * as view from '../src/view.js'
+import * as printErr from '../src/print-err.js'
 
 // make sure these are loaded after the isTTY intercept
 const {

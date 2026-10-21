@@ -6,9 +6,9 @@ import pRetry, { AbortError } from 'p-retry'
 import { asDepID, baseDepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
 import { userAgent } from '@nrz/user-agent'
-import { asPackageReportData, getItemScore } from './types.ts'
+import { asPackageReportData, getItemScore } from './types.js'
 import type { DepID } from '@nrz/dep-id'
-import type { JSONItemResponse } from './types.ts'
+import type { JSONItemResponse } from './types.js'
 import type EventEmitter from 'node:events'
 
 export const __CODE_SPLIT_SCRIPT_NAME = import.meta.filename

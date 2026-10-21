@@ -2,9 +2,9 @@ import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { normalizeManifest } from '@nrz/types'
-import type { ParserState } from '../../src/types.ts'
-import { scripts } from '../../src/pseudo/scripts.ts'
-import { newGraph, newNode } from '../fixtures/graph.ts'
+import type { ParserState } from '../../src/types.js'
+import { scripts } from '../../src/pseudo/scripts.js'
+import { newGraph, newNode } from '../fixtures/graph.js'
 import type { NodeLike } from '@nrz/types'
 
 t.test('selects packages that need to be built', async t => {

@@ -1,7 +1,7 @@
 import {
   getDecodedValue,
   getEncondedValue,
-} from './string-encoding.ts'
+} from './string-encoding.js'
 
 /**
  * Give it a key, and it'll return the value of that header as a Uint8Array

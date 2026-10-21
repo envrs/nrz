@@ -2,14 +2,14 @@ import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asPostcssNodeWithChildren, parse } from '@nrz/dss-parser'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
 import {
   severity,
   isSeverityKind,
   asSeverityKind,
   parseInternals,
-} from '../../src/pseudo/severity.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../../src/pseudo/severity.js'
+import type { ParserState } from '../../src/types.js'
 
 t.test('selects packages with a specific severity kind', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

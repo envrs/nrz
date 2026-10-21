@@ -1,6 +1,6 @@
 import { assertOk } from '@nrz/registry-client'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 const profileData = {
   name: 'testuser',

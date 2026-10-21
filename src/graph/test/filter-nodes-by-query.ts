@@ -7,8 +7,8 @@ import {
   assertQuery,
   filterNodesByQuery,
   filterNodesByQueryParts,
-} from '../src/filter-nodes-by-query.ts'
-import { Graph } from '../src/graph.ts'
+} from '../src/filter-nodes-by-query.js'
+import { Graph } from '../src/graph.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

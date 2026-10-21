@@ -26,7 +26,7 @@ import {
 } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { extract } from 'tar'
-import { clientCache } from './client-cache.ts'
+import { clientCache } from './client-cache.js'
 
 // the `npm` alias is no longer a built-in default, so it must be
 // configured explicitly for `npm:` aliased specs to collapse to their

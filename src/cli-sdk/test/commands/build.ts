@@ -1,5 +1,5 @@
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 import type { Node } from '@nrz/graph'
 
 let buildCalled = false

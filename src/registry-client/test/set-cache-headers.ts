@@ -2,8 +2,8 @@ import t from 'tap'
 import type {
   CacheEntry,
   RegistryClientRequestOptions,
-} from '../src/index.ts'
-import { setCacheHeaders } from '../src/set-cache-headers.ts'
+} from '../src/index.js'
+import { setCacheHeaders } from '../src/set-cache-headers.js'
 
 const opts: RegistryClientRequestOptions = {}
 setCacheHeaders(opts, undefined)

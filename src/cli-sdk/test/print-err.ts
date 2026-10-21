@@ -5,8 +5,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { CommandUsage } from '../src/index.ts'
-import type { ErrorFormatOptions } from '../src/print-err.ts'
+import type { CommandUsage } from '../src/index.js'
+import type { ErrorFormatOptions } from '../src/print-err.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 
 t.cleanSnapshot = (s: string) =>

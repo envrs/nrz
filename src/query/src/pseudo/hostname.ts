@@ -2,9 +2,9 @@ import { splitDepID } from '@nrz/dep-id/browser'
 import { getOptions, gitHostWebsites } from '@nrz/spec/browser'
 import { asPostcssNodeWithChildren } from '@nrz/dss-parser'
 import { error } from '@nrz/error-cause'
-import { removeDanglingEdges, removeNode } from './helpers.ts'
-import { parseInternals } from './spec.ts'
-import type { ParserState } from '../types.ts'
+import { removeDanglingEdges, removeNode } from './helpers.js'
+import { parseInternals } from './spec.js'
+import type { ParserState } from '../types.js'
 
 /**
  * Given a named git host (e.g. "github"), resolve its hostname

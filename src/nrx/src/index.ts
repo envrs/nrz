@@ -61,8 +61,8 @@ export type NrxOptions = SpecOptions &
     yes?: boolean
   }
 
-export { nrxDelete as delete } from './delete.ts'
-export { nrxInfo as info } from './info.ts'
-export { nrxInstall as install } from './install.ts'
-export { nrxList as list } from './list.ts'
-export { nrxResolve as resolve } from './resolve.ts'
+export { nrxDelete as delete } from './delete.js'
+export { nrxInfo as info } from './info.js'
+export { nrxInstall as install } from './install.js'
+export { nrxList as list } from './list.js'
+export { nrxResolve as resolve } from './resolve.js'

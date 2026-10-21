@@ -1,6 +1,6 @@
 import type { NodeLike } from '@nrz/types'
-import type { ParserState } from '../types.ts'
-import { removeNode, removeDanglingEdges } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeNode, removeDanglingEdges } from './helpers.js'
 
 /**
  * Checks if a node needs to be built based on the conditions from the reify build process:

@@ -3,7 +3,7 @@ import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
 import { Monorepo } from '@nrz/workspaces'
 import t from 'tap'
-import { satisfies } from '../src/index.ts'
+import { satisfies } from '../src/index.js'
 
 const projectRoot = t.testdir({
   'nrz.json': JSON.stringify({ workspaces: 'src/*' }),

@@ -1,8 +1,8 @@
-import { appendNodes } from './append-nodes.ts'
+import { appendNodes } from './append-nodes.js'
 import {
   compareByHasPeerDeps,
   getNodeOrderedDependencies,
-} from './sorting.ts'
+} from './sorting.js'
 import type { PathScurry } from 'path-scurry'
 import { baseDepID } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
@@ -16,12 +16,12 @@ import type {
   ExplicitAddMap,
   TransientAddMap,
   TransientRemoveMap,
-} from './types.ts'
-import type { Dependency } from '../dependencies.ts'
-import type { GraphModifier } from '../modifiers.ts'
-import type { ExtractResult } from '../reify/extract-node.ts'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
+} from './types.js'
+import type { Dependency } from '../dependencies.js'
+import type { GraphModifier } from '../modifiers.js'
+import type { ExtractResult } from '../reify/extract-node.js'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
 
 export type RefreshIdealGraphOptions = BuildIdealAddOptions &
   BuildIdealRemoveOptions &

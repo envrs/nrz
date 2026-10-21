@@ -5,9 +5,9 @@ import {
   isViewClass,
   lazyView,
   loadLazyView,
-} from '../src/view.ts'
-import type { ViewOptions } from '../src/view.ts'
-import type { LoadedConfig } from '../src/config/index.ts'
+} from '../src/view.js'
+import type { ViewOptions } from '../src/view.js'
+import type { LoadedConfig } from '../src/config/index.js'
 
 t.equal(isViewClass({} as typeof ViewClass<unknown>), false)
 

@@ -1,12 +1,12 @@
 import assert from 'node:assert'
 import * as dotProp from '@nrz/dot-prop'
 import { error } from '@nrz/error-cause'
-import { commandUsage } from '../config/usage.ts'
+import { commandUsage } from '../config/usage.js'
 import { get, set, edit, list, del } from '@nrz/config'
 import { load, find } from '@nrz/nrz-json'
-import type { LoadedConfig, RecordPairs } from '../config/index.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import type { LoadedConfig, RecordPairs } from '../config/index.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 export const views: Views = {
   human: results => {

@@ -1,12 +1,12 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
 import t from 'tap'
 import type { NodeLike } from '@nrz/types'
-import { Graph } from '../../src/graph.ts'
-import type { Node } from '../../src/node.ts'
+import { Graph } from '../../src/graph.js'
+import type { Node } from '../../src/node.js'
 import type {
   LinkSkillsOptions,
   SkillsOptions,
-} from '../../src/skills/index.ts'
+} from '../../src/skills/index.js'
 
 t.test('loads the skills code on first use', async t => {
   const reads = { listSkills: 0, linkSkills: 0 }

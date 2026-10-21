@@ -1,7 +1,7 @@
 import { platformCheck } from '@nrz/pick-manifest'
-import type { Diff } from '../diff.ts'
-import type { Node } from '../node.ts'
-import { removeOptionalSubgraph } from '../remove-optional-subgraph.ts'
+import type { Diff } from '../diff.js'
+import type { Node } from '../node.js'
+import { removeOptionalSubgraph } from '../remove-optional-subgraph.js'
 
 /**
  * If the node is optional, then returns an error handler that removes

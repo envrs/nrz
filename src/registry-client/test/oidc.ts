@@ -1,5 +1,5 @@
 import t from 'tap'
-import type { Token } from '../src/auth.ts'
+import type { Token } from '../src/auth.js'
 
 // Track tokens set during tests
 const runtimeTokensSet: [string, Token][] = []

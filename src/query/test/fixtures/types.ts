@@ -1,4 +1,4 @@
-import type { GraphSelectionState } from '../../src/types.ts'
+import type { GraphSelectionState } from '../../src/types.js'
 
 export type TestCase = [
   string, // query

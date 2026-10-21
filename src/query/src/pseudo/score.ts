@@ -12,9 +12,9 @@ import {
   removeDanglingEdges,
   removeNode,
   removeQuotes,
-} from './helpers.ts'
+} from './helpers.js'
 import type { PackageScore } from '@nrz/security-archive'
-import type { ParserState } from '../types.ts'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 export type ScoreKinds = keyof PackageScore

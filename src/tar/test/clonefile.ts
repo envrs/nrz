@@ -9,7 +9,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import t from 'tap'
 import type { Test } from 'tap'
-import { cloneAvailable, cloneDir } from '../src/clonefile.ts'
+import { cloneAvailable, cloneDir } from '../src/clonefile.js'
 
 // the real thing, before any test fakes the platform: macOS on a Node
 // with node:ffi only

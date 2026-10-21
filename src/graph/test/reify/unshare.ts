@@ -12,7 +12,7 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
-import { unshare } from '../../src/reify/unshare.ts'
+import { unshare } from '../../src/reify/unshare.js'
 
 const isWin = process.platform === 'win32'
 const files = ['package.json', 'index.js', 'bin/cli.js', 'lib/a.js']

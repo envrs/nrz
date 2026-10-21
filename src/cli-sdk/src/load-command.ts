@@ -1,7 +1,7 @@
 import { error } from '@nrz/error-cause'
 import type { Jack } from 'jackspeak'
-import type { Commands, LoadedConfig } from './config/index.ts'
-import type { Views } from './view.ts'
+import type { Commands, LoadedConfig } from './config/index.js'
+import type { Views } from './view.js'
 
 export type CommandUsage = () => Jack
 

@@ -1,8 +1,8 @@
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
-import type { Edge } from '../../src/edge.ts'
+import type { Diff } from '../../src/diff.js'
+import type { Edge } from '../../src/edge.js'
 
 t.test('add some edges', async t => {
   const projectRoot = t.testdirName

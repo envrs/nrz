@@ -4,9 +4,9 @@ import { splitDepID } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
 import { parse } from '@nrz/semver'
 import type { PathScurry } from 'path-scurry'
-import type { Node } from '../node.ts'
-import { lstat, norm, packageKey, realOr } from './mounts.ts'
-import type { SkillMount } from './mounts.ts'
+import type { Node } from '../node.js'
+import { lstat, norm, packageKey, realOr } from './mounts.js'
+import type { SkillMount } from './mounts.js'
 
 /**
  * An agent skill (a dir with a `SKILL.md`) shipped by an installed

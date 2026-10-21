@@ -4,7 +4,7 @@ import type {
   ResolveRequest,
 } from '@nrz/package-info'
 import type { SpecOptions } from '@nrz/spec'
-import type { Graph } from '../graph.ts'
+import type { Graph } from '../graph.js'
 
 const nothing = () => {}
 

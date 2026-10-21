@@ -3,8 +3,8 @@ import { parse } from '@nrz/dss-parser'
 import {
   getPathBasedGraph,
   getSimpleGraph,
-} from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
 import type { PostcssNode as _PostcssNode } from '@nrz/dss-parser'
 import { joinDepIDTuple, splitDepID } from '@nrz/dep-id/browser'
 

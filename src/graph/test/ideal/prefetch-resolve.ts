@@ -4,8 +4,8 @@ import type {
   ResolveRequest,
 } from '@nrz/package-info'
 import type { SpecOptions } from '@nrz/spec'
-import { prefetchResolve } from '../../src/ideal/prefetch-resolve.ts'
-import type { Graph } from '../../src/graph.ts'
+import { prefetchResolve } from '../../src/ideal/prefetch-resolve.js'
+import type { Graph } from '../../src/graph.js'
 
 const options = {
   registry: 'https://registry.npmjs.org/',

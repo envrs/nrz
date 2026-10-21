@@ -1,10 +1,10 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { parse } from '../../src/parser.ts'
-import { vuln } from '../../src/pseudo/vuln.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { parse } from '../../src/parser.js'
+import { vuln } from '../../src/pseudo/vuln.js'
 
 t.test(':vulnerable alias works the same as :vuln', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

@@ -11,7 +11,7 @@ import {
   isDependencySaveType,
   shorten,
   shouldInstallDepType,
-} from '../src/dependencies.ts'
+} from '../src/dependencies.js'
 import { Spec } from '@nrz/spec'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'

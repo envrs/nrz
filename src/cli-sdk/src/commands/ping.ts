@@ -1,9 +1,9 @@
 import { RegistryClient } from '@nrz/registry-client'
 import { error } from '@nrz/error-cause'
-import { commandUsage } from '../config/usage.ts'
-import { requireRegistry } from '../require-registry.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import { commandUsage } from '../config/usage.js'
+import { requireRegistry } from '../require-registry.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 export const needsRegistry = true
 

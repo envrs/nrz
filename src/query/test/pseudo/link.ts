@@ -1,8 +1,8 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { link } from '../../src/pseudo/link.ts'
-import { getSimpleGraph, getLinkedGraph } from '../fixtures/graph.ts'
+import type { ParserState } from '../../src/types.js'
+import { link } from '../../src/pseudo/link.js'
+import { getSimpleGraph, getLinkedGraph } from '../fixtures/graph.js'
 
 t.test('selects file links and tar.gz packages', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

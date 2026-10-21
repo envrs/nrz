@@ -2,14 +2,14 @@ import t from 'tap'
 import { PackageJson } from '@nrz/package-json'
 import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
-import { Graph } from '../../src/graph.ts'
-import { asDependency } from '../../src/dependencies.ts'
+import { Graph } from '../../src/graph.js'
+import { asDependency } from '../../src/dependencies.js'
 import type {
   Dependency,
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { updatePackageJson } from '../../src/reify/update-importers-package-json.ts'
+} from '../../src/dependencies.js'
+import { updatePackageJson } from '../../src/reify/update-importers-package-json.js'
 
 const specOptions = {
   registry: 'https://registry.npmjs.org',

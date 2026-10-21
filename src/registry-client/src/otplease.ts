@@ -3,9 +3,9 @@ import type { Dispatcher } from 'undici'
 import type {
   RegistryClient,
   RegistryClientRequestOptions,
-} from './index.ts'
-import { tokenRefusal } from './registry-error.ts'
-import { getWebAuthChallenge } from './web-auth-challenge.ts'
+} from './index.js'
+import { tokenRefusal } from './registry-error.js'
+import { getWebAuthChallenge } from './web-auth-challenge.js'
 import { urlOpen } from '@nrz/url-open'
 import { createInterface } from 'node:readline/promises'
 import { gunzipSync } from 'node:zlib'

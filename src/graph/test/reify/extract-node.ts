@@ -9,9 +9,9 @@ import type { NormalizedManifest } from '@nrz/types'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
-import type { Node } from '../../src/node.ts'
-import { extractNode } from '../../src/reify/extract-node.ts'
+import type { Diff } from '../../src/diff.js'
+import type { Node } from '../../src/node.js'
+import { extractNode } from '../../src/reify/extract-node.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

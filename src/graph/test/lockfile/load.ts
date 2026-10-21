@@ -5,23 +5,23 @@ import { unload } from '@nrz/nrz-json'
 import { defaultGitHosts } from '@nrz/spec'
 import { PackageJson } from '@nrz/package-json'
 import t from 'tap'
-import type { LockfileNode } from '../../src/index.ts'
-import { Graph } from '../../src/graph.ts'
+import type { LockfileNode } from '../../src/index.js'
+import { Graph } from '../../src/graph.js'
 import {
   diffLockfileOptions,
   load,
   loadData,
   loadHidden,
   loadObject,
-} from '../../src/lockfile/load.ts'
-import { loadEdges } from '../../src/lockfile/load-edges.ts'
+} from '../../src/lockfile/load.js'
+import { loadEdges } from '../../src/lockfile/load-edges.js'
 import type {
   LockfileData,
   LockfileEdgeKey,
   LockfileEdges,
   LockfileEdgeValue,
-} from '../../src/lockfile/types.ts'
-import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
+} from '../../src/lockfile/types.js'
+import { objectLikeOutput } from '../../src/visualization/object-like-output.js'
 
 t.cleanSnapshot = s =>
   s.replace(

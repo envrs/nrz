@@ -4,7 +4,7 @@ import type { NormalizedManifest } from '@nrz/types'
 import { resolve } from 'node:path'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { NrxManifest, NrxOptions } from '../src/index.ts'
+import type { NrxManifest, NrxOptions } from '../src/index.js'
 import { mkdirSync, readFileSync } from 'node:fs'
 
 const getNrxInstall = async (

@@ -1,4 +1,4 @@
-import type { OptionsChange } from './types.ts'
+import type { OptionsChange } from './types.js'
 
 /**
  * Replaces the userinfo of a URL value with `***`. These messages end up

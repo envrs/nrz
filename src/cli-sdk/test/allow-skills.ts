@@ -7,8 +7,8 @@ import {
   storedAllowSkills,
   unmatchedLines,
   unscannedLines,
-} from '../src/allow-skills.ts'
-import type { LoadedConfig } from '../src/config/index.ts'
+} from '../src/allow-skills.js'
+import type { LoadedConfig } from '../src/config/index.js'
 
 type Layers = Record<string, Record<string, unknown> | undefined>
 const conf = (

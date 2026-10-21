@@ -3,8 +3,8 @@
 import { readFileSync } from 'node:fs'
 // @ts-expect-error - no types
 import npmPickManifest from 'npm-pick-manifest'
-import { pickManifest } from '../src/index.ts'
-import type { PickManifestOptions } from '../src/index.ts'
+import { pickManifest } from '../src/index.js'
+import type { PickManifestOptions } from '../src/index.js'
 import { resolve } from 'node:path'
 import {
   copyPackuments,

@@ -10,9 +10,9 @@ import {
   defaultRegistryName,
   defaultScopeRegistries,
 } from '@nrz/spec/browser'
-import { stringifyNode } from '../stringify-node.ts'
-import { loadEdges } from '../lockfile/load-edges.ts'
-import { loadNodes } from '../lockfile/load-nodes.ts'
+import { stringifyNode } from '../stringify-node.js'
+import { loadEdges } from '../lockfile/load-edges.js'
+import { loadNodes } from '../lockfile/load-nodes.js'
 import type {
   EdgeLike,
   GraphLike,
@@ -20,7 +20,7 @@ import type {
   DependencyTypeShort,
   NormalizedManifest,
 } from '@nrz/types'
-import type { LockfileData } from '../lockfile/types.ts'
+import type { LockfileData } from '../lockfile/types.js'
 import type { DepID } from '@nrz/dep-id/browser'
 import type { Spec, SpecOptionsFilled } from '@nrz/spec/browser'
 

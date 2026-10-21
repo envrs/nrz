@@ -1,6 +1,6 @@
 import { parse } from '@nrz/semver'
-import { removeNode, removeDanglingEdges } from './helpers.ts'
-import type { ParserState } from '../types.ts'
+import { removeNode, removeDanglingEdges } from './helpers.js'
+import type { ParserState } from '../types.js'
 
 /**
  * :prerelease Pseudo-selector, matches only nodes that have prerelease

@@ -5,22 +5,22 @@ import { loadPackageJson } from 'package-json-from-dist'
 import {
   getSortedCliOptions,
   getSortedKeys,
-} from './config/definition.ts'
-import { Config } from './config/index.ts'
+} from './config/definition.js'
+import { Config } from './config/index.js'
 import {
   flushAndExit,
   outputCommand,
   stderr,
   stdout,
-} from './output.ts'
-import { indent } from './print-err.ts'
-import { loadCommand } from './load-command.ts'
+} from './output.js'
+import { indent } from './print-err.js'
+import { loadCommand } from './load-command.js'
 
 export type {
   Command,
   CommandFn,
   CommandUsage,
-} from './load-command.ts'
+} from './load-command.js'
 
 const { version } = loadPackageJson(
   import.meta.filename,

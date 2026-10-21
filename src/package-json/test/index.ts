@@ -1,5 +1,5 @@
 import t from 'tap'
-import { PackageJson } from '../src/index.ts'
+import { PackageJson } from '../src/index.js'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 

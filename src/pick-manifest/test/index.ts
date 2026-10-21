@@ -9,7 +9,7 @@ import {
   detectLibc,
   LDD_PATH,
   resetLibcCache,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 type PickManifestModule = typeof import('../src/index.ts')
 

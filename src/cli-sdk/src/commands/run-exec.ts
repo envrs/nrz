@@ -1,9 +1,9 @@
 import { runExec, runExecFG } from '@nrz/run'
-import { commandUsage } from '../config/usage.ts'
-import type { ExecResult } from '../exec-command.ts'
-import { ExecCommand } from '../exec-command.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-export { views } from '../exec-command.ts'
+import { commandUsage } from '../config/usage.js'
+import type { ExecResult } from '../exec-command.js'
+import { ExecCommand } from '../exec-command.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+export { views } from '../exec-command.js'
 
 export const needsRegistry = true
 

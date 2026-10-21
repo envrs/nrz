@@ -7,7 +7,7 @@ import {
   getNodeGypShimDir,
   hasNodeGypReference,
   hasNodeGypBinding,
-} from '../src/node-gyp.ts'
+} from '../src/node-gyp.js'
 
 // cleans up any existing shim before tests
 const shimPath = join(new XDG('nrz').runtime('run'), 'node-gyp')

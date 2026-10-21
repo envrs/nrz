@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { basename, resolve } from 'node:path'
-import { getAuthorFromGitUser } from './get-author-from-git-user.ts'
+import { getAuthorFromGitUser } from './get-author-from-git-user.js'
 import { asError, normalizeManifest } from '@nrz/types'
 export { getAuthorFromGitUser }
 

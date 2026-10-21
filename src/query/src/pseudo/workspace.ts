@@ -1,5 +1,5 @@
-import type { ParserState } from '../types.ts'
-import { removeNode } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeNode } from './helpers.js'
 
 /**
  * :workspace Pseudo-Selector will only match workspace dependencies.

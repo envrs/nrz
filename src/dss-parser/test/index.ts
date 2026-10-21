@@ -4,7 +4,7 @@ import {
   parse,
   escapeScopedNamesSlashes,
   pseudoClassNames,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 t.test('escapeScopedNamesSlashes', async t => {
   t.equal(

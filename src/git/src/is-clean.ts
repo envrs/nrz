@@ -1,5 +1,5 @@
 import { error } from '@nrz/error-cause'
-import { spawn } from './spawn.ts'
+import { spawn } from './spawn.js'
 
 export const isClean = async (opts = {}) => {
   const result = await spawn(

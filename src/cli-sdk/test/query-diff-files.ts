@@ -2,7 +2,7 @@ import t from 'tap'
 import {
   createDiffFilesProvider,
   validateCommitish,
-} from '../src/query-diff-files.ts'
+} from '../src/query-diff-files.js'
 
 t.test('validateCommitish', async t => {
   t.test('accepts valid commitish values', async t => {

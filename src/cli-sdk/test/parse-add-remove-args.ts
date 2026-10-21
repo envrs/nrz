@@ -16,11 +16,11 @@ import t from 'tap'
 import type {
   ConfigDefinitions,
   LoadedConfig,
-} from '../src/config/index.ts'
+} from '../src/config/index.js'
 import {
   parseAddArgs,
   parseRemoveArgs,
-} from '../src/parse-add-remove-args.ts'
+} from '../src/parse-add-remove-args.js'
 
 class MockConfig {
   values: Record<string, any> = {}

@@ -20,7 +20,7 @@
  * @module
  */
 
-import { isRecordField } from './definition.ts'
+import { isRecordField } from './definition.js'
 
 /** One config layer, in record (not `key=value` pair) form. */
 export type ConfigLayer = Record<string, unknown>

@@ -1,10 +1,10 @@
 import t from 'tap'
-import { GraphModifier } from '../src/modifiers.ts'
+import { GraphModifier } from '../src/modifiers.js'
 import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import { reload } from '@nrz/nrz-json'
-import type { Node } from '../src/node.ts'
-import { Edge } from '../src/edge.ts'
+import type { Node } from '../src/node.js'
+import { Edge } from '../src/edge.js'
 import type {
   DependencyTypeShort,
   NormalizedManifest,

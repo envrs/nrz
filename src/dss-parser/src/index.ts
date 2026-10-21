@@ -6,7 +6,7 @@ import {
   combinatorNames,
   partPseudoNames,
   pseudoClassNames,
-} from './grammar.ts'
+} from './grammar.js'
 import {
   asSelectorNode,
   isAttributeNode,
@@ -14,11 +14,11 @@ import {
   isPseudoNode,
   isStringNode,
   isTagNode,
-} from './types.ts'
-import type { PostcssNode } from './types.ts'
+} from './types.js'
+import type { PostcssNode } from './types.js'
 
-export * from './types.ts'
-export * from './grammar.ts'
+export * from './types.js'
+export * from './grammar.js'
 
 /**
  * Escapes forward slashes in specific patterns matching @scoped/name paths

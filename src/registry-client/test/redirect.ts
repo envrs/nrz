@@ -1,8 +1,8 @@
 import t from 'tap'
-import { CacheEntry } from '../src/cache-entry.ts'
-import { isRedirect, redirect } from '../src/redirect.ts'
-import type { RedirectResponse } from '../src/redirect.ts'
-import type { RegistryClientRequestOptions } from '../src/index.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import { isRedirect, redirect } from '../src/redirect.js'
+import type { RedirectResponse } from '../src/redirect.js'
+import type { RegistryClientRequestOptions } from '../src/index.js'
 
 t.compareOptions = { includeGetters: true }
 

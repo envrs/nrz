@@ -3,16 +3,16 @@ import { error } from '@nrz/error-cause'
 import { PackageInfoClient } from '@nrz/package-info'
 import { SecurityArchive } from '@nrz/security-archive'
 import { Spec } from '@nrz/spec'
-import { commandUsage } from '../config/usage.ts'
-import { createStubNode } from '../stub-node.ts'
+import { commandUsage } from '../config/usage.js'
+import { createStubNode } from '../stub-node.js'
 import type { Manifest, Packument } from '@nrz/types'
 import type {
   PackageReportData,
   PackageAlert,
 } from '@nrz/security-archive'
-import type { LoadedConfig } from '../config/index.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { ViewOptions, Views } from '../view.ts'
+import type { LoadedConfig } from '../config/index.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { ViewOptions, Views } from '../view.js'
 
 export const needsRegistry = true
 

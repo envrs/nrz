@@ -1,8 +1,8 @@
 import t from 'tap'
-import { Comparator } from '../src/comparator.ts'
+import { Comparator } from '../src/comparator.js'
 
 // version tests cover most of the comparator code paths
-import { Version } from '../src/version.ts'
+import { Version } from '../src/version.js'
 import './range.ts'
 import './version.ts'
 

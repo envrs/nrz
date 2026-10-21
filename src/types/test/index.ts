@@ -14,7 +14,7 @@ import type {
   PeerDependenciesMetaValue,
   Person,
   Repository,
-} from '../src/index.ts'
+} from '../src/index.js'
 import {
   asError,
   asIntegrity,
@@ -80,7 +80,7 @@ import {
   maybePeerDependenciesMetaSet,
   isPeerDependenciesMetaValue,
   expandNormalizedManifestSymbols,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 import t from 'tap'
 

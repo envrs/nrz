@@ -28,20 +28,20 @@ import type { Test } from 'tap'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { asDependency } from '../../src/dependencies.ts'
-import { Graph } from '../../src/graph.ts'
+} from '../../src/dependencies.js'
+import { asDependency } from '../../src/dependencies.js'
+import { Graph } from '../../src/graph.js'
 import { RollbackRemove } from '@nrz/rollback-remove'
 import type {
   LockfileData,
   LockfileEdges,
   LockfileNode,
-} from '../../src/index.ts'
-import { actual, ideal, reify } from '../../src/index.ts'
+} from '../../src/index.js'
+import { actual, ideal, reify } from '../../src/index.js'
 import {
   fixtureManifest,
   mockPackageInfo as mockPackageInfoBase,
-} from '../fixtures/reify.ts'
+} from '../fixtures/reify.js'
 
 const createMockPackageInfo = (
   overrides: Partial<typeof mockPackageInfoBase> = {},

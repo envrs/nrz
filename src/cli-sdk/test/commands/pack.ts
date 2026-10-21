@@ -1,11 +1,11 @@
 import t from 'tap'
 import { resolve } from 'node:path'
 import { readFile, access } from 'node:fs/promises'
-import { command, views, usage } from '../../src/commands/pack.ts'
-import type { CommandResultSingle } from '../../src/commands/pack.ts'
+import { command, views, usage } from '../../src/commands/pack.js'
+import type { CommandResultSingle } from '../../src/commands/pack.js'
 import { PackageJson } from '@nrz/package-json'
 import { Monorepo } from '@nrz/workspaces'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 const makeTestConfig = (config: any) => ({
   ...config,

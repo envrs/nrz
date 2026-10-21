@@ -1,7 +1,7 @@
 import { error } from '@nrz/error-cause'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { InstallResult } from '../../src/commands/install.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { InstallResult } from '../../src/commands/install.js'
 
 const options = {}
 const parsedAdd = new Map()

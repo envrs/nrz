@@ -6,7 +6,7 @@ import { debuglog } from 'node:util'
 import { gunzipSync } from 'node:zlib'
 import type { Integrity } from '@nrz/types'
 import type EventEmitter from 'node:events'
-import { explode, storeEnabled } from './explode.ts'
+import { explode, storeEnabled } from './explode.js'
 
 export const __CODE_SPLIT_SCRIPT_NAME = import.meta.filename
 

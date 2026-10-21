@@ -7,11 +7,11 @@ import {
 } from 'node:path'
 import { inspect } from 'node:util'
 import type { InspectOptions } from 'node:util'
-import type { SpecLike } from './browser.ts'
-import { Spec as BrowserSpec, kCustomInspect } from './browser.ts'
+import type { SpecLike } from './browser.js'
+import { Spec as BrowserSpec, kCustomInspect } from './browser.js'
 
 // eslint-disable-next-line import/export
-export * from './browser.ts'
+export * from './browser.js'
 
 // eslint-disable-next-line import/export
 export class Spec extends BrowserSpec implements SpecLike<Spec> {

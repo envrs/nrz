@@ -12,13 +12,13 @@ import type {
 import {
   asDependencySpecError,
   isDependencyTypeShort,
-} from '../dependencies.ts'
+} from '../dependencies.js'
 import type {
   LockfileData,
   LockfileEdgeKey,
   LockfileEdgeValue,
   SpecCache,
-} from './types.ts'
+} from './types.js'
 
 export type LoadEdgesCache = {
   specCache: SpecCache

@@ -2,8 +2,8 @@ import type { PackageInfoClient } from '@nrz/package-info'
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import type { SpecOptions } from '@nrz/spec'
 import type { PathScurry } from 'path-scurry'
-import type { Diff } from '../diff.ts'
-import { extractNode } from './extract-node.ts'
+import type { Diff } from '../diff.js'
+import { extractNode } from './extract-node.js'
 
 export const addNodes = (
   diff: Diff,

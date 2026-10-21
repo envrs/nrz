@@ -1,18 +1,18 @@
 import { error } from '@nrz/error-cause'
 import { graphStep } from '@nrz/output'
-import { load as loadActual } from '../actual/load.ts'
-import { load as loadVirtual } from '../lockfile/load.ts'
-import { buildIdealFromStartingGraph } from './build-ideal-from-starting-graph.ts'
-import { prefetchResolve } from './prefetch-resolve.ts'
-import { isPathSecurityError } from '../path-security-error.ts'
+import { load as loadActual } from '../actual/load.js'
+import { load as loadVirtual } from '../lockfile/load.js'
+import { buildIdealFromStartingGraph } from './build-ideal-from-starting-graph.js'
+import { prefetchResolve } from './prefetch-resolve.js'
+import { isPathSecurityError } from '../path-security-error.js'
 import type { PackageInfoClient } from '@nrz/package-info'
-import type { LoadOptions as LoadActualOptions } from '../actual/load.ts'
+import type { LoadOptions as LoadActualOptions } from '../actual/load.js'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
   Dependency,
-} from '../dependencies.ts'
-import type { Graph } from '../graph.ts'
+} from '../dependencies.js'
+import type { Graph } from '../graph.js'
 import { splitDepID } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
 import type { RollbackRemove } from '@nrz/rollback-remove'

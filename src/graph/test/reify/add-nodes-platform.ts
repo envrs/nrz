@@ -4,9 +4,9 @@ import type { RollbackRemove } from '@nrz/rollback-remove'
 import type { Spec } from '@nrz/spec'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
+import type { Diff } from '../../src/diff.js'
 
-import { addNodes } from '../../src/reify/add-nodes.ts'
+import { addNodes } from '../../src/reify/add-nodes.js'
 
 const removed: string[] = []
 const mockRemover = {

@@ -1,7 +1,7 @@
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PathScurry } from 'path-scurry'
-import type { Node } from '../node.ts'
+import type { Node } from '../node.js'
 
 const onDisk = (dir: string) => {
   try {

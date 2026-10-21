@@ -1,7 +1,7 @@
 import { error } from '@nrz/error-cause'
 import { lstat, readFile, readlink } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { paths } from './paths.ts'
+import { paths } from './paths.js'
 
 const extractPath = (path: string, cmdshimContents: string) => {
   if (/\.cmd$/i.test(path)) {

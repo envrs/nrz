@@ -12,10 +12,10 @@ import { isRecordStringString } from '@nrz/types'
 import { Monorepo } from '@nrz/workspaces'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { loadEdges } from './load-edges.ts'
-import { loadNodes } from './load-nodes.ts'
-import { Graph } from '../graph.ts'
-import { LOCKFILE_VERSION } from './types.ts'
+import { loadEdges } from './load-edges.js'
+import { loadNodes } from './load-nodes.js'
+import { Graph } from '../graph.js'
+import { LOCKFILE_VERSION } from './types.js'
 import type { PathScurry } from 'path-scurry'
 import type { NormalizedManifest } from '@nrz/types'
 import type { SpecOptions } from '@nrz/spec'
@@ -23,8 +23,8 @@ import type {
   LockfileData,
   OptionsChange,
   SpecCache,
-} from './types.ts'
-import type { GraphModifier } from '../modifiers.ts'
+} from './types.js'
+import type { GraphModifier } from '../modifiers.js'
 
 export type LoadOptions = SpecOptions & {
   /**

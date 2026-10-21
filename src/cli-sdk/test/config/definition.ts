@@ -1,5 +1,5 @@
 import t from 'tap'
-import { setupEnv } from '../fixtures/util.ts'
+import { setupEnv } from '../fixtures/util.js'
 const {
   commands,
   definition,

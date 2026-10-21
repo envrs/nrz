@@ -1,5 +1,5 @@
 import t from 'tap'
-import { assertSpecAliases } from '../../src/config/spec-aliases.ts'
+import { assertSpecAliases } from '../../src/config/spec-aliases.js'
 
 const u = 'https://x/'
 

@@ -4,10 +4,10 @@ import {
   asPackageReportData,
   asSecurityArchiveLike,
 } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { parse } from '../../src/parser.ts'
-import { cve } from '../../src/pseudo/cve.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { parse } from '../../src/parser.js'
+import { cve } from '../../src/pseudo/cve.js'
 
 t.test('selects packages with a CVE alert', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

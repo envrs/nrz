@@ -10,7 +10,7 @@ import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import type { SpecOptions } from '@nrz/spec'
 import type { Test } from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 t.cleanSnapshot = s =>
   s.replace(

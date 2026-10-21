@@ -3,7 +3,7 @@ import t from 'tap'
 import {
   assertNrzInstalled,
   isNrzInstalled,
-} from '../src/is-nrz-installed.ts'
+} from '../src/is-nrz-installed.js'
 
 t.test('isNrzInstalled', async t => {
   t.equal(

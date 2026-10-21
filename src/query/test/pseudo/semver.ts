@@ -5,12 +5,12 @@ import {
   isSemverFunctionName,
   parseInternals,
   semverParser,
-} from '../../src/pseudo/semver.ts'
+} from '../../src/pseudo/semver.js'
 import {
   getSemverRichGraph,
   getSimpleGraph,
-} from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
 
 t.test('select from semver definition', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

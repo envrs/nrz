@@ -1,16 +1,16 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asPostcssNodeWithChildren } from '@nrz/dss-parser'
-import { parse } from '../../src/parser.ts'
+import { parse } from '../../src/parser.js'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
 import {
   vuln,
   isVulnKind,
   asVulnKind,
   parseInternals,
-} from '../../src/pseudo/vuln.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../../src/pseudo/vuln.js'
+import type { ParserState } from '../../src/types.js'
 
 t.test('selects packages with vulnerability alerts', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

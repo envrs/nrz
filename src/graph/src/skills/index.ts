@@ -1,35 +1,35 @@
 import { existsSync } from 'node:fs'
 import type { DepID } from '@nrz/dep-id'
 import type { PathScurry } from 'path-scurry'
-import { load as loadActual } from '../actual/load.ts'
-import type { LoadOptions } from '../actual/load.ts'
-import { filterNodesByQueryParts } from '../filter-nodes-by-query.ts'
+import { load as loadActual } from '../actual/load.js'
+import type { LoadOptions } from '../actual/load.js'
+import { filterNodesByQueryParts } from '../filter-nodes-by-query.js'
 import type {
   QueryPartIds,
   Unscanned,
-} from '../filter-nodes-by-query.ts'
-import type { Graph } from '../graph.ts'
-import { unshare } from '../reify/unshare.ts'
-import { skillsDirs } from './dirs.ts'
-import type { SkillsDir } from './dirs.ts'
-import { discoverSkills } from './discover.ts'
-import type { Skill } from './discover.ts'
-import { editGitignore } from './gitignore.ts'
-import { maskSkills } from './mask.ts'
-import type { UnmatchedPattern } from './mask.ts'
+} from '../filter-nodes-by-query.js'
+import type { Graph } from '../graph.js'
+import { unshare } from '../reify/unshare.js'
+import { skillsDirs } from './dirs.js'
+import type { SkillsDir } from './dirs.js'
+import { discoverSkills } from './discover.js'
+import type { Skill } from './discover.js'
+import { editGitignore } from './gitignore.js'
+import { maskSkills } from './mask.js'
+import type { UnmatchedPattern } from './mask.js'
 import {
   mountSkill,
   packageKey,
   readMounts,
   samePath,
   unmountSkill,
-} from './mounts.ts'
-import type { SkillMount } from './mounts.ts'
+} from './mounts.js'
+import type { SkillMount } from './mounts.js'
 
-export * from './discover.ts'
-export type { SkillMount, MountResult } from './mounts.ts'
-export type { SkillsDir } from './dirs.ts'
-export type { UnmatchedPattern } from './mask.ts'
+export * from './discover.js'
+export type { SkillMount, MountResult } from './mounts.js'
+export type { SkillsDir } from './dirs.js'
+export type { UnmatchedPattern } from './mask.js'
 
 /**
  * Options for {@link listSkills} and {@link linkSkills}.

@@ -5,10 +5,10 @@ import {
   dist,
   queueNode,
   retrieveDistTags,
-} from '../../src/pseudo/dist.ts'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+} from '../../src/pseudo/dist.js'
+import { getSimpleGraph } from '../fixtures/graph.js'
 import type { NodeLike } from '@nrz/types'
-import type { ParserState } from '../../src/types.ts'
+import type { ParserState } from '../../src/types.js'
 
 global.fetch = (async (url: string) => {
   if (url === 'https://registry.npmjs.org/c') {

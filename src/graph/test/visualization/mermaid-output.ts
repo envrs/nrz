@@ -3,14 +3,14 @@ import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
-import { Graph } from '../../src/graph.ts'
-import { save } from '../../src/lockfile/save.ts'
-import { load } from '../../src/lockfile/load.ts'
+import { Graph } from '../../src/graph.js'
+import { save } from '../../src/lockfile/save.js'
+import { load } from '../../src/lockfile/load.js'
 import {
   mermaidOutput,
   generateShortId,
-} from '../../src/visualization/mermaid-output.ts'
-import { loadActualGraph } from '../fixtures/actual.ts'
+} from '../../src/visualization/mermaid-output.js'
+import { loadActualGraph } from '../fixtures/actual.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 
 const configData = {

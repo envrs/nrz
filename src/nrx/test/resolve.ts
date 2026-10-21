@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { NrxInfo } from '../src/index.ts'
+import type { NrxInfo } from '../src/index.js'
 
 const mockNrxInstall = (t: Test) => ({
   nrxInstall: async (pkgSpec: Spec): Promise<NrxInfo> => {

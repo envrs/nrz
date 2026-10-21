@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import t from 'tap'
 import { join, relative } from 'node:path'
 import { readdirSync } from 'node:fs'
-import { __CODE_SPLIT_SCRIPT_NAME } from '../src/remove.ts'
+import { __CODE_SPLIT_SCRIPT_NAME } from '../src/remove.js'
 
 const env = {
   ...process.env,

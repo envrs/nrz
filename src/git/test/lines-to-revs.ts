@@ -1,4 +1,4 @@
-import { linesToRevs } from '../src/lines-to-revs.ts'
+import { linesToRevs } from '../src/lines-to-revs.js'
 
 const first = [
   'be3270e5fdf0bcc8b0e93bac3f5543703367d9aa\tHEAD',

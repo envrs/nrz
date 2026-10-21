@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { getId } from '@nrz/dep-id'
 import { PackageJson } from '@nrz/package-json'
 import { Spec } from '@nrz/spec'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 import type { Manifest, Packument, NodeLike } from '@nrz/types'
 import type { PackageReportData } from '@nrz/security-archive'
 

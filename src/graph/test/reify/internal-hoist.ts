@@ -7,12 +7,12 @@ import { rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Node } from '../../src/index.ts'
-import { actual } from '../../src/index.ts'
+import type { Node } from '../../src/index.js'
+import { actual } from '../../src/index.js'
 import {
   internalHoist,
   pickNodeToHoist,
-} from '../../src/reify/internal-hoist.ts'
+} from '../../src/reify/internal-hoist.js'
 
 t.test('basic hoisting', async t => {
   const mainManifest = { name: 'root' }

@@ -1,13 +1,13 @@
 import t from 'tap'
-import { id } from '../src/id.ts'
-import { getAliasedGraph, getSimpleGraph } from './fixtures/graph.ts'
+import { id } from '../src/id.js'
+import { getAliasedGraph, getSimpleGraph } from './fixtures/graph.js'
 import {
   copyGraphSelectionState,
   getGraphSelectionState,
   selectorFixture,
-} from './fixtures/selector.ts'
-import type { TestCase } from './fixtures/types.ts'
-import type { GraphSelectionState } from '../src/types.ts'
+} from './fixtures/selector.js'
+import type { TestCase } from './fixtures/types.js'
+import type { GraphSelectionState } from '../src/types.js'
 import type { EdgeLike, NodeLike } from '@nrz/types'
 
 const testId = selectorFixture(id)

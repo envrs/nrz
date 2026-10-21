@@ -3,8 +3,8 @@ import { asDepID, splitDepID, splitExtra } from '@nrz/dep-id/browser'
 import {
   getBooleanFlagsFromNum,
   getBuildStateFromNum,
-} from './types.ts'
-import type { LockfileData, LockfileNode } from './types.ts'
+} from './types.js'
+import type { LockfileData, LockfileNode } from './types.js'
 import { tarballFormat } from '@nrz/types'
 import type { DepID } from '@nrz/dep-id'
 import type { GraphLike } from '@nrz/types'

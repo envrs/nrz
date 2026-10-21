@@ -22,11 +22,11 @@ import type {
   GraphLike,
   NodeLike,
 } from '@nrz/types'
-import { Edge } from './edge.ts'
-import type { Graph } from './graph.ts'
-import { stringifyNode } from './stringify-node.ts'
+import { Edge } from './edge.js'
+import type { Graph } from './graph.js'
+import { stringifyNode } from './stringify-node.js'
 import type { PackageInfoClient } from '@nrz/package-info'
-import type { GraphModifier } from './modifiers.ts'
+import type { GraphModifier } from './modifiers.js'
 
 export type NodeOptions = SpecOptions & {
   projectRoot: string

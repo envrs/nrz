@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import module from 'node:module'
-import { __CODE_SPLIT_SCRIPT_NAME } from './revalidate.ts'
+import { __CODE_SPLIT_SCRIPT_NAME } from './revalidate.js'
 
 const isDeno =
   (globalThis as typeof globalThis & { Deno?: any }).Deno != undefined

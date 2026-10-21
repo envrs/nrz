@@ -1,4 +1,4 @@
-import { spawn } from './spawn.ts'
+import { spawn } from './spawn.js'
 
 export type GitUser = {
   name?: string

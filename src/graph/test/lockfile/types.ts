@@ -7,7 +7,7 @@ import type {
   LockfileEdges,
   LockfileEdgeKey,
   LockfileEdgeValue,
-} from '../../src/lockfile/types.ts'
+} from '../../src/lockfile/types.js'
 import {
   getFlagNumFromNode,
   getBooleanFlagsFromNum,
@@ -23,7 +23,7 @@ import {
   BuildStateBuilt,
   BuildStateFailed,
   LOCKFILE_VERSION,
-} from '../../src/lockfile/types.ts'
+} from '../../src/lockfile/types.js'
 
 t.test('lockfile type checks', t => {
   // LockfileData type checks

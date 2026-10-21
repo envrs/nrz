@@ -12,12 +12,12 @@ import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import type { Manifest, Packument } from '@nrz/types'
 import t from 'tap'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { LoadedConfig } from '../src/config/index.js'
 import {
   addTypesDeps,
   hasOwnTypes,
   typesName,
-} from '../src/save-types.ts'
+} from '../src/save-types.js'
 
 const reg = 'https://registry.example.com/'
 const other = 'https://other.example.com/'

@@ -1,5 +1,5 @@
-import { emitter, logRequest, graphStep } from '../src/index.ts'
-import type { Events } from '../src/index.ts'
+import { emitter, logRequest, graphStep } from '../src/index.js'
+import type { Events } from '../src/index.js'
 
 import t from 'tap'
 

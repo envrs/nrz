@@ -17,10 +17,10 @@ import {
   getNodeGypShimDir,
   hasNodeGypReference,
   hasNodeGypBinding,
-} from './node-gyp.ts'
+} from './node-gyp.js'
 
 // Re-export all named exports from node-gyp.ts
-export * from './node-gyp.ts'
+export * from './node-gyp.js'
 
 /**
  * The user agent string set as `npm_config_user_agent` in lifecycle script

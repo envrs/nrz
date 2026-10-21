@@ -1,4 +1,4 @@
-import type { LoadedConfig } from './config/index.ts'
+import type { LoadedConfig } from './config/index.js'
 
 export type ViewOptions = { colors?: boolean }
 

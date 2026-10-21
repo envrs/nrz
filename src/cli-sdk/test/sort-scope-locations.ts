@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import t from 'tap'
 import { Monorepo } from '@nrz/workspaces'
-import { sortScopeLocations } from '../src/sort-scope-locations.ts'
+import { sortScopeLocations } from '../src/sort-scope-locations.js'
 
 const pkg = (name: string, deps: string[] = []) => ({
   'package.json': JSON.stringify({

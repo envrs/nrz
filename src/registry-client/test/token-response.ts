@@ -1,5 +1,5 @@
 import t from 'tap'
-import { getTokenResponse } from '../src/token-response.ts'
+import { getTokenResponse } from '../src/token-response.js'
 
 t.strictSame(getTokenResponse({ token: 'hello' }), { token: 'hello' })
 

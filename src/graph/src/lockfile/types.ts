@@ -5,7 +5,7 @@ import type {
   NormalizedManifest,
   DependencyTypeShort,
 } from '@nrz/types'
-import type { Graph } from '../graph.ts'
+import type { Graph } from '../graph.js'
 
 /**
  * Platform requirements for a lockfile node

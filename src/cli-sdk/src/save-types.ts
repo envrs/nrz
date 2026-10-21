@@ -10,7 +10,7 @@ import {
 import { resolve } from 'node:path'
 import type { AddImportersDependenciesMap } from '@nrz/graph'
 import type { DependencyTypeLong, Manifest } from '@nrz/types'
-import type { LoadedConfig } from './config/index.ts'
+import type { LoadedConfig } from './config/index.js'
 
 type TypedManifest = Pick<Manifest, 'exports'> & {
   types?: unknown

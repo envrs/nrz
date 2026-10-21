@@ -11,8 +11,8 @@ import * as path from 'node:path'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
-import { skillsDirs } from '../../src/skills/dirs.ts'
-import type { SkillsDir } from '../../src/skills/dirs.ts'
+import { skillsDirs } from '../../src/skills/dirs.js'
+import type { SkillsDir } from '../../src/skills/dirs.js'
 import {
   mountSkill,
   mountTarget,
@@ -21,7 +21,7 @@ import {
   readMounts,
   samePath,
   unmountSkill,
-} from '../../src/skills/mounts.ts'
+} from '../../src/skills/mounts.js'
 
 const store = 'node_modules/.nrz/~npm~foo@1.0.0/node_modules/foo'
 const scopedStore =

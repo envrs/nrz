@@ -20,17 +20,17 @@ import { dirname, resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import type { Test } from 'tap'
-import { load as actualLoad } from '../../src/actual/load.ts'
-import { Graph } from '../../src/graph.ts'
-import type { Node } from '../../src/node.ts'
-import type { SkillsDir } from '../../src/skills/dirs.ts'
+import { load as actualLoad } from '../../src/actual/load.js'
+import { Graph } from '../../src/graph.js'
+import type { Node } from '../../src/node.js'
+import type { SkillsDir } from '../../src/skills/dirs.js'
 import {
   GITIGNORE_BEGIN,
   GITIGNORE_END,
-} from '../../src/skills/gitignore.ts'
-import { linkSkills, listSkills } from '../../src/skills/index.ts'
-import type { LinkSkillsResult } from '../../src/skills/index.ts'
-import { mountSkill } from '../../src/skills/mounts.ts'
+} from '../../src/skills/gitignore.js'
+import { linkSkills, listSkills } from '../../src/skills/index.js'
+import type { LinkSkillsResult } from '../../src/skills/index.js'
+import { mountSkill } from '../../src/skills/mounts.js'
 
 type Dir = NonNullable<Parameters<typeof t.testdir>[0]>
 

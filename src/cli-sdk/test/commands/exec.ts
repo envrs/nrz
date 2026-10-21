@@ -2,8 +2,8 @@ import { Spec } from '@nrz/spec'
 import { unload } from '@nrz/nrz-json'
 import type { PromptFn, NrxOptions } from '@nrz/nrx'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { ExecResult } from '../../src/exec-command.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { ExecResult } from '../../src/exec-command.js'
 
 t.test('prettpath', async t => {
   const { prettyPath } = await t.mockImport<

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import t from 'tap'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { LoadedConfig } from '../src/config/index.js'
 import { PathScurry } from 'path-scurry'
 import { PackageJson } from '@nrz/package-json'
 

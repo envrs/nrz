@@ -2,8 +2,8 @@ import { writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Node } from '../../src/node.ts'
-import { hasBindingGyp } from '../../src/reify/binding-gyp.ts'
+import type { Node } from '../../src/node.js'
+import { hasBindingGyp } from '../../src/reify/binding-gyp.js'
 
 const dir = t.testdir({
   gyp: { 'binding.gyp': '{}' },

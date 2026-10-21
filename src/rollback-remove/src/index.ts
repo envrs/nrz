@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { rename } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { rimraf } from 'rimraf'
-import { __CODE_SPLIT_SCRIPT_NAME } from './remove.ts'
+import { __CODE_SPLIT_SCRIPT_NAME } from './remove.js'
 
 const isDeno =
   (globalThis as typeof globalThis & { Deno?: any }).Deno != undefined

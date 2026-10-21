@@ -1,12 +1,12 @@
 import { error } from '@nrz/error-cause'
 import { Spec } from '@nrz/spec'
 import { resolve } from 'node:path'
-import { addToPATH } from './add-to-path.ts'
-import { findExecutable } from './find-executable.ts'
-import { findPackage } from './find-package.ts'
-import type { PromptFn, NrxInfo, NrxOptions } from './index.ts'
-import { nrxInstall } from './install.ts'
-import { localDir, nrxLocal } from './local.ts'
+import { addToPATH } from './add-to-path.js'
+import { findExecutable } from './find-executable.js'
+import { findPackage } from './find-package.js'
+import type { PromptFn, NrxInfo, NrxOptions } from './index.js'
+import { nrxInstall } from './install.js'
+import { localDir, nrxLocal } from './local.js'
 
 /**
  * Figure out the `arg0` to use for an exec command.

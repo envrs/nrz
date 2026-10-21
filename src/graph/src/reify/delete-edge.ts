@@ -1,7 +1,7 @@
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import { resolve } from 'node:path'
 import type { PathScurry } from 'path-scurry'
-import type { Edge } from '../edge.ts'
+import type { Edge } from '../edge.js'
 
 const rmBinPosix = (remover: RollbackRemove, bin: string) => {
   return [remover.rm(bin)]

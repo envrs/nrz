@@ -11,8 +11,8 @@ import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { Graph } from '../../src/graph.ts'
-import { build } from '../../src/ideal/build.ts'
+import { Graph } from '../../src/graph.js'
+import { build } from '../../src/ideal/build.js'
 import {
   byteCompare,
   canonicalizePeerIds,
@@ -21,9 +21,9 @@ import {
   isProvisionalPeerSuffix,
   peerEnvDigest,
   serializeNodeEnv,
-} from '../../src/ideal/canonicalize-peer-ids.ts'
-import { save } from '../../src/lockfile/save.ts'
-import type { Node } from '../../src/node.ts'
+} from '../../src/ideal/canonicalize-peer-ids.js'
+import { save } from '../../src/lockfile/save.js'
+import type { Node } from '../../src/node.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

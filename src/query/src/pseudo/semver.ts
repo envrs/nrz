@@ -14,9 +14,9 @@ import {
 import type { Version } from '@nrz/semver'
 import { error } from '@nrz/error-cause'
 import { asError } from '@nrz/types'
-import { parseInternals as parseAttrInternals } from './attr.ts'
-import type { AttrInternals } from './attr.ts'
-import { getManifestPropertyValues } from '../attribute.ts'
+import { parseInternals as parseAttrInternals } from './attr.js'
+import type { AttrInternals } from './attr.js'
+import { getManifestPropertyValues } from '../attribute.js'
 import {
   asAttributeNode,
   asPostcssNodeWithChildren,
@@ -33,8 +33,8 @@ import {
   removeNode,
   removeQuotes,
   removeUnlinkedNodes,
-} from './helpers.ts'
-import type { ParserState } from '../types.ts'
+} from './helpers.js'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 export type SemverInternals = {

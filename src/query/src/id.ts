@@ -1,6 +1,6 @@
 import { asIdentifierNode } from '@nrz/dss-parser'
 import { error } from '@nrz/error-cause'
-import type { ParserState } from './types.ts'
+import type { ParserState } from './types.js'
 
 /**
  * Parse ids, e.g: `#foo`

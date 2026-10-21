@@ -1,7 +1,7 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
 import t from 'tap'
-import type { Skill } from '../../src/skills/discover.ts'
-import { globRegExp, maskSkills } from '../../src/skills/mask.ts'
+import type { Skill } from '../../src/skills/discover.js'
+import { globRegExp, maskSkills } from '../../src/skills/mask.js'
 
 t.test('globRegExp', async t => {
   const yes: [string, string][] = [

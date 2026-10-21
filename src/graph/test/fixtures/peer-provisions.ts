@@ -1,6 +1,6 @@
 import { satisfies } from '@nrz/satisfies'
 import type { Test } from 'tap'
-import type { Graph } from '../../src/graph.ts'
+import type { Graph } from '../../src/graph.js'
 
 /**
  * Rule C for optional peers, checked on a built graph: no `peerOptional`

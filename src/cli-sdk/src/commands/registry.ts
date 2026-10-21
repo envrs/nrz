@@ -1,10 +1,10 @@
 import { error } from '@nrz/error-cause'
-import { getCommand } from '../config/definition.ts'
-import { commandUsage } from '../config/usage.ts'
-import { resolveRegistry } from '../require-registry.ts'
-import type { Commands, LoadedConfig } from '../config/index.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import { getCommand } from '../config/definition.js'
+import { commandUsage } from '../config/usage.js'
+import { resolveRegistry } from '../require-registry.js'
+import type { Commands, LoadedConfig } from '../config/index.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 /**
  * The account/auth commands that can be scoped to a named registry

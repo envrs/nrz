@@ -1,5 +1,5 @@
 import t from 'tap'
-import { inferDefaultExecutable } from '../src/infer-default-executable.ts'
+import { inferDefaultExecutable } from '../src/infer-default-executable.js'
 
 t.strictSame(
   inferDefaultExecutable({

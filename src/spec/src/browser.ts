@@ -9,10 +9,10 @@ import type {
   SpecOptions,
   SpecOptionsFilled,
   SpecType,
-} from './types.ts'
-import { assertPathSafeName } from './valid-name.ts'
-export * from './types.ts'
-export * from './valid-name.ts'
+} from './types.js'
+import { assertPathSafeName } from './valid-name.js'
+export * from './types.js'
+export * from './valid-name.js'
 
 export const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
 

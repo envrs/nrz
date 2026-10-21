@@ -1,7 +1,7 @@
 import type { Integrity } from '@nrz/types'
 import { spawn } from 'node:child_process'
 import module from 'node:module'
-import { __CODE_SPLIT_SCRIPT_NAME } from './unzip.ts'
+import { __CODE_SPLIT_SCRIPT_NAME } from './unzip.js'
 
 const isDeno =
   (globalThis as typeof globalThis & { Deno?: any }).Deno != undefined

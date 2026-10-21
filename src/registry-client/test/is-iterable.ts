@@ -1,5 +1,5 @@
 import t from 'tap'
-import { isIterable } from '../src/is-iterable.ts'
+import { isIterable } from '../src/is-iterable.js'
 
 t.equal(isIterable([]), true)
 t.equal(isIterable({}), false)

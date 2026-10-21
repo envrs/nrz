@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import t from 'tap'
-import { findExecutable } from '../src/find-executable.ts'
+import { findExecutable } from '../src/find-executable.js'
 
 t.test('find a bin', async t => {
   const projectRoot = t.testdir({

@@ -6,14 +6,14 @@ import {
   parseInternals,
   queueNode,
   retrieveRemoteVersions,
-} from '../../src/pseudo/outdated.ts'
+} from '../../src/pseudo/outdated.js'
 import {
   getSemverRichGraph,
   getSimpleGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 import type { NodeLike } from '@nrz/types'
 import type { SpecOptions } from '@nrz/spec'
-import type { ParserState } from '../../src/types.ts'
+import type { ParserState } from '../../src/types.js'
 
 // the `npm` alias is no longer built in; configure it so the
 // default-registry DepIDs hydrate to the npm registry URL. Typed as

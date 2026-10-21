@@ -21,13 +21,13 @@ import {
   storedAllowSkills,
   unmatchedLines,
   unscannedLines,
-} from '../allow-skills.ts'
-import { configWriteTarget } from '../config/index.ts'
-import type { LoadedConfig } from '../config/index.ts'
-import { commandUsage } from '../config/usage.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import { confirm, editQuery, interactive } from '../skills-prompt.ts'
-import type { ViewOptions, Views } from '../view.ts'
+} from '../allow-skills.js'
+import { configWriteTarget } from '../config/index.js'
+import type { LoadedConfig } from '../config/index.js'
+import { commandUsage } from '../config/usage.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import { confirm, editQuery, interactive } from '../skills-prompt.js'
+import type { ViewOptions, Views } from '../view.js'
 
 export type SkillsResult =
   | ({ action: 'list' } & ListSkillsResult)

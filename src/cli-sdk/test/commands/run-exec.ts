@@ -2,8 +2,8 @@ import { unload } from '@nrz/nrz-json'
 import { ansiToAnsi } from 'ansi-to-pre'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { command, usage } from '../../src/commands/run-exec.ts'
-import { setupEnv } from '../fixtures/util.ts'
+import { command, usage } from '../../src/commands/run-exec.js'
+import { setupEnv } from '../fixtures/util.js'
 
 setupEnv(t)
 

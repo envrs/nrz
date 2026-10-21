@@ -18,8 +18,8 @@ import { createGunzip } from 'node:zlib'
 import type { Agent, Dispatcher } from 'undici'
 import { RetryAgent } from 'undici'
 import { userAgent } from '@nrz/user-agent'
-import { addHeader } from './add-header.ts'
-import type { RegistryURLs, Token } from './auth.ts'
+import { addHeader } from './add-header.js'
+import type { RegistryURLs, Token } from './auth.js'
 import {
   clearRuntimeTokens,
   deleteToken,
@@ -34,32 +34,32 @@ import {
   runtimeTokens,
   setRuntimeToken,
   setToken,
-} from './auth.ts'
-import type { JSONObj } from './cache-entry.ts'
-import { CacheEntry } from './cache-entry.ts'
-import { register } from './cache-revalidate.ts'
-import { getHeader } from './get-header.ts'
-import { handleCacheHitResponse } from './handle-304-response.ts'
-import { otplease } from './otplease.ts'
-import { getDispatcher } from './proxy.ts'
-import { isRedirect, redirect } from './redirect.ts'
+} from './auth.js'
+import type { JSONObj } from './cache-entry.js'
+import { CacheEntry } from './cache-entry.js'
+import { register } from './cache-revalidate.js'
+import { getHeader } from './get-header.js'
+import { handleCacheHitResponse } from './handle-304-response.js'
+import { otplease } from './otplease.js'
+import { getDispatcher } from './proxy.js'
+import { isRedirect, redirect } from './redirect.js'
 import {
   assertOk,
   registryErrorMessage,
   requestError,
   statusText,
-} from './registry-error.ts'
-import type { ErrorResponse } from './registry-error.ts'
-import { setCacheHeaders } from './set-cache-headers.ts'
-import type { TokenResponse } from './token-response.ts'
-import { getTokenResponse } from './token-response.ts'
-import type { WebAuthChallenge } from './web-auth-challenge.ts'
-import { getWebAuthChallenge } from './web-auth-challenge.ts'
-import { collectHeaders, readBody } from './response.ts'
-import { retry } from './retry.ts'
-import { storeRoot } from './store-root.ts'
-import { oidc } from './oidc.ts'
-import type { OidcOptions } from './oidc.ts'
+} from './registry-error.js'
+import type { ErrorResponse } from './registry-error.js'
+import { setCacheHeaders } from './set-cache-headers.js'
+import type { TokenResponse } from './token-response.js'
+import { getTokenResponse } from './token-response.js'
+import type { WebAuthChallenge } from './web-auth-challenge.js'
+import { getWebAuthChallenge } from './web-auth-challenge.js'
+import { collectHeaders, readBody } from './response.js'
+import { retry } from './retry.js'
+import { storeRoot } from './store-root.js'
+import { oidc } from './oidc.js'
+import type { OidcOptions } from './oidc.js'
 
 // eslint-disable-next-line no-console
 const log = (msg: string) => console.error(msg)

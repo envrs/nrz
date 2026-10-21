@@ -4,7 +4,7 @@ import { readdirSync } from 'node:fs'
 import { opendir, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import t from 'tap'
-import type { NrxManifest, NrxOptions } from '../src/index.ts'
+import type { NrxManifest, NrxOptions } from '../src/index.js'
 
 const mockNrxInfo = await t.mockImport<
   typeof import('../src/info.ts')

@@ -16,24 +16,24 @@ import { parse as parseVersion } from '@nrz/semver'
 import { longDependencyTypes, normalizeManifest } from '@nrz/types'
 import type { DependencySaveType, Manifest } from '@nrz/types'
 import type { PathScurry } from 'path-scurry'
-import { fixupAddedNames } from '../fixup-added-names.ts'
+import { fixupAddedNames } from '../fixup-added-names.js'
 import {
   addKey,
   asDependencySpecError,
   shorten,
   shouldInstallDepType,
-} from '../dependencies.ts'
-import type { Dependency } from '../dependencies.ts'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
-import { removeOptionalSubgraph } from '../remove-optional-subgraph.ts'
-import { isPathSecurityError } from '../path-security-error.ts'
+} from '../dependencies.js'
+import type { Dependency } from '../dependencies.js'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
+import { removeOptionalSubgraph } from '../remove-optional-subgraph.js'
+import { isPathSecurityError } from '../path-security-error.js'
 import type {
   GraphModifier,
   ModifierActiveEntry,
-} from '../modifiers.ts'
-import type { ExtractResult } from '../reify/extract-node.ts'
-import { extractNode } from '../reify/extract-node.ts'
+} from '../modifiers.js'
+import type { ExtractResult } from '../reify/extract-node.js'
+import { extractNode } from '../reify/extract-node.js'
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import {
   checkPeerEdgesCompatible,
@@ -41,8 +41,8 @@ import {
   forkPeerContext,
   postPlacementPeerCheck,
   startPeerPlacement,
-} from './peers.ts'
-import { compareByHasPeerDeps } from './sorting.ts'
+} from './peers.js'
+import { compareByHasPeerDeps } from './sorting.js'
 import type {
   ExplicitAddMap,
   PeerContext,
@@ -51,7 +51,7 @@ import type {
   ProcessPlacementResult,
   TransientAddMap,
   TransientRemoveMap,
-} from './types.ts'
+} from './types.js'
 
 type FileTypeInfo = {
   id: DepID

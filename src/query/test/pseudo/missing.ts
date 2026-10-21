@@ -1,11 +1,11 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { missing } from '../../src/pseudo/missing.ts'
+import type { ParserState } from '../../src/types.js'
+import { missing } from '../../src/pseudo/missing.js'
 import {
   getSimpleGraph,
   getMissingNodeGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects edges with no linked node', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

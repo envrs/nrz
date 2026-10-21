@@ -1,13 +1,13 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { spec } from '../../src/pseudo/spec.ts'
+import type { ParserState } from '../../src/types.js'
+import { spec } from '../../src/pseudo/spec.js'
 import {
   getSimpleGraph,
   getMultiWorkspaceGraph,
   getAliasedGraph,
   getSemverRichGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects edges by spec.bareSpec value', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

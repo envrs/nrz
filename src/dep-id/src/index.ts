@@ -7,9 +7,9 @@ import {
 import {
   resetCaches as browserResetCaches,
   splitDepID,
-} from './browser.ts'
+} from './browser.js'
 import type { SpecOptions } from '@nrz/spec'
-import type { DepID, DepIDTuple } from './browser.ts'
+import type { DepID, DepIDTuple } from './browser.js'
 
 // Here we re-export the browser-specific parts of the implementation
 // we disable the eslint rules for import/export since we are intentionally
@@ -17,7 +17,7 @@ import type { DepID, DepIDTuple } from './browser.ts'
 // use the Node.js-specific `Spec.parse` method that relies on internal node
 // modules like `util` and `path` that are not isomorphic.
 // eslint-disable-next-line import/export
-export * from './browser.ts'
+export * from './browser.js'
 
 const seenHydrated = new Map<string, Spec>()
 /**

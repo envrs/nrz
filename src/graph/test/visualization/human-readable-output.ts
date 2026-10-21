@@ -4,9 +4,9 @@ import { Spec } from '@nrz/spec'
 import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import t from 'tap'
-import { Graph } from '../../src/graph.ts'
-import { humanReadableOutput } from '../../src/visualization/human-readable-output.ts'
-import { loadActualGraph } from '../fixtures/actual.ts'
+import { Graph } from '../../src/graph.js'
+import { humanReadableOutput } from '../../src/visualization/human-readable-output.js'
+import { loadActualGraph } from '../fixtures/actual.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

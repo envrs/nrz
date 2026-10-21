@@ -24,10 +24,10 @@ import {
   storeEntryNames,
   storeEntryTime,
   verifyStoreEntry,
-} from '../src/store-entry.ts'
-import { storeIndexPath } from '../src/store-index.ts'
-import { storeLayout, unpackToStoreSync } from '../src/unpack.ts'
-import { makeTar } from './fixtures/make-tar.ts'
+} from '../src/store-entry.js'
+import { storeIndexPath } from '../src/store-index.js'
+import { storeLayout, unpackToStoreSync } from '../src/unpack.js'
+import { makeTar } from './fixtures/make-tar.js'
 
 const pj = JSON.stringify({
   name: 'pkg',

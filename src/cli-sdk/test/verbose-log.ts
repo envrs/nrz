@@ -5,7 +5,7 @@ import {
   formatRequestEvent,
   isVerbose,
   startRequestLog,
-} from '../src/verbose-log.ts'
+} from '../src/verbose-log.js'
 
 // A visible style wrapper so we can assert coloring was applied.
 const style = (f: string, s: string) => `<${f}>${s}`

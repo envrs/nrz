@@ -14,9 +14,9 @@ import type {
 } from '@nrz/dss-breadcrumb'
 import type { SpecOptions } from '@nrz/spec'
 import type { NormalizedManifest } from '@nrz/types'
-import type { Edge } from './edge.ts'
-import type { Node } from './node.ts'
-import type { Dependency } from './dependencies.ts'
+import type { Edge } from './edge.js'
+import type { Node } from './node.js'
+import type { Dependency } from './dependencies.js'
 
 /**
  * Loaded modifiers configuration as described in the `nrz.json` file.

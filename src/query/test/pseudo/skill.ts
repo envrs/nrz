@@ -1,8 +1,8 @@
 import t from 'tap'
-import { Query } from '../../src/index.ts'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import { Query } from '../../src/index.js'
+import { getSimpleGraph } from '../fixtures/graph.js'
 import type { Test } from 'tap'
-import type { QueryOptions } from '../../src/index.ts'
+import type { QueryOptions } from '../../src/index.js'
 
 type Opts = Pick<QueryOptions, 'partSelectors'>
 

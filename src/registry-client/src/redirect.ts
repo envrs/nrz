@@ -1,9 +1,9 @@
 // given a RegistryClientOptions object, and a redirection response,
 
 import { error } from '@nrz/error-cause'
-import type { CacheEntry } from './cache-entry.ts'
-import { deleteHeader } from './delete-header.ts'
-import type { RegistryClientRequestOptions } from './index.ts'
+import type { CacheEntry } from './cache-entry.js'
+import { deleteHeader } from './delete-header.js'
+import type { RegistryClientRequestOptions } from './index.js'
 
 export type RedirectStatus = 301 | 302 | 303 | 307 | 308
 

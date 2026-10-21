@@ -5,15 +5,15 @@ import type { PackageJson } from '@nrz/package-json'
 import { Spec } from '@nrz/spec'
 import type { NormalizedManifest } from '@nrz/types'
 import { longDependencyTypes } from '@nrz/types'
-import { longDependencyTypeNames } from '../dependencies.ts'
+import { longDependencyTypeNames } from '../dependencies.js'
 import type {
   AddImportersDependenciesMap,
   Dependency,
   RemoveImportersDependenciesMap,
-} from '../dependencies.ts'
-import type { Graph } from '../graph.ts'
-import { resolveSaveType } from '../resolve-save-type.ts'
-import { calculateSaveValue } from './calculate-save-value.ts'
+} from '../dependencies.js'
+import type { Graph } from '../graph.js'
+import { resolveSaveType } from '../resolve-save-type.js'
+import { calculateSaveValue } from './calculate-save-value.js'
 
 export type UpdatePackageJsonOptions = {
   /**

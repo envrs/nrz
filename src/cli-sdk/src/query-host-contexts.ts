@@ -1,14 +1,14 @@
 import { homedir } from 'node:os'
 import { parse, posix } from 'node:path'
-import { readProjectFolders } from './read-project-folders.ts'
-import { reloadConfig } from './reload-config.ts'
+import { readProjectFolders } from './read-project-folders.js'
+import { reloadConfig } from './reload-config.js'
 import { actual, createVirtualRoot } from '@nrz/graph'
 import { SecurityArchive } from '@nrz/security-archive'
 import { error } from '@nrz/error-cause'
-import { isNrzInstalled } from './is-nrz-installed.ts'
+import { isNrzInstalled } from './is-nrz-installed.js'
 import type { PathBase, PathScurry } from 'path-scurry'
 import type { EdgeLike, NodeLike } from '@nrz/types'
-import type { LoadedConfig } from './config/index.ts'
+import type { LoadedConfig } from './config/index.js'
 
 export type HostContextsMapResult = {
   initialEdges: EdgeLike[]

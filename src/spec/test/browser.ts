@@ -2,14 +2,14 @@ import { Range } from '@nrz/semver'
 import type { InspectOptions } from 'node:util'
 import { inspect } from 'node:util'
 import t from 'tap'
-import type { Scope, SpecOptions } from '../src/browser.ts'
+import type { Scope, SpecOptions } from '../src/browser.js'
 import {
   kCustomInspect,
   getOptions,
   Spec,
   isSpec,
   currentDefaultRegistryName,
-} from '../src/browser.ts'
+} from '../src/browser.js'
 
 // there is no default registry any more; most of these cases predate
 // that change, so keep exercising them against the npm registry. The

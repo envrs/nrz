@@ -1,4 +1,4 @@
-import type { ParsedConfig } from './config/index.ts'
+import type { ParsedConfig } from './config/index.js'
 
 type NrzJsonModule = {
   unload: (which?: 'user' | 'project') => void

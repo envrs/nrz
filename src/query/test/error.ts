@@ -1,7 +1,7 @@
 import t from 'tap'
 import { parse } from '@nrz/dss-parser'
 import type { PostcssNode } from '@nrz/dss-parser'
-import { didYouMean, queryError, selectorText } from '../src/error.ts'
+import { didYouMean, queryError, selectorText } from '../src/error.js'
 
 const first = (query: string): PostcssNode => {
   const node = parse(query, { loose: true }).nodes[0]?.nodes[0]

@@ -1,6 +1,6 @@
 import type { HasSkills } from '@nrz/query'
-import { isNode } from '../node.ts'
-import type * as Skills from './index.ts'
+import { isNode } from '../node.js'
+import type * as Skills from './index.js'
 
 const load = () => import('./index.ts')
 

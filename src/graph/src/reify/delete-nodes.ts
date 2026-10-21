@@ -1,7 +1,7 @@
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import type { PathScurry } from 'path-scurry'
-import type { Diff } from '../diff.ts'
-import { deleteEdge } from './delete-edge.ts'
+import type { Diff } from '../diff.js'
+import { deleteEdge } from './delete-edge.js'
 
 export const deleteNodes = (
   diff: Diff,

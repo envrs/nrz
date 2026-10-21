@@ -1,10 +1,10 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { shell } from '../../src/pseudo/shell.ts'
-import { parse } from '../../src/parser.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { shell } from '../../src/pseudo/shell.js'
+import { parse } from '../../src/parser.js'
 
 t.test('selects packages with a shellAccess alert', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

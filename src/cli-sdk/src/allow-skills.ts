@@ -1,6 +1,6 @@
 import type { UnmatchedPattern, UnscannedSkills } from '@nrz/graph'
 import type { WhichConfig } from '@nrz/nrz-json'
-import type { LoadedConfig } from './config/index.ts'
+import type { LoadedConfig } from './config/index.js'
 
 /** An `allow-skills` query stored in a config file. */
 export type StoredAllowSkills = { query: string; which: WhichConfig }

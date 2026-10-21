@@ -1,5 +1,5 @@
 import t from 'tap'
-import { addHeader } from '../src/add-header.ts'
+import { addHeader } from '../src/add-header.js'
 
 const k = 'key'
 const v = 'value'

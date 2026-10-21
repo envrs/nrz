@@ -1,9 +1,9 @@
 import t from 'tap'
-import { loadNodes } from '../../src/lockfile/load-nodes.ts'
-import { Graph } from '../../src/graph.ts'
-import { lockfileData } from '../../src/lockfile/save.ts'
+import { loadNodes } from '../../src/lockfile/load-nodes.js'
+import { Graph } from '../../src/graph.js'
+import { lockfileData } from '../../src/lockfile/save.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
-import type { LockfileData } from '../../src/index.ts'
+import type { LockfileData } from '../../src/index.js'
 
 t.cleanSnapshot = s =>
   s.replace(

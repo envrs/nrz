@@ -1,7 +1,7 @@
 import { asPseudoNode } from '@nrz/dss-parser'
-import { queryError } from '../error.ts'
-import { removeQuotes } from './helpers.ts'
-import type { ParserState } from '../types.ts'
+import { queryError } from '../error.js'
+import { removeQuotes } from './helpers.js'
+import type { ParserState } from '../types.js'
 
 /**
  * `:skill(<pattern>, ...)`: picks agent skills of the packages its

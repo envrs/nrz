@@ -1,10 +1,10 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { unstable } from '../../src/pseudo/unstable.ts'
-import { parse } from '../../src/parser.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { unstable } from '../../src/pseudo/unstable.js'
+import { parse } from '../../src/parser.js'
 
 t.test('selects packages with an unstable alert', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

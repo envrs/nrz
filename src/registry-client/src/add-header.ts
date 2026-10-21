@@ -1,5 +1,5 @@
-import { deleteHeader } from './delete-header.ts'
-import { isIterable } from './is-iterable.ts'
+import { deleteHeader } from './delete-header.js'
+import { isIterable } from './is-iterable.js'
 
 // this does some rude things with types, but not much way around it,
 // since the opts.headers type is so loosey goosey to begin with.

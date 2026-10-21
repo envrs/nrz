@@ -1,5 +1,5 @@
 import t from 'tap'
-import type { RegistryCandidate } from '../src/select-registry.ts'
+import type { RegistryCandidate } from '../src/select-registry.js'
 
 const candidates: RegistryCandidate[] = [
   { alias: 'npm', url: 'https://n/' },

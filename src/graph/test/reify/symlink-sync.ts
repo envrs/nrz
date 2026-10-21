@@ -1,7 +1,7 @@
 import { readlinkSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { symlinkSyncMkdirp } from '../../src/reify/symlink-sync.ts'
+import { symlinkSyncMkdirp } from '../../src/reify/symlink-sync.js'
 
 const type = process.platform === 'win32' ? 'junction' : 'dir'
 

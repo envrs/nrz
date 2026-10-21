@@ -3,17 +3,17 @@ import { open, readFile } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import type { Dispatcher } from 'undici'
 import { userAgent } from '@nrz/user-agent'
-import { addHeader } from './add-header.ts'
-import { getTokenByURL } from './auth.ts'
-import { CacheEntry } from './cache-entry.ts'
-import { handleCacheHitResponse } from './handle-304-response.ts'
+import { addHeader } from './add-header.js'
+import { getTokenByURL } from './auth.js'
+import { CacheEntry } from './cache-entry.js'
+import { handleCacheHitResponse } from './handle-304-response.js'
 import type {
   RegistryClient,
   RegistryClientRequestOptions,
-} from './index.ts'
-import { cacheKey } from './index.ts'
-import { collectHeaders, readBody } from './response.ts'
-import { setCacheHeaders } from './set-cache-headers.ts'
+} from './index.js'
+import { cacheKey } from './index.js'
+import { collectHeaders, readBody } from './response.js'
+import { setCacheHeaders } from './set-cache-headers.js'
 
 const patchDateFallback = async (
   rc: RegistryClient,

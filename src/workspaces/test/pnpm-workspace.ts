@@ -2,7 +2,7 @@ import t from 'tap'
 import {
   parsePnpmWorkspacePackages,
   readPnpmWorkspacePackages,
-} from '../src/pnpm-workspace.ts'
+} from '../src/pnpm-workspace.js'
 
 t.test('parsePnpmWorkspacePackages', async t => {
   const cases: [string, string, string[] | undefined][] = [

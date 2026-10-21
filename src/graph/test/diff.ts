@@ -2,14 +2,14 @@ import { joinDepIDTuple } from '@nrz/dep-id'
 import type { DepID, DepIDTuple } from '@nrz/dep-id'
 import t from 'tap'
 import { inspect } from 'node:util'
-import { Diff } from '../src/diff.ts'
+import { Diff } from '../src/diff.js'
 import type {
   Graph,
   LockfileEdgeKey,
   LockfileEdges,
   LockfileNode,
-} from '../src/index.ts'
-import { loadObject } from '../src/lockfile/load.ts'
+} from '../src/index.js'
+import { loadObject } from '../src/lockfile/load.js'
 
 const edgeKey = (from: DepIDTuple, to: string): LockfileEdgeKey =>
   (joinDepIDTuple(from) + ' ' + to) as LockfileEdgeKey

@@ -1,5 +1,5 @@
 import type { Dispatcher } from 'undici'
-import type { CacheEntry } from './cache-entry.ts'
+import type { CacheEntry } from './cache-entry.js'
 
 export const handleCacheHitResponse = (
   resp: Dispatcher.ResponseData,

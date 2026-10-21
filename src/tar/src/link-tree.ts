@@ -12,14 +12,14 @@ import {
 import { dirname, sep } from 'node:path'
 import { debuglog } from 'node:util'
 import { rimrafSync } from 'rimraf'
-import { cloneDir } from './clonefile.ts'
+import { cloneDir } from './clonefile.js'
 import {
   markStoreEntryCopied,
   removeStoreEntry,
-} from './store-entry.ts'
-import { readStoreIndex } from './store-index.ts'
-import type { StoreIndex, StoreIndexFile } from './store-index.ts'
-import { tmpName } from './unpack.ts'
+} from './store-entry.js'
+import { readStoreIndex } from './store-index.js'
+import type { StoreIndex, StoreIndexFile } from './store-index.js'
+import { tmpName } from './unpack.js'
 
 const debug = debuglog('nrz')
 

@@ -1,11 +1,11 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { root } from '../../src/pseudo/root.ts'
+import type { ParserState } from '../../src/types.js'
+import { root } from '../../src/pseudo/root.js'
 import {
   getSimpleGraph,
   getSingleWorkspaceGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects the root node of the graph', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

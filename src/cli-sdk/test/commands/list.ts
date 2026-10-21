@@ -9,7 +9,7 @@ import { Monorepo } from '@nrz/workspaces'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import type { SpecOptions } from '@nrz/spec'
 import type { Test } from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 t.cleanSnapshot = s =>
   s.replace(

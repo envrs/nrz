@@ -4,11 +4,11 @@ import { pickManifest } from '@nrz/pick-manifest'
 import { Query } from '@nrz/query'
 import { SecurityArchive } from '@nrz/security-archive'
 import { gt, parse, rsort, satisfies, stable } from '@nrz/semver'
-import { commandUsage } from '../config/usage.ts'
-import { assertNrzInstalled } from '../is-nrz-installed.ts'
-import { createGetAuthHeader } from '../query-auth.ts'
-import { createHostContextsMap } from '../query-host-contexts.ts'
-import { createStubNode } from '../stub-node.ts'
+import { commandUsage } from '../config/usage.js'
+import { assertNrzInstalled } from '../is-nrz-installed.js'
+import { createGetAuthHeader } from '../query-auth.js'
+import { createHostContextsMap } from '../query-host-contexts.js'
+import { createStubNode } from '../stub-node.js'
 import type { Graph, Node } from '@nrz/graph'
 import type { PackageAlert } from '@nrz/security-archive'
 import type {
@@ -17,9 +17,9 @@ import type {
   NodeLike,
   Packument,
 } from '@nrz/types'
-import type { LoadedConfig } from '../config/index.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import type { LoadedConfig } from '../config/index.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 export const needsRegistry = true
 

@@ -3,10 +3,10 @@ import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
 import { SecurityArchive } from '@nrz/security-archive/browser'
 import type { PackageReportData } from '@nrz/security-archive'
-import { scanned } from '../../src/pseudo/scanned.ts'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { parse } from '../../src/parser.ts'
+import { scanned } from '../../src/pseudo/scanned.js'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { parse } from '../../src/parser.js'
 
 t.test('scanned selector', async t => {
   const getState = () => {

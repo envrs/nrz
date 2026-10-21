@@ -5,10 +5,10 @@ import { Version } from '@nrz/semver'
 import { mkdir } from 'node:fs/promises'
 import { dirname, relative } from 'node:path'
 import type { PathBase, PathScurry } from 'path-scurry'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
-import type { ReifyOptions } from './index.ts'
-import { symlinkSyncMkdirp } from './symlink-sync.ts'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
+import type { ReifyOptions } from './index.js'
+import { symlinkSyncMkdirp } from './symlink-sync.js'
 
 type InternalHoistOptions = Pick<
   ReifyOptions,

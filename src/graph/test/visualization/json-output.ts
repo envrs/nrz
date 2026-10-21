@@ -2,9 +2,9 @@ import t from 'tap'
 import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import { Monorepo } from '@nrz/workspaces'
-import { Graph } from '../../src/graph.ts'
-import { jsonOutput } from '../../src/visualization/json-output.ts'
-import { loadActualGraph } from '../fixtures/actual.ts'
+import { Graph } from '../../src/graph.js'
+import { jsonOutput } from '../../src/visualization/json-output.js'
+import { loadActualGraph } from '../fixtures/actual.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 
 t.formatSnapshot = s => JSON.stringify(s, null, 2)

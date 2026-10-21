@@ -1,5 +1,5 @@
 import t from 'tap'
-import { setRawHeader } from '../src/set-raw-header.ts'
+import { setRawHeader } from '../src/set-raw-header.js'
 
 const h: Uint8Array[] = []
 

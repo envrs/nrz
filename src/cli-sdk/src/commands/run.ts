@@ -1,15 +1,15 @@
 import { run, runFG } from '@nrz/run'
-import type { LoadedConfig } from '../config/index.ts'
-import { commandUsage } from '../config/usage.ts'
+import type { LoadedConfig } from '../config/index.js'
+import { commandUsage } from '../config/usage.js'
 import type {
   ExecResult,
   MultiScriptSet,
   ScriptSet,
-} from '../exec-command.ts'
-import { ExecCommand } from '../exec-command.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
+} from '../exec-command.js'
+import { ExecCommand } from '../exec-command.js'
+import type { CommandFn, CommandUsage } from '../index.js'
 
-export { views } from '../exec-command.ts'
+export { views } from '../exec-command.js'
 
 export const usage: CommandUsage = () =>
   commandUsage({

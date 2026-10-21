@@ -5,8 +5,8 @@ import {
   readStoreIndex,
   storeIndexManifest,
   storeIndexPath,
-} from '../src/store-index.ts'
-import type { StoreIndex } from '../src/store-index.ts'
+} from '../src/store-index.js'
+import type { StoreIndex } from '../src/store-index.js'
 
 const valid: StoreIndex = {
   v: 1,

@@ -7,7 +7,7 @@ import {
   statSync,
 } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { norm } from './mounts.ts'
+import { norm } from './mounts.js'
 
 /** Always a target when detecting: read by most agents. */
 export const AGENTS_SKILLS = '.agents/skills'

@@ -1,8 +1,8 @@
 import type EventEmitter from 'node:events'
 import { setPriority } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { RegistryClient } from './index.ts'
-import { revalidateEntry } from './revalidate-entry.ts'
+import { RegistryClient } from './index.js'
+import { revalidateEntry } from './revalidate-entry.js'
 
 export const __CODE_SPLIT_SCRIPT_NAME = import.meta.filename
 

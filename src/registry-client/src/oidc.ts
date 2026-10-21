@@ -1,6 +1,6 @@
 import { request } from 'undici'
-import type { Token } from './auth.ts'
-import { setRuntimeToken } from './auth.ts'
+import type { Token } from './auth.js'
+import { setRuntimeToken } from './auth.js'
 
 export type OidcOptions = {
   /** The package name being published, e.g. `@scope/name` */

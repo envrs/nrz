@@ -1,9 +1,9 @@
 import { error } from '@nrz/error-cause'
 import { isErrorWithCause, isObject } from '@nrz/types'
 import { defaultRegistries, defaultRegistryName } from '@nrz/spec'
-import { selectRegistry } from './select-registry.ts'
-import type { RegistryCandidate } from './select-registry.ts'
-import type { LoadedConfig } from './config/index.ts'
+import { selectRegistry } from './select-registry.js'
+import type { RegistryCandidate } from './select-registry.js'
+import type { LoadedConfig } from './config/index.js'
 
 /**
  * There is no default registry. This is the single message used

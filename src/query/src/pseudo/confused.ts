@@ -3,7 +3,7 @@ import {
   assertSecurityArchive,
   removeDanglingEdges,
   removeNode,
-} from './helpers.ts'
+} from './helpers.js'
 
 /**
  * Filters out any node that does not have a **manifestConfusion** report alert.

@@ -1,6 +1,6 @@
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-import { calculateSaveValue } from '../../src/reify/calculate-save-value.ts'
+import { calculateSaveValue } from '../../src/reify/calculate-save-value.js'
 
 // the `npm` alias is no longer built in; configure it so `npm:` specs
 // resolve in these cases.

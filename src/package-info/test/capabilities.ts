@@ -9,8 +9,8 @@ import {
   getCapabilities,
   peekCapabilities,
   resetCapabilities,
-} from '../src/index.ts'
-import { drainer } from './fixtures/drainer.ts'
+} from '../src/index.js'
+import { drainer } from './fixtures/drainer.js'
 
 // What the server answers next, and what it was asked along the way.
 let body: string | undefined = JSON.stringify({

@@ -5,10 +5,10 @@ import { join, resolve } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
 import { pathToFileURL } from 'node:url'
-import { clone } from '../src/clone.ts'
-import type { GitOptions } from '../src/index.ts'
-import { revs } from '../src/revs.ts'
-import { spawn as spawnGit } from '../src/spawn.ts'
+import { clone } from '../src/clone.js'
+import type { GitOptions } from '../src/index.js'
+import { revs } from '../src/revs.js'
+import { spawn as spawnGit } from '../src/spawn.js'
 
 // keep the fixture, because Windows fails when it tries to delete it,
 // due to all the git operations happening inside.

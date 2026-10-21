@@ -36,9 +36,9 @@ import {
   unzipSync as unzipSyncCB,
 } from 'node:zlib'
 import type { TarballFormat } from '@nrz/types'
-import { findTarDir } from './find-tar-dir.ts'
-import { storeIndexManifest } from './store-index.ts'
-import type { StoreIndex, StoreIndexFile } from './store-index.ts'
+import { findTarDir } from './find-tar-dir.js'
+import { storeIndexManifest } from './store-index.js'
+import type { StoreIndex, StoreIndexFile } from './store-index.js'
 
 export type { TarballFormat }
 

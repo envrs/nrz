@@ -1,6 +1,6 @@
 import { error } from '@nrz/error-cause'
 import t from 'tap'
-import { isPathSecurityError } from '../src/path-security-error.ts'
+import { isPathSecurityError } from '../src/path-security-error.js'
 
 t.test('finds the code anywhere in the cause chain', t => {
   t.equal(

@@ -1,15 +1,15 @@
-import { getImporterSpecs } from './get-importer-specs.ts'
+import { getImporterSpecs } from './get-importer-specs.js'
 import {
   canonicalizePeerIds,
   hasProvisionalPeerIds,
-} from './canonicalize-peer-ids.ts'
-import { movePeerStoreDirs } from './move-peer-store-dirs.ts'
-import { refreshIdealGraph } from './refresh-ideal-graph.ts'
-import { resolveSaveType } from '../resolve-save-type.ts'
+} from './canonicalize-peer-ids.js'
+import { movePeerStoreDirs } from './move-peer-store-dirs.js'
+import { refreshIdealGraph } from './refresh-ideal-graph.js'
+import { resolveSaveType } from '../resolve-save-type.js'
 import type { PackageJson } from '@nrz/package-json'
-import type { RefreshIdealGraphOptions } from './refresh-ideal-graph.ts'
-import type { ExplicitAddMap } from './types.ts'
-import type { Graph } from '../graph.ts'
+import type { RefreshIdealGraphOptions } from './refresh-ideal-graph.js'
+import type { ExplicitAddMap } from './types.js'
+import type { Graph } from '../graph.js'
 
 export type BuildIdealFromStartingGraphOptions =
   RefreshIdealGraphOptions & {

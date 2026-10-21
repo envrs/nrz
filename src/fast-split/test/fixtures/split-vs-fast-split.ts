@@ -1,7 +1,7 @@
 #!/usr/bin/env -S tap -Rtap --disable-coverage --allow-empty-coverage
 
 import t from 'tap'
-import { fastSplit } from '../../src/index.ts'
+import { fastSplit } from '../../src/index.js'
 
 // built at runtime: V8 caches split() of literals
 const str = ['1', '2', '3-asdf+foo'].join('.')

@@ -1,12 +1,12 @@
 import { error } from '@nrz/error-cause'
 import { satisfies } from '@nrz/satisfies'
-import type { Edge } from '../edge.ts'
-import type { Dependency } from '../dependencies.ts'
+import type { Edge } from '../edge.js'
+import type { Dependency } from '../dependencies.js'
 import type {
   BuildIdealAddOptions,
   BuildIdealFromGraphOptions,
-} from './types.ts'
-import type { GraphModifier } from '../modifiers.ts'
+} from './types.js'
+import type { GraphModifier } from '../modifiers.js'
 
 export type RemoveSatisfiedSpecsOptions = BuildIdealAddOptions &
   BuildIdealFromGraphOptions & {

@@ -12,8 +12,8 @@ import type {
 import type { SpecOptions } from '@nrz/spec'
 import type { DependencySaveType } from '@nrz/types'
 import type { Monorepo } from '@nrz/workspaces'
-import type { LoadedConfig } from './config/index.ts'
-import { asUnknownSpecPrefix } from './require-registry.ts'
+import type { LoadedConfig } from './config/index.js'
+import { asUnknownSpecPrefix } from './require-registry.js'
 
 export type ParsedAddArgs = {
   add: AddImportersDependenciesMap

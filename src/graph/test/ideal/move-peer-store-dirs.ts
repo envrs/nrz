@@ -12,9 +12,9 @@ import {
 import { basename, join } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { Graph } from '../../src/graph.ts'
-import { movePeerStoreDirs } from '../../src/ideal/move-peer-store-dirs.ts'
-import type { Node } from '../../src/node.ts'
+import { Graph } from '../../src/graph.js'
+import { movePeerStoreDirs } from '../../src/ideal/move-peer-store-dirs.js'
+import type { Node } from '../../src/node.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

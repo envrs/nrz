@@ -1,4 +1,4 @@
-import type { ParserState } from '../types.ts'
+import type { ParserState } from '../types.js'
 
 /**
  * :root Pseudo-Element will return the project root node for the graph.

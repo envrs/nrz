@@ -10,10 +10,10 @@ import {
   resolveWSConfig,
   splitNegatedPatterns,
 } from '@nrz/workspaces'
-import { commandUsage } from '../config/usage.ts'
+import { commandUsage } from '../config/usage.js'
 import type { InitFileResults } from '@nrz/init'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 export const usage: CommandUsage = () =>
   commandUsage({

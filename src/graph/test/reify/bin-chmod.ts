@@ -2,7 +2,7 @@ import * as FSP from 'node:fs/promises'
 import { chmodSync, linkSync, statSync } from 'node:fs'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Node } from '../../src/node.ts'
+import type { Node } from '../../src/node.js'
 
 const isWin = process.platform === 'win32'
 

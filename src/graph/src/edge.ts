@@ -3,7 +3,7 @@ import type { Spec } from '@nrz/spec'
 import { inspect } from 'node:util'
 import type { InspectOptions } from 'node:util'
 import type { DependencyTypeShort, EdgeLike } from '@nrz/types'
-import type { Node } from './node.ts'
+import type { Node } from './node.js'
 
 const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
 

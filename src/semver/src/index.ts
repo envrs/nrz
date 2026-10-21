@@ -1,12 +1,12 @@
-import { Range } from './range.ts'
-import { Version } from './version.ts'
-import type { Comparator, OVTuple } from './comparator.ts'
-import type { IncrementType } from './version.ts'
+import { Range } from './range.js'
+import { Version } from './version.js'
+import type { Comparator, OVTuple } from './comparator.js'
+import type { IncrementType } from './version.js'
 import { syntaxError } from '@nrz/error-cause'
 
-export * from './comparator.ts'
-export * from './range.ts'
-export * from './version.ts'
+export * from './comparator.js'
+export * from './range.js'
+export * from './version.js'
 
 /** Return the parsed version string, or `undefined` if invalid */
 export const parse = (version: Version | string) => {

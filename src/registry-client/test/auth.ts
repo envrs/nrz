@@ -3,7 +3,7 @@ import {
   isToken,
   normalizeRegistryKey,
   registryBase,
-} from '../src/auth.ts'
+} from '../src/auth.js'
 
 const checkLog = (kc: any) => (kc as Keychain).log
 

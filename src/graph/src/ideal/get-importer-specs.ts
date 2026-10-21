@@ -4,29 +4,29 @@ import {
   shorten,
   asDependency,
   asDependencySpecError,
-} from '../dependencies.ts'
+} from '../dependencies.js'
 import type {
   AddImportersDependenciesMap,
   Dependency,
   RemoveImportersDependenciesMap,
-} from '../dependencies.ts'
-import { removeSatisfiedSpecs } from './remove-satisfied-specs.ts'
+} from '../dependencies.js'
+import { removeSatisfiedSpecs } from './remove-satisfied-specs.js'
 import type {
   BuildIdealAddOptions,
   BuildIdealFromGraphOptions,
   BuildIdealRemoveOptions,
   TransientAddMap,
   TransientRemoveMap,
-} from './types.ts'
-import type { Edge } from '../edge.ts'
-import type { Node } from '../node.ts'
-import type { Graph } from '../graph.ts'
+} from './types.js'
+import type { Edge } from '../edge.js'
+import type { Node } from '../node.js'
+import type { Graph } from '../graph.js'
 import type { DepID } from '@nrz/dep-id'
 import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import type { PackageJson } from '@nrz/package-json'
 import type { PathScurry } from 'path-scurry'
-import type { GraphModifier } from '../modifiers.ts'
+import type { GraphModifier } from '../modifiers.js'
 
 export type GetImporterSpecsOptions = BuildIdealAddOptions &
   BuildIdealFromGraphOptions &

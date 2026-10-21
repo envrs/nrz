@@ -1,6 +1,6 @@
 import { syntaxError, typeError } from '@nrz/error-cause'
 import { fastSplit } from '@nrz/fast-split'
-import type { Range } from './range.ts'
+import type { Range } from './range.js'
 
 const maybeNumber = (s: string): number | string => {
   if (!/^[0-9]+$/.test(s)) return s

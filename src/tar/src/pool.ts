@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises'
-import { linkFromStore } from './link-tree.ts'
+import { linkFromStore } from './link-tree.js'
 import type {
   LinkFromStoreOptions,
   StoreLinkResult,
-} from './link-tree.ts'
-import type { StoreIndex } from './store-index.ts'
+} from './link-tree.js'
+import type { StoreIndex } from './store-index.js'
 import type { TarballFormat } from '@nrz/types'
 import {
   unpack,
@@ -13,7 +13,7 @@ import {
   unpackParallel,
   unpackSync,
   unpackToStoreSync,
-} from './unpack.ts'
+} from './unpack.js'
 
 /**
  * Which decompress/write pair {@link Pool} uses, from `NRZ_TAR_SYNC`.

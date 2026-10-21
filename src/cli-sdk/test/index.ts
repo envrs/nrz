@@ -2,8 +2,8 @@ import { unload } from '@nrz/nrz-json'
 import { join } from 'node:path'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { LoadedConfig } from '../src/config/index.ts'
-import { setupEnv } from './fixtures/util.ts'
+import type { LoadedConfig } from '../src/config/index.js'
+import { setupEnv } from './fixtures/util.js'
 
 setupEnv(t)
 

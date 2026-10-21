@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline/promises'
 import { asError } from '@nrz/types'
-import { styleTextStdout } from './output.ts'
+import { styleTextStdout } from './output.js'
 
 /** Streams to prompt on; default stdin and stdout. */
 export type PromptStreams = {

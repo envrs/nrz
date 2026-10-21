@@ -9,15 +9,15 @@ import {
   removeUnlinkedNodes,
   clear,
   assertSecurityArchive,
-} from '../../src/pseudo/helpers.ts'
+} from '../../src/pseudo/helpers.js'
 import {
   getMissingNodeGraph,
   getSimpleGraph,
   getMultiWorkspaceGraph,
-} from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
 import { joinDepIDTuple } from '@nrz/dep-id/browser'
-import { parse } from '../../src/parser.ts'
+import { parse } from '../../src/parser.js'
 
 t.test('removeDanglingEdges', async t => {
   await t.test('graph with missing nodes', async t => {

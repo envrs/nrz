@@ -1,6 +1,6 @@
 import { whichSync } from '@nrz/which'
 import t from 'tap'
-import { which as whichGit } from '../src/which.ts'
+import { which as whichGit } from '../src/which.js'
 
 const mungePath = process.argv[2] === 'mungePath'
 

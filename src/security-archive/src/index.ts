@@ -8,9 +8,9 @@ import { asDepID, baseDepID } from '@nrz/dep-id'
 import { error } from '@nrz/error-cause'
 import { userAgent } from '@nrz/user-agent'
 import { XDG } from '@nrz/xdg'
-import { asPackageReportData, getItemScore } from './types.ts'
-import { __CODE_SPLIT_SCRIPT_NAME } from './update-expired.ts'
-import type { UpdateExpiredPayload } from './update-expired.ts'
+import { asPackageReportData, getItemScore } from './types.js'
+import { __CODE_SPLIT_SCRIPT_NAME } from './update-expired.js'
+import type { UpdateExpiredPayload } from './update-expired.js'
 import type { DepID } from '@nrz/dep-id'
 import type { NodeLike } from '@nrz/types'
 import type {
@@ -18,11 +18,11 @@ import type {
   PackageReportData,
   SecurityArchiveLike,
   SecurityArchiveRefreshOptions,
-} from './types.ts'
-import { usesNpmRegistry } from './browser.ts'
+} from './types.js'
+import { usesNpmRegistry } from './browser.js'
 
-export * from './types.ts'
-export { npmRegistryURL, usesNpmRegistry } from './browser.ts'
+export * from './types.js'
+export { npmRegistryURL, usesNpmRegistry } from './browser.js'
 
 const SOCKET_API_V0_URL = 'https://api.socket.dev/v0/purl?alerts=true'
 const SOCKET_PUBLIC_API_TOKEN =

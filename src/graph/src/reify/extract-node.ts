@@ -8,10 +8,10 @@ import type { SpecOptions } from '@nrz/spec'
 import { asManifest, normalizeManifest } from '@nrz/types'
 import { lstatSync } from 'node:fs'
 import type { PathScurry } from 'path-scurry'
-import type { Diff } from '../diff.ts'
-import type { Node } from '../node.ts'
-import { isUnsupported, optionalFail } from './optional-fail.ts'
-import { removeOptionalSubgraph } from '../remove-optional-subgraph.ts'
+import type { Diff } from '../diff.js'
+import type { Node } from '../node.js'
+import { isUnsupported, optionalFail } from './optional-fail.js'
+import { removeOptionalSubgraph } from '../remove-optional-subgraph.js'
 
 /**
  * Result of the extraction operation.

@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { InspectOptions } from 'node:util'
 import { formatWithOptions } from 'node:util'
-import type { CommandUsage } from './index.ts'
+import type { CommandUsage } from './index.js'
 
 export const formatOptions = {
   depth: Infinity,

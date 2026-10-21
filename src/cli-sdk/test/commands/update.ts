@@ -1,8 +1,8 @@
 import { error } from '@nrz/error-cause'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { InstallResult } from '../../src/commands/install.ts'
-import { isLazyView, loadLazyView } from '../../src/view.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { InstallResult } from '../../src/commands/install.js'
+import { isLazyView, loadLazyView } from '../../src/view.js'
 
 const options = {}
 let log = ''

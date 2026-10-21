@@ -14,22 +14,22 @@ import {
   getRawDependencies,
   getDependencies,
   asDependencySpecError,
-} from '../dependencies.ts'
-import { Graph } from '../graph.ts'
-import { loadHidden } from '../lockfile/load.ts'
-import { saveHidden } from '../lockfile/save.ts'
+} from '../dependencies.js'
+import { Graph } from '../graph.js'
+import { loadHidden } from '../lockfile/load.js'
+import { saveHidden } from '../lockfile/save.js'
 import type { DepID } from '@nrz/dep-id'
 import type { PackageJson } from '@nrz/package-json'
 import type { SpecOptions } from '@nrz/spec'
 import type { NormalizedManifest } from '@nrz/types'
-import type { LockfileData, SpecCache } from '../lockfile/types.ts'
+import type { LockfileData, SpecCache } from '../lockfile/types.js'
 import type { Monorepo } from '@nrz/workspaces'
 import type { Path, PathScurry } from 'path-scurry'
-import type { Node } from '../node.ts'
+import type { Node } from '../node.js'
 import type {
   GraphModifier,
   ModifierActiveEntry,
-} from '../modifiers.ts'
+} from '../modifiers.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 

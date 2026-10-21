@@ -1,6 +1,6 @@
 import type { DepID } from '@nrz/dep-id'
-import { Edge } from '../edge.ts'
-import { Node } from '../node.ts'
+import { Edge } from '../edge.js'
+import { Node } from '../node.js'
 import type { EdgeLike, NodeLike } from '@nrz/types'
 
 /** A leaf drawn under a graph node: node label, optional edge label. */

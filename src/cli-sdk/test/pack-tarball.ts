@@ -1,10 +1,10 @@
 import t from 'tap'
 import { resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { packTarball } from '../src/pack-tarball.ts'
+import { packTarball } from '../src/pack-tarball.js'
 import { PackageJson } from '@nrz/package-json'
 import { PathScurry } from 'path-scurry'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { LoadedConfig } from '../src/config/index.js'
 
 // Helper to create a mock LoadedConfig for tests
 const createMockConfig = (

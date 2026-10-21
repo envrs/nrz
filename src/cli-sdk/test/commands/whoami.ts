@@ -1,6 +1,6 @@
 import { assertOk } from '@nrz/registry-client'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 // t.mockImport replaces the module wholesale rather than merging, so
 // every name the command imports has to be present here.

@@ -33,9 +33,9 @@ import {
   integrityHex,
   tarballFormat,
 } from '@nrz/types'
-import { fetchResolve } from './resolve-batch.ts'
-import type { ResolveRequest } from './resolve-batch.ts'
-export type { ResolveRequest } from './resolve-batch.ts'
+import { fetchResolve } from './resolve-batch.js'
+import type { ResolveRequest } from './resolve-batch.js'
+export type { ResolveRequest } from './resolve-batch.js'
 import { Monorepo } from '@nrz/workspaces'
 import { XDG } from '@nrz/xdg'
 import { createHash, randomBytes } from 'node:crypto'
@@ -57,16 +57,16 @@ import {
 import { setTimeout } from 'node:timers/promises'
 import { debuglog } from 'node:util'
 import { create as tarC } from 'tar'
-import type { Capabilities } from './capabilities.ts'
-import { getCapabilities, peekCapabilities } from './capabilities.ts'
-import { rename } from './rename.ts'
+import type { Capabilities } from './capabilities.js'
+import { getCapabilities, peekCapabilities } from './capabilities.js'
+import { rename } from './rename.js'
 
-export type { Capabilities } from './capabilities.ts'
+export type { Capabilities } from './capabilities.js'
 export {
   getCapabilities,
   peekCapabilities,
   resetCapabilities,
-} from './capabilities.ts'
+} from './capabilities.js'
 
 const debug = debuglog('nrz')
 

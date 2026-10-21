@@ -1,12 +1,12 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { built } from '../../src/pseudo/built.ts'
+import type { ParserState } from '../../src/types.js'
+import { built } from '../../src/pseudo/built.js'
 import {
   getSimpleGraph,
   getSingleWorkspaceGraph,
   getCycleGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects packages with built buildState', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

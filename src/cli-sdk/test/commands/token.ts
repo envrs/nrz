@@ -1,7 +1,7 @@
 import type { Token } from '@nrz/registry-client'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { TokenInfo } from '../../src/commands/token.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { TokenInfo } from '../../src/commands/token.js'
 
 const mockRegistryClient = {
   normalizeRegistryKey(url: string) {

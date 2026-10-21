@@ -5,10 +5,10 @@ import type { AddressInfo } from 'node:net'
 import { gzipSync } from 'node:zlib'
 import type { Test } from 'tap'
 import t from 'tap'
-import { CacheEntry } from '../src/cache-entry.ts'
-import { cacheKey, RegistryClient } from '../src/index.ts'
-import { revalidateEntry } from '../src/revalidate-entry.ts'
-import { toRawHeaders } from './fixtures/to-raw-headers.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import { cacheKey, RegistryClient } from '../src/index.js'
+import { revalidateEntry } from '../src/revalidate-entry.js'
+import { toRawHeaders } from './fixtures/to-raw-headers.js'
 
 t.equal(cacheKey('GET', 'http://x.com/a'), 'http://x.com/a')
 t.equal(cacheKey('HEAD', 'http://x.com/a'), 'HEAD http://x.com/a')

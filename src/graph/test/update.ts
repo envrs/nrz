@@ -14,10 +14,10 @@ import {
 } from 'node:fs'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
-import { objectLikeOutput } from '../src/visualization/object-like-output.ts'
-import { mockPackageInfo as mockPackageInfoBase } from './fixtures/reify.ts'
+import { objectLikeOutput } from '../src/visualization/object-like-output.js'
+import { mockPackageInfo as mockPackageInfoBase } from './fixtures/reify.js'
 import type { PackageInfoClient } from '@nrz/package-info'
-import type { UpdateOptions } from '../src/update.ts'
+import type { UpdateOptions } from '../src/update.js'
 
 const createMockPackageInfo = (
   overrides: Partial<typeof mockPackageInfoBase> = {},

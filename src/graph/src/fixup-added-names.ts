@@ -1,9 +1,9 @@
 import { Spec } from '@nrz/spec'
-import { addKey } from './dependencies.ts'
-import type { Dependency } from './dependencies.ts'
+import { addKey } from './dependencies.js'
+import type { Dependency } from './dependencies.js'
 import type { Manifest } from '@nrz/types'
 import type { SpecOptions } from '@nrz/spec'
-import { calculateSaveValue } from './reify/calculate-save-value.ts'
+import { calculateSaveValue } from './reify/calculate-save-value.js'
 
 /**
  * When adding new dependencies, it's very common to not have a dependency

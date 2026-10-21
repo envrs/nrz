@@ -17,14 +17,14 @@ import { createHash } from 'node:crypto'
 import type { Integrity } from '@nrz/types'
 import t from 'tap'
 import type { Dispatcher } from 'undici'
-import { CacheEntry } from '../src/cache-entry.ts'
-import * as registryError from '../src/registry-error.ts'
-import { cacheKey } from '../src/index.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import * as registryError from '../src/registry-error.js'
+import { cacheKey } from '../src/index.js'
 import type {
   RegistryClient,
   RegistryClientRequestOptions,
-} from '../src/index.ts'
-import { toRawHeaders } from './fixtures/to-raw-headers.ts'
+} from '../src/index.js'
+import { toRawHeaders } from './fixtures/to-raw-headers.js'
 
 const PORT = (t.childId || 0) + 8080
 

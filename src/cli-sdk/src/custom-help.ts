@@ -1,7 +1,7 @@
 import { loadPackageJson } from 'package-json-from-dist'
 import chalk from 'chalk'
-import { commandAliases } from './config/definition.ts'
-import type { Commands } from './config/definition.ts'
+import { commandAliases } from './config/definition.js'
+import type { Commands } from './config/definition.js'
 
 const { version } = loadPackageJson(
   import.meta.filename,

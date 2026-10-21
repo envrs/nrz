@@ -1,10 +1,10 @@
 import t from 'tap'
-import { humanReadableOutput } from '../../src/visualization/human-readable-output.ts'
+import { humanReadableOutput } from '../../src/visualization/human-readable-output.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { Spec, kCustomInspect } from '@nrz/spec/browser'
-import { load } from '../../src/transfer-data/load.ts'
-import type { TransferData } from '../../src/transfer-data/load.ts'
-import type { LockfileEdges } from '../../src/lockfile/types.ts'
+import { load } from '../../src/transfer-data/load.js'
+import type { TransferData } from '../../src/transfer-data/load.js'
+import type { LockfileEdges } from '../../src/lockfile/types.js'
 
 Object.assign(Spec.prototype, {
   [kCustomInspect](this: Spec) {

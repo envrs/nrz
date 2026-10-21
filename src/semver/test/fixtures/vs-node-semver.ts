@@ -1,10 +1,10 @@
 #!/usr/bin/env -S tap -Rtap --disable-coverage --allow-empty-coverage
 import semver from 'semver'
 import t from 'tap'
-import { highest } from '../../src/index.ts'
-import { Range } from '../../src/range.ts'
-import { Version } from '../../src/version.ts'
-import { excludes, includes } from './ranges.ts'
+import { highest } from '../../src/index.js'
+import { Range } from '../../src/range.js'
+import { Version } from '../../src/version.js'
+import { excludes, includes } from './ranges.js'
 
 const raw = [...includes, ...excludes]
 const all = raw.filter(([range, version]) => {

@@ -4,11 +4,11 @@ import {
   command,
   views,
   usage,
-} from '../../src/commands/unpublish.ts'
-import type { CommandResult } from '../../src/commands/unpublish.ts'
+} from '../../src/commands/unpublish.js'
+import type { CommandResult } from '../../src/commands/unpublish.js'
 import { PackageJson } from '@nrz/package-json'
 import { RegistryClient } from '@nrz/registry-client'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 interface MockResponse {
   statusCode?: number

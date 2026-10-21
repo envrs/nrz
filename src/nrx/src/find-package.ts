@@ -2,8 +2,8 @@ import type { PackageJson } from '@nrz/package-json'
 import { relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { walkUp } from 'walk-up-path'
-import type { NrxInfo, NrxManifest } from './index.ts'
-import { inferDefaultExecutable } from './infer-default-executable.ts'
+import type { NrxInfo, NrxManifest } from './index.js'
+import { inferDefaultExecutable } from './infer-default-executable.js'
 
 const maybeManifest = (p: string, packageJson: PackageJson) => {
   try {

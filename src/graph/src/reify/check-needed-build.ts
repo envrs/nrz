@@ -1,10 +1,10 @@
 import type { PathScurry } from 'path-scurry'
 import type { PackageJson } from '@nrz/package-json'
-import type { Diff } from '../diff.ts'
-import type { Node } from '../node.ts'
+import type { Diff } from '../diff.js'
+import type { Node } from '../node.js'
 import type { NormalizedManifest } from '@nrz/types'
-import { hasBindingGyp } from './binding-gyp.ts'
-import { scriptsManifest } from './scripts-manifest.ts'
+import { hasBindingGyp } from './binding-gyp.js'
+import { scriptsManifest } from './scripts-manifest.js'
 
 /**
  * Build data containing the queue of DepIDs that need building

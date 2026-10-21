@@ -20,19 +20,19 @@ import type {
   RunResult,
 } from '@nrz/run'
 import { Query } from '@nrz/query'
-import { createDiffFilesProvider } from './query-diff-files.ts'
+import { createDiffFilesProvider } from './query-diff-files.js'
 import { actual } from '@nrz/graph'
 import { isRunResult } from '@nrz/run'
 import { Monorepo } from '@nrz/workspaces'
 import { ansiToAnsi } from 'ansi-to-pre'
-import type { LoadedConfig } from './config/index.ts'
-import { stderr, stdout, styleTextStdout } from './output.ts'
-import type { Views } from './view.ts'
+import type { LoadedConfig } from './config/index.js'
+import { stderr, stdout, styleTextStdout } from './output.js'
+import type { Views } from './view.js'
 import type { SpawnResultStdioStrings } from '@nrz/promise-spawn'
 import assert from 'node:assert'
 import { resolve } from 'node:path'
-import { createHostContextsMap } from './query-host-contexts.ts'
-import { sortScopeLocations } from './sort-scope-locations.ts'
+import { createHostContextsMap } from './query-host-contexts.js'
+import { sortScopeLocations } from './sort-scope-locations.js'
 
 export type RunnerBG = typeof exec | typeof run | typeof runExec
 export type RunnerFG = typeof execFG | typeof runExecFG | typeof runFG

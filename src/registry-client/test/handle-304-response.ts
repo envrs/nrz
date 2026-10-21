@@ -1,7 +1,7 @@
 import t from 'tap'
 import type { Dispatcher } from 'undici'
-import type { CacheEntry } from '../src/cache-entry.ts'
-import { handleCacheHitResponse } from '../src/handle-304-response.ts'
+import type { CacheEntry } from '../src/cache-entry.js'
+import { handleCacheHitResponse } from '../src/handle-304-response.js'
 
 t.equal(
   handleCacheHitResponse({

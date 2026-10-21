@@ -1,8 +1,8 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { attr } from '../../src/pseudo/attr.ts'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import type { ParserState } from '../../src/types.js'
+import { attr } from '../../src/pseudo/attr.js'
+import { getSimpleGraph } from '../fixtures/graph.js'
 
 t.test('selects packages based on attribute properties', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

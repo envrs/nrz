@@ -3,8 +3,8 @@ import { inspect } from 'node:util'
 import { gzipSync } from 'node:zlib'
 import t from 'tap'
 import type { Integrity } from '@nrz/types'
-import { CacheEntry } from '../src/cache-entry.ts'
-import { toRawHeaders } from './fixtures/to-raw-headers.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import { toRawHeaders } from './fixtures/to-raw-headers.js'
 
 const toLenBuf = (b: Uint8Array): Uint8Array => {
   const bl = b.byteLength + 4

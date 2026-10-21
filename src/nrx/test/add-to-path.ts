@@ -1,6 +1,6 @@
 import { delimiter } from 'node:path'
 import t from 'tap'
-import { addToPATH } from '../src/add-to-path.ts'
+import { addToPATH } from '../src/add-to-path.js'
 
 const env: NodeJS.Process['env'] = { ...process.env }
 env.PATH = String(env.PATH) + delimiter + String(env.PATH)

@@ -1,9 +1,9 @@
 import { joinDepIDTuple, joinExtra, splitDepID } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
 import { createHash } from 'node:crypto'
-import type { Graph } from '../graph.ts'
-import { copyPackageMetadata } from '../node.ts'
-import type { Node } from '../node.ts'
+import type { Graph } from '../graph.js'
+import { copyPackageMetadata } from '../node.js'
+import type { Node } from '../node.js'
 
 const NUL = '\0'
 const NL = '\n'

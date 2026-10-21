@@ -1,10 +1,10 @@
 import { uninstall } from '@nrz/graph'
 import type { Graph, LinkSkillsResult } from '@nrz/graph'
-import { commandUsage } from '../config/usage.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import { parseRemoveArgs } from '../parse-add-remove-args.ts'
-import { lazyView } from '../view.ts'
-import type { Views } from '../view.ts'
+import { commandUsage } from '../config/usage.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import { parseRemoveArgs } from '../parse-add-remove-args.js'
+import { lazyView } from '../view.js'
+import type { Views } from '../view.js'
 
 export type UninstallResult = {
   /**

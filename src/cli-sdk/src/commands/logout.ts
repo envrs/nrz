@@ -1,7 +1,7 @@
 import { RegistryClient } from '@nrz/registry-client'
-import { commandUsage } from '../config/usage.ts'
-import { resolveRegistry } from '../require-registry.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
+import { commandUsage } from '../config/usage.js'
+import { resolveRegistry } from '../require-registry.js'
+import type { CommandFn, CommandUsage } from '../index.js'
 
 export const needsRegistry = true
 

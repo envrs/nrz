@@ -2,10 +2,10 @@ import { error } from '@nrz/error-cause'
 import type { NormalizedManifest } from '@nrz/types'
 import { XDG } from '@nrz/xdg'
 import { resolve } from 'node:path'
-import type { NrxInfo, NrxManifest, NrxOptions } from './index.ts'
-import { inferDefaultExecutable } from './infer-default-executable.ts'
+import type { NrxInfo, NrxManifest, NrxOptions } from './index.js'
+import { inferDefaultExecutable } from './infer-default-executable.js'
 
-import { mountPath } from './mount-path.ts'
+import { mountPath } from './mount-path.js'
 
 export const nrxInfo = (
   path: string,

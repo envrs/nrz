@@ -7,8 +7,8 @@ import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import type { Test } from 'tap'
-import { Edge } from '../../src/edge.ts'
-import { Node } from '../../src/node.ts'
+import { Edge } from '../../src/edge.js'
+import { Node } from '../../src/node.js'
 import type { GraphLike } from '@nrz/types'
 
 const fooManifest = {

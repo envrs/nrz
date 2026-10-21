@@ -5,9 +5,9 @@ import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import t from 'tap'
 import type { Node, Skill, SkillRow } from '@nrz/graph'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { SkillsResult } from '../../src/commands/skills.ts'
-import type { EditQueryOptions } from '../../src/skills-prompt.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { SkillsResult } from '../../src/commands/skills.js'
+import type { EditQueryOptions } from '../../src/skills-prompt.js'
 
 type Call = {
   fn: string

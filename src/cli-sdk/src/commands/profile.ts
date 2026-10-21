@@ -1,11 +1,11 @@
 import { error } from '@nrz/error-cause'
 import { RegistryClient, assertOk } from '@nrz/registry-client'
 import type { JSONField } from '@nrz/types'
-import type { LoadedConfig } from '../config/index.ts'
-import { commandUsage } from '../config/usage.ts'
-import { resolveRegistry } from '../require-registry.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import type { LoadedConfig } from '../config/index.js'
+import { commandUsage } from '../config/usage.js'
+import { resolveRegistry } from '../require-registry.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 
 export const needsRegistry = true
 

@@ -1,8 +1,8 @@
 import { asCombinatorNode } from '@nrz/dss-parser'
-import { queryError } from './error.ts'
+import { queryError } from './error.js'
 import type { CombinatorName } from '@nrz/dss-parser'
 import type { EdgeLike, NodeLike } from '@nrz/types'
-import type { ParserState, ParserFn } from './types.ts'
+import type { ParserState, ParserFn } from './types.js'
 
 /**
  * Returns a new set of nodes, containing all direct dependencies

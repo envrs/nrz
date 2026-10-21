@@ -18,9 +18,9 @@ import {
   isStringNode,
   isTagNode,
 } from '@nrz/dss-parser'
-import { removeNode, removeQuotes } from './helpers.ts'
+import { removeNode, removeQuotes } from './helpers.js'
 import type { NodeLike, Packument } from '@nrz/types'
-import type { GetAuthHeader, ParserState } from '../types.ts'
+import type { GetAuthHeader, ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 /**

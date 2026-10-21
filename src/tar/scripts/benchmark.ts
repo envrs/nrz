@@ -3,9 +3,9 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import pacote from 'pacote'
 import { basename, resolve } from 'node:path'
-import { linkFromStore } from '../src/link-tree.ts'
-import { Pool } from '../src/pool.ts'
-import { storeIndexPath } from '../src/store-index.ts'
+import { linkFromStore } from '../src/link-tree.js'
+import { Pool } from '../src/pool.js'
+import { storeIndexPath } from '../src/store-index.js'
 import {
   convertNs,
   copyTarballs,
@@ -17,7 +17,7 @@ import {
   unpack,
   unpackSync,
   unpackToStoreSync,
-} from '../src/unpack.ts'
+} from '../src/unpack.js'
 
 const DIRS = {
   source: resolve(import.meta.dirname, 'fixtures/artifacts'),

@@ -3,10 +3,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { Readable } from 'node:stream'
 import t from 'tap'
 import { joinDepIDTuple, baseDepID } from '@nrz/dep-id'
-import { main } from '../src/update-expired.ts'
-import type { UpdateExpiredPayload } from '../src/update-expired.ts'
-import { SecurityArchive } from '../src/index.ts'
-import { hangingFetch } from './fixtures/hanging-fetch.ts'
+import { main } from '../src/update-expired.js'
+import type { UpdateExpiredPayload } from '../src/update-expired.js'
+import { SecurityArchive } from '../src/index.js'
+import { hangingFetch } from './fixtures/hanging-fetch.js'
 
 const englishDaysReport = {
   id: '15713076833',

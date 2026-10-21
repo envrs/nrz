@@ -21,18 +21,18 @@ import {
   configWriteTarget,
   isRecordField,
   pairsToRecords,
-} from './config/index.ts'
+} from './config/index.js'
 import type {
   ConfigFileData,
   ConfigFileLayer,
   LoadedConfig,
-} from './config/index.ts'
-import { getCommand } from './config/definition.ts'
+} from './config/index.js'
+import { getCommand } from './config/definition.js'
 import {
   registrySelectionFields,
   registrySelectors,
-} from './config/merge-layers.ts'
-import { normalizeRegistryURL } from './require-registry.ts'
+} from './config/merge-layers.js'
+import { normalizeRegistryURL } from './require-registry.js'
 
 /** The config fields that change how specs are parsed. */
 export const specConfigFields = [

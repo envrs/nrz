@@ -1,7 +1,7 @@
 import { PackageJson } from '@nrz/package-json'
 import { normalizeManifest } from '@nrz/types'
 import t from 'tap'
-import { scriptsManifest } from '../../src/reify/scripts-manifest.ts'
+import { scriptsManifest } from '../../src/reify/scripts-manifest.js'
 
 const dir = t.testdir({
   'package.json': JSON.stringify({

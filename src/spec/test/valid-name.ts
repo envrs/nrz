@@ -2,7 +2,7 @@ import t from 'tap'
 import {
   assertPathSafeName,
   isPathSafeName,
-} from '../src/valid-name.ts'
+} from '../src/valid-name.js'
 
 t.test('rejects names that are not a single path segment', t => {
   const bad = [

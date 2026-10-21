@@ -1,6 +1,6 @@
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { parse } from '@nrz/dss-parser'
-import { walk } from '../../src/index.ts'
+import { walk } from '../../src/index.js'
 import type { EdgeLike, GraphLike, NodeLike } from '@nrz/types'
 import type { DepID } from '@nrz/dep-id'
 import type { PostcssNode } from '@nrz/dss-parser'
@@ -8,7 +8,7 @@ import type {
   GraphSelectionState,
   ParserState,
   ParserFn,
-} from '../../src/types.ts'
+} from '../../src/types.js'
 
 export type FixtureResult = {
   edges: EdgeLike[]

@@ -1,5 +1,5 @@
 import t from 'tap'
-import { makeError as _makeError } from '../src/make-error.ts'
+import { makeError as _makeError } from '../src/make-error.js'
 
 const makeError = (message: string) =>
   // Create the error with properties like it came from promise-spawn

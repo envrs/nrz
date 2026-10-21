@@ -4,9 +4,9 @@ import { Spec } from '@nrz/spec'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
-import { Edge } from '../../src/edge.ts'
-import { Node } from '../../src/node.ts'
+import type { Diff } from '../../src/diff.js'
+import { Edge } from '../../src/edge.js'
+import { Node } from '../../src/node.js'
 import type { GraphLike } from '@nrz/types'
 
 // verify that we delete the deleted edges, but skip the ones

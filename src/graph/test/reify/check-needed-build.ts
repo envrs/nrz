@@ -3,12 +3,12 @@ import type { NormalizedManifest } from '@nrz/types'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
-import type { Node } from '../../src/node.ts'
+import type { Diff } from '../../src/diff.js'
+import type { Node } from '../../src/node.js'
 import {
   carryBuildState,
   checkNeededBuild,
-} from '../../src/reify/check-needed-build.ts'
+} from '../../src/reify/check-needed-build.js'
 
 const dir = t.testdir({
   gyp: {

@@ -1,5 +1,5 @@
 import { urlOpen } from '@nrz/url-open'
-import { stderr } from './output.ts'
+import { stderr } from './output.js'
 
 /**
  * Open a url in the system browser, without failing the command if the

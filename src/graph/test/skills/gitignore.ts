@@ -6,7 +6,7 @@ import {
   editGitignore,
   GITIGNORE_BEGIN as B,
   GITIGNORE_END as E,
-} from '../../src/skills/gitignore.ts'
+} from '../../src/skills/gitignore.js'
 
 const read = (dir: string) =>
   readFileSync(resolve(dir, '.gitignore'), 'utf8')

@@ -1,6 +1,6 @@
-import type { QueryPartIds } from '../filter-nodes-by-query.ts'
-import type { Skill } from './discover.ts'
-import { packageKey } from './mounts.ts'
+import type { QueryPartIds } from '../filter-nodes-by-query.js'
+import type { Skill } from './discover.js'
+import { packageKey } from './mounts.js'
 
 /**
  * A `:skill()` pattern that matched no skill of its selector's

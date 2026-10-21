@@ -3,7 +3,7 @@ import { joinDepIDTuple } from '@nrz/dep-id/browser'
 import type { DepID } from '@nrz/dep-id'
 import type { NodeLike } from '@nrz/types'
 import type { SpecOptions } from '@nrz/spec/browser'
-import { SecurityArchive, usesNpmRegistry } from '../src/browser.ts'
+import { SecurityArchive, usesNpmRegistry } from '../src/browser.js'
 
 const json = {
   [joinDepIDTuple(['registry', 'npm', 'english-days@1.0.0'])]: {

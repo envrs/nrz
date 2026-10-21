@@ -1,6 +1,6 @@
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-import { doPrompt } from '../src/do-prompt.ts'
+import { doPrompt } from '../src/do-prompt.js'
 
 t.test('do prompts', async t => {
   const spec = Spec.parse('foo@1.2.3')

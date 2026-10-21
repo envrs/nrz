@@ -1,13 +1,13 @@
 import t from 'tap'
 
-import { nrxDelete } from '../src/delete.ts'
-import * as nrx from '../src/index.ts'
-import { nrxInfo } from '../src/info.ts'
-import { nrxInstall } from '../src/install.ts'
-import { nrxList } from '../src/list.ts'
-import { nrxResolve } from '../src/resolve.ts'
+import { nrxDelete } from '../src/delete.js'
+import * as nrx from '../src/index.js'
+import { nrxInfo } from '../src/info.js'
+import { nrxInstall } from '../src/install.js'
+import { nrxList } from '../src/list.js'
+import { nrxResolve } from '../src/resolve.js'
 
-import type { PromptFn, NrxInfo, NrxOptions } from '../src/index.ts'
+import type { PromptFn, NrxInfo, NrxOptions } from '../src/index.js'
 
 const typeChecks = () => {
   //@ts-expect-error

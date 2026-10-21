@@ -8,14 +8,14 @@ import {
   GraphModifier,
 } from '@nrz/graph'
 import { Query } from '@nrz/query'
-import { stdout } from '../output.ts'
+import { stdout } from '../output.js'
 import { error } from '@nrz/error-cause'
-import { createDiffFilesProvider } from '../query-diff-files.ts'
+import { createDiffFilesProvider } from '../query-diff-files.js'
 import { SecurityArchive } from '@nrz/security-archive'
-import { commandUsage } from '../config/usage.ts'
-import { createHostContextsMap } from '../query-host-contexts.ts'
-import { createGetAuthHeader } from '../query-auth.ts'
-import { assertNrzInstalled } from '../is-nrz-installed.ts'
+import { commandUsage } from '../config/usage.js'
+import { createHostContextsMap } from '../query-host-contexts.js'
+import { createGetAuthHeader } from '../query-auth.js'
+import { assertNrzInstalled } from '../is-nrz-installed.js'
 import type {
   HumanReadableOutputGraph,
   JSONOutputGraph,
@@ -25,10 +25,10 @@ import type {
 } from '@nrz/graph'
 import type { DepID } from '@nrz/dep-id'
 import type { EdgeLike, NodeLike } from '@nrz/types'
-import { MermaidImageView } from '../mermaid-image-view.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
-import type { LoadedConfig } from '../config/index.ts'
+import { MermaidImageView } from '../mermaid-image-view.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
+import type { LoadedConfig } from '../config/index.js'
 
 export const needsRegistry = true
 

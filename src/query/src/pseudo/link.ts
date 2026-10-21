@@ -1,6 +1,6 @@
 import { splitDepID } from '@nrz/dep-id/browser'
-import type { ParserState } from '../types.ts'
-import { removeNode } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeNode } from './helpers.js'
 
 /**
  * :link Pseudo-Selector, matches only nodes that are file links.

@@ -1,7 +1,7 @@
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-import type { Dependency } from '../src/dependencies.ts'
-import { fixupAddedNames } from '../src/fixup-added-names.ts'
+import type { Dependency } from '../src/dependencies.js'
+import { fixupAddedNames } from '../src/fixup-added-names.js'
 
 t.test('fixupAddedNames', async t => {
   t.test('returns original spec when add is undefined', async t => {

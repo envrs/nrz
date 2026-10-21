@@ -1,5 +1,5 @@
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 let requestUrl: string | URL = ''
 let requestOptions: { useCache: false } | undefined

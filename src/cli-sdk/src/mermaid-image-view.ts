@@ -1,8 +1,8 @@
 import { mermaidOutput } from '@nrz/graph'
-import { openUrl } from './open-url.ts'
-import { stderr } from './output.ts'
-import { ViewClass } from './view.ts'
-import type { OutputFormat } from './render-mermaid.ts'
+import { openUrl } from './open-url.js'
+import { stderr } from './output.js'
+import { ViewClass } from './view.js'
+import type { OutputFormat } from './render-mermaid.js'
 import type { MermaidOutputGraph } from '@nrz/graph'
 
 /**

@@ -2,10 +2,10 @@ import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
 import type { PackageReportData } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { cwe } from '../../src/pseudo/cwe.ts'
-import { parse } from '../../src/parser.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { cwe } from '../../src/pseudo/cwe.js'
+import { parse } from '../../src/parser.js'
 
 t.test('selects packages with a CWE alert', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

@@ -1,11 +1,11 @@
 import t from 'tap'
-import * as unpack from '../src/unpack.ts'
-import * as clonefile from '../src/clonefile.ts'
-import * as linkTree from '../src/link-tree.ts'
-import * as pool from '../src/pool.ts'
-import * as storeEntry from '../src/store-entry.ts'
-import * as storeIndex from '../src/store-index.ts'
-import * as index from '../src/index.ts'
+import * as unpack from '../src/unpack.js'
+import * as clonefile from '../src/clonefile.js'
+import * as linkTree from '../src/link-tree.js'
+import * as pool from '../src/pool.js'
+import * as storeEntry from '../src/store-entry.js'
+import * as storeIndex from '../src/store-index.js'
+import * as index from '../src/index.js'
 
 t.strictSame(
   index,

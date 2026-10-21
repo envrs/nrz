@@ -1,12 +1,12 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { privateParser } from '../../src/pseudo/private.ts'
+import type { ParserState } from '../../src/types.js'
+import { privateParser } from '../../src/pseudo/private.js'
 import {
   getSimpleGraph,
   getSingleWorkspaceGraph,
   getCycleGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects packages with private flag', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

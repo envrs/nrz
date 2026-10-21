@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { format } from 'node:util'
 import t from 'tap'
 import type { Test } from 'tap'
-import type { ConfigDefinitions } from '../../src/config/index.ts'
+import type { ConfigDefinitions } from '../../src/config/index.js'
 
 const clearEnv = () => {
   for (const k of Object.keys(process.env)) {

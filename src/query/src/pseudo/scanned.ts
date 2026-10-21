@@ -1,5 +1,5 @@
-import { removeDanglingEdges, removeNode } from './helpers.ts'
-import type { ParserState } from '../types.ts'
+import { removeDanglingEdges, removeNode } from './helpers.js'
+import type { ParserState } from '../types.js'
 
 /**
  * :scanned pseudo selector.

@@ -1,10 +1,10 @@
 import { asAttributeNode } from '@nrz/dss-parser'
 import { error } from '@nrz/error-cause'
-import { queryError } from './error.ts'
-import { removeDanglingEdges } from './pseudo/helpers.ts'
+import { queryError } from './error.js'
+import { removeDanglingEdges } from './pseudo/helpers.js'
 import type { AttributeOperatorName } from '@nrz/dss-parser'
 import type { NodeLike, JSONField, Manifest } from '@nrz/types'
-import type { ParserState } from './types.ts'
+import type { ParserState } from './types.js'
 
 export type ComparatorFn = (attr: string, value?: string) => boolean
 

@@ -1,10 +1,10 @@
 import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
-import type { ParserState } from '../../src/types.ts'
-import { nativeParser } from '../../src/pseudo/native.ts'
-import { parse } from '../../src/parser.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
+import type { ParserState } from '../../src/types.js'
+import { nativeParser } from '../../src/pseudo/native.js'
+import { parse } from '../../src/parser.js'
 
 t.test('selects packages with a hasNativeCode alert', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

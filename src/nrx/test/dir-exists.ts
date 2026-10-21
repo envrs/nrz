@@ -1,5 +1,5 @@
 import t from 'tap'
-import { dirExists } from '../src/dir-exists.ts'
+import { dirExists } from '../src/dir-exists.js'
 
 const dir = t.testdir({ file: '' })
 

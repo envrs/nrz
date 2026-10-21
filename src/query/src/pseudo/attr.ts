@@ -9,9 +9,9 @@ import {
 import {
   attributeSelectorsMap,
   filterAttributes,
-} from '../attribute.ts'
-import { removeQuotes } from './helpers.ts'
-import type { ParserState } from '../types.ts'
+} from '../attribute.js'
+import { removeQuotes } from './helpers.js'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 export type AttrInternals = {

@@ -1,5 +1,5 @@
 import type { Spec } from '@nrz/spec'
-import type { PromptFn } from './index.ts'
+import type { PromptFn } from './index.js'
 
 export const doPrompt = async (
   spec: Spec,

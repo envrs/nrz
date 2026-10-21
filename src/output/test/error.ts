@@ -3,7 +3,7 @@ import {
   findRootError,
   asRootError,
   parseError,
-} from '../src/error.ts'
+} from '../src/error.js'
 import { formatWithOptions } from 'node:util'
 
 const error = (message: string, cause?: unknown) =>

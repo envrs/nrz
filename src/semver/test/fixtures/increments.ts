@@ -1,7 +1,7 @@
 //  [version, inc, result, identifier]
 //  inc(version, inc, identifier) -> result
 
-import type { IncrementType } from '../../src/version.ts'
+import type { IncrementType } from '../../src/version.js'
 
 const list: [
   v: string,

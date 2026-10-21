@@ -27,11 +27,11 @@ import { createHash } from 'node:crypto'
 import type { InspectOptions } from 'node:util'
 import { inspect } from 'node:util'
 import { gunzipSync } from 'node:zlib'
-import { getRawHeader, setRawHeader } from './raw-header.ts'
+import { getRawHeader, setRawHeader } from './raw-header.js'
 import {
   getDecodedValue,
   getEncondedValue,
-} from './string-encoding.ts'
+} from './string-encoding.js'
 
 export type JSONObj = Record<string, JSONField>
 

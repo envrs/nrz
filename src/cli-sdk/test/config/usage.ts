@@ -1,5 +1,5 @@
 import t from 'tap'
-import { commandUsage } from '../../src/config/usage.ts'
+import { commandUsage } from '../../src/config/usage.js'
 import { Jack } from 'jackspeak'
 
 const j = commandUsage({

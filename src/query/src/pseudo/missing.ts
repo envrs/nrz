@@ -1,4 +1,4 @@
-import type { ParserState } from '../types.ts'
+import type { ParserState } from '../types.js'
 
 /**
  * :missing Pseudo-Selector, matches only edges that are not linked to any node.

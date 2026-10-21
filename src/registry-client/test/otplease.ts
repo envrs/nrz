@@ -1,8 +1,8 @@
 import t from 'tap'
 import { gzipSync } from 'node:zlib'
 import type { Dispatcher } from 'undici'
-import type { RegistryClient } from '../src/index.ts'
-import type { WebAuthChallenge } from '../src/web-auth-challenge.ts'
+import type { RegistryClient } from '../src/index.js'
+import type { WebAuthChallenge } from '../src/web-auth-challenge.js'
 
 const logs: string[] = []
 const log = (msg: string) => logs.push(msg)

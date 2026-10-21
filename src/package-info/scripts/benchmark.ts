@@ -3,7 +3,7 @@
 import pacote from 'pacote'
 import { resolve, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { PackageInfoClient } from '../src/index.ts'
+import { PackageInfoClient } from '../src/index.js'
 import {
   randomPackages,
   convertNs,

@@ -1,9 +1,9 @@
 import t from 'tap'
-import { Range, isRange } from '../src/range.ts'
-import { Version } from '../src/version.ts'
-import rangeToString from './fixtures/range-tostring.ts'
-import { excludes, includes } from './fixtures/ranges.ts'
-import { Comparator } from '../src/comparator.ts'
+import { Range, isRange } from '../src/range.js'
+import { Version } from '../src/version.js'
+import rangeToString from './fixtures/range-tostring.js'
+import { excludes, includes } from './fixtures/ranges.js'
+import { Comparator } from '../src/comparator.js'
 
 for (const [range, version] of includes) {
   t.equal(

@@ -9,16 +9,16 @@ import {
   useEffect,
   useState,
 } from 'react'
-import { ViewClass } from '../../view.ts'
+import { ViewClass } from '../../view.js'
 import { asError } from '@nrz/types'
-import type { InstallResult } from '../install.ts'
-import { persistedEntries } from '../../persist-spec-config.ts'
+import type { InstallResult } from '../install.js'
+import { persistedEntries } from '../../persist-spec-config.js'
 import {
   keptLine,
   savedLine,
   unmatchedLines,
   unscannedLines,
-} from '../../allow-skills.ts'
+} from '../../allow-skills.js'
 
 type Step = {
   state: 'waiting' | 'in_progress' | 'completed'

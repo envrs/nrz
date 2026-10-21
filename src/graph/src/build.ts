@@ -1,19 +1,19 @@
 import { Monorepo } from '@nrz/workspaces'
-import { load as loadActual } from './actual/load.ts'
-import { build as reifyBuild } from './reify/build.ts'
-import type { BuildResult } from './reify/build.ts'
-import { Diff } from './diff.ts'
-import { Graph } from './graph.ts'
+import { load as loadActual } from './actual/load.js'
+import { build as reifyBuild } from './reify/build.js'
+import type { BuildResult } from './reify/build.js'
+import { Diff } from './diff.js'
+import { Graph } from './graph.js'
 import { Query } from '@nrz/query'
 import {
   SecurityArchive,
   usesNpmRegistry,
 } from '@nrz/security-archive'
-import type { LoadOptions } from './actual/load.ts'
+import type { LoadOptions } from './actual/load.js'
 import type { DepID } from '@nrz/dep-id'
 import type { NodeLike } from '@nrz/types'
-import { saveHidden } from './lockfile/save.ts'
-import { hasSkills } from './skills/lazy.ts'
+import { saveHidden } from './lockfile/save.js'
+import { hasSkills } from './skills/lazy.js'
 
 /**
  * Options for the build process

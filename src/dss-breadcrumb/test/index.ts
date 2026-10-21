@@ -6,7 +6,7 @@ import {
   extractPseudoParameter,
   getPseudoSelectorFullText,
   removeQuotes,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 t.test('Breadcrumb', async t => {
   await t.test('parseBreadcrumb', async t => {

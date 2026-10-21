@@ -12,13 +12,13 @@ import type {
   AddImportersDependenciesMap,
   Dependency,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { Graph } from '../../src/graph.ts'
-import type { GraphModifier } from '../../src/modifiers.ts'
-import { refreshIdealGraph } from '../../src/ideal/refresh-ideal-graph.ts'
-import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
+} from '../../src/dependencies.js'
+import { Graph } from '../../src/graph.js'
+import type { GraphModifier } from '../../src/modifiers.js'
+import { refreshIdealGraph } from '../../src/ideal/refresh-ideal-graph.js'
+import { objectLikeOutput } from '../../src/visualization/object-like-output.js'
 import { RollbackRemove } from '@nrz/rollback-remove'
-import { load } from '../../src/actual/load.ts'
+import { load } from '../../src/actual/load.js'
 import { PackageJson } from '@nrz/package-json'
 
 Object.assign(Spec.prototype, {

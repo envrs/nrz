@@ -4,7 +4,7 @@ import {
   mergeLayers,
   registrySelectionFields,
   registrySelectors,
-} from '../../src/config/merge-layers.ts'
+} from '../../src/config/merge-layers.js'
 
 t.test('scalars come from the innermost layer that sets them', t => {
   t.strictSame(

@@ -1,6 +1,6 @@
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-import { inferName } from '../src/infer-name.ts'
+import { inferName } from '../src/infer-name.js'
 
 t.match(
   inferName('github:a/b#main', {}),

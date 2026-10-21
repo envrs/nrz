@@ -4,36 +4,36 @@ import type { RollbackRemove } from '@nrz/rollback-remove'
 import { availableParallelism } from 'node:os'
 import { callLimit } from 'promise-call-limit'
 import type { DepID } from '@nrz/dep-id'
-import type { LoadOptions } from '../actual/load.ts'
-import { load as loadActual } from '../actual/load.ts'
+import type { LoadOptions } from '../actual/load.js'
+import { load as loadActual } from '../actual/load.js'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../dependencies.ts'
-import { Diff } from '../diff.ts'
-import type { Graph } from '../graph.ts'
-import type { GraphModifier } from '../modifiers.ts'
+} from '../dependencies.js'
+import { Diff } from '../diff.js'
+import type { Graph } from '../graph.js'
+import type { GraphModifier } from '../modifiers.js'
 import {
   lockfileData,
   saveData,
   saveHidden,
-} from '../lockfile/save.ts'
-import { addEdges } from './add-edges.ts'
-import { addNodes } from './add-nodes.ts'
-import { build } from './build.ts'
-import { deleteEdges } from './delete-edges.ts'
+} from '../lockfile/save.js'
+import { addEdges } from './add-edges.js'
+import { addNodes } from './add-nodes.js'
+import { build } from './build.js'
+import { deleteEdges } from './delete-edges.js'
 import {
   carryBuildState,
   checkNeededBuild,
-} from './check-needed-build.ts'
-import { deleteNodes } from './delete-nodes.ts'
-import { internalHoist } from './internal-hoist.ts'
-import { pruneUnsupportedOptional } from './optional-fail.ts'
-import { rollback } from './rollback.ts'
-import { updatePackageJson } from './update-importers-package-json.ts'
+} from './check-needed-build.js'
+import { deleteNodes } from './delete-nodes.js'
+import { internalHoist } from './internal-hoist.js'
+import { pruneUnsupportedOptional } from './optional-fail.js'
+import { rollback } from './rollback.js'
+import { updatePackageJson } from './update-importers-package-json.js'
 import { copyFileSync } from 'node:fs'
-import { binChmodAll } from './bin-chmod.ts'
-import { filterNodesByQuery } from '../filter-nodes-by-query.ts'
+import { binChmodAll } from './bin-chmod.js'
+import { filterNodesByQuery } from '../filter-nodes-by-query.js'
 
 const limit = Math.max(availableParallelism() - 1, 1) * 8
 

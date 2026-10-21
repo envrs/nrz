@@ -1,10 +1,10 @@
 import { install } from '@nrz/graph'
-import { commandUsage } from '../config/usage.ts'
-import { warnIgnoredWorkspaces } from '../migrate-workspaces.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import { lazyView } from '../view.ts'
-import type { Views } from '../view.ts'
-import type { InstallResult } from './install.ts'
+import { commandUsage } from '../config/usage.js'
+import { warnIgnoredWorkspaces } from '../migrate-workspaces.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import { lazyView } from '../view.js'
+import type { Views } from '../view.js'
+import type { InstallResult } from './install.js'
 
 export type CIResult = Pick<
   InstallResult,

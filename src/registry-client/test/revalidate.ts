@@ -3,10 +3,10 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PassThrough } from 'node:stream'
 import t from 'tap'
-import { CacheEntry } from '../src/cache-entry.ts'
-import { cacheKey, RegistryClient } from '../src/index.ts'
-import { __CODE_SPLIT_SCRIPT_NAME, main } from '../src/revalidate.ts'
-import { toRawHeaders } from './fixtures/to-raw-headers.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import { cacheKey, RegistryClient } from '../src/index.js'
+import { __CODE_SPLIT_SCRIPT_NAME, main } from '../src/revalidate.js'
+import { toRawHeaders } from './fixtures/to-raw-headers.js'
 
 const ENV = {
   NODE_OPTIONS: '--no-warnings --experimental-strip-types',

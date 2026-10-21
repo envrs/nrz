@@ -1,11 +1,11 @@
 import type {
   BuildIdealAddOptions,
   BuildIdealRemoveOptions,
-} from './types.ts'
+} from './types.js'
 import type { Spec } from '@nrz/spec'
 import type { Manifest, NormalizedManifest } from '@nrz/types'
-import type { Node } from '../node.ts'
-import type { Dependency } from '../dependencies.ts'
+import type { Node } from '../node.js'
+import type { Dependency } from '../dependencies.js'
 
 type SortableByHasPeerDeps = {
   /** Package manifest containing dependency information */

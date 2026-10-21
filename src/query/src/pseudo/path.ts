@@ -12,8 +12,8 @@ import {
   removeDanglingEdges,
   removeQuotes,
   clear,
-} from './helpers.ts'
-import type { ParserState } from '../types.ts'
+} from './helpers.js'
+import type { ParserState } from '../types.js'
 
 /**
  * Normalizes a path by trimming whitespace and removing leading './' or '.' prefix.

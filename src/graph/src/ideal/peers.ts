@@ -8,15 +8,15 @@ import {
   getDependencies,
   shorten,
   shouldInstallDepType,
-} from '../dependencies.ts'
-import { compareByType, getOrderedDependencies } from './sorting.ts'
+} from '../dependencies.js'
+import { compareByType, getOrderedDependencies } from './sorting.js'
 import type {
   ProcessPlacementResultEntry,
   PeerContext,
   PeerContextEntry,
   PeerContextEntryInput,
   ProcessPlacementResult,
-} from './types.ts'
+} from './types.js'
 import type { SpecOptions } from '@nrz/spec'
 import { longDependencyTypes } from '@nrz/types'
 import type {
@@ -25,9 +25,9 @@ import type {
   Manifest,
 } from '@nrz/types'
 import type { Monorepo } from '@nrz/workspaces'
-import type { Dependency } from '../dependencies.ts'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
+import type { Dependency } from '../dependencies.js'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
 
 /**
  * Result of checking if an existing node's peer edges are compatible

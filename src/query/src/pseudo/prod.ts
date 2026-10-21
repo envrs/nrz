@@ -1,5 +1,5 @@
-import type { ParserState } from '../types.ts'
-import { removeEdge, removeUnlinkedNodes } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeEdge, removeUnlinkedNodes } from './helpers.js'
 
 /**
  * :prod Pseudo-Selector will only match production dependencies.

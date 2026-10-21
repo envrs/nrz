@@ -9,11 +9,11 @@ import {
   isIdentifierNode,
   isAttributeNode,
 } from '@nrz/dss-parser'
-import { attribute } from './attribute.ts'
-import { combinator } from './combinator.ts'
-import { id } from './id.ts'
-import { pseudo, pseudoSelectorNames } from './pseudo.ts'
-import { queryError, selectorText } from './error.ts'
+import { attribute } from './attribute.js'
+import { combinator } from './combinator.js'
+import { id } from './id.js'
+import { pseudo, pseudoSelectorNames } from './pseudo.js'
+import { queryError, selectorText } from './error.js'
 import type { EdgeLike, NodeLike } from '@nrz/types'
 import type { SecurityArchiveLike } from '@nrz/security-archive'
 import type {
@@ -33,10 +33,10 @@ import type {
   QueryResponse,
   QueryResponseNode,
   QueryResponseEdge,
-} from './types.ts'
+} from './types.js'
 import type { DepID } from '@nrz/dep-id'
 
-export * from './types.ts'
+export * from './types.js'
 
 export type SearchOptions = {
   signal: AbortSignal

@@ -14,9 +14,9 @@ import {
   removeDanglingEdges,
   removeNode,
   removeQuotes,
-} from './helpers.ts'
+} from './helpers.js'
 import type { NodeLike, Packument } from '@nrz/types'
-import type { ParserState } from '../types.ts'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 /**

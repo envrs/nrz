@@ -1,7 +1,7 @@
 import cp from 'node:child_process'
 import spawk from 'spawk'
 import t from 'tap'
-import type * as PS from '../src/index.ts'
+import type * as PS from '../src/index.js'
 import { pathToFileURL } from 'node:url'
 const mockCP = { ...cp }
 // make spawk play nice with ESM

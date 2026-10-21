@@ -1,5 +1,5 @@
 import t from 'tap'
-import { getAuthorFromGitUser } from '../src/get-author-from-git-user.ts'
+import { getAuthorFromGitUser } from '../src/get-author-from-git-user.js'
 
 t.strictSame(
   getAuthorFromGitUser({

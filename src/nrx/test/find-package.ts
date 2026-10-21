@@ -2,7 +2,7 @@ import { PackageJson } from '@nrz/package-json'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import t from 'tap'
-import { findPackage } from '../src/find-package.ts'
+import { findPackage } from '../src/find-package.js'
 
 const packageJson = new PackageJson()
 

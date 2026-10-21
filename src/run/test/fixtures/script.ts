@@ -9,7 +9,7 @@ import {
   runExec,
   runExecFG,
   runFG,
-} from '../../src/index.ts'
+} from '../../src/index.js'
 
 const node =
   process.execPath.includes(' ') ?

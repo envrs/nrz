@@ -43,13 +43,13 @@
     "extends": "../../tap-config.yaml"
   },
   "prettier": "../../.prettierrc.js",
-  "module": "./src/index.ts",
+  "module": "./dist/index.js",
   "type": "module",
   "exports": {
     "./package.json": "./package.json",
     ".": {
       "import": {
-        "default": "./src/index.ts"
+        "default": "./dist/index.js"
       }
     }
   },

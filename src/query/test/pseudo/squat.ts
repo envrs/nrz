@@ -2,14 +2,14 @@ import t from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import { asPostcssNodeWithChildren, parse } from '@nrz/dss-parser'
 import { asSecurityArchiveLike } from '@nrz/security-archive'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import { getSimpleGraph } from '../fixtures/graph.js'
 import {
   squat,
   isSquatKind,
   asSquatKind,
   parseInternals,
-} from '../../src/pseudo/squat.ts'
-import type { ParserState } from '../../src/types.ts'
+} from '../../src/pseudo/squat.js'
+import type { ParserState } from '../../src/types.js'
 
 t.test('selects packages with a specific squat kind', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

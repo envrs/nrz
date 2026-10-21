@@ -1,12 +1,12 @@
 import t from 'tap'
-import type { ParserState } from '../../src/types.ts'
-import { parse } from '../../src/parser.ts'
-import { empty } from '../../src/pseudo/empty.ts'
+import type { ParserState } from '../../src/types.js'
+import { parse } from '../../src/parser.js'
+import { empty } from '../../src/pseudo/empty.js'
 import {
   getSimpleGraph,
   getSingleWorkspaceGraph,
   getCycleGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('selects packages with no dependencies', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

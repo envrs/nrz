@@ -4,14 +4,14 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { gzipSync } from 'node:zlib'
 import t from 'tap'
-import { CacheEntry } from '../src/cache-entry.ts'
+import { CacheEntry } from '../src/cache-entry.js'
 import {
   assertOk,
   tokenRefusal,
   tokenRefusalAdvice,
   registryErrorMessage,
   requestError,
-} from '../src/registry-error.ts'
+} from '../src/registry-error.js'
 
 const entry = (
   statusCode: number,

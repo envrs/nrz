@@ -14,11 +14,11 @@ import type { SpecOptions } from '@nrz/spec'
 import { normalizeManifest } from '@nrz/types'
 import type { Manifest, NodeLike, Packument } from '@nrz/types'
 import type { Test } from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 import type {
   OutdatedEntry,
   OutdatedResult,
-} from '../../src/commands/outdated.ts'
+} from '../../src/commands/outdated.js'
 
 t.cleanSnapshot = s =>
   s.replace(

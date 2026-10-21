@@ -2,7 +2,7 @@ import { Spec } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import type { DependencySaveType, Manifest } from '@nrz/types'
 import t from 'tap'
-import { Graph } from '../../src/graph.ts'
+import { Graph } from '../../src/graph.js'
 import {
   addEntriesToPeerContext,
   checkEntriesToPeerContext,
@@ -14,28 +14,28 @@ import {
   postPlacementPeerCheck,
   retrievePeerContextHash,
   startPeerPlacement,
-} from '../../src/ideal/peers.ts'
+} from '../../src/ideal/peers.js'
 import type {
   PeerContext,
   PeerContextEntryInput,
-} from '../../src/ideal/types.ts'
+} from '../../src/ideal/types.js'
 import type { PackageInfoClient } from '@nrz/package-info'
 import { PackageJson } from '@nrz/package-json'
 import { PathScurry } from 'path-scurry'
 import { joinDepIDTuple, joinExtra } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
-import { build } from '../../src/ideal/build.ts'
-import { load as actualLoad } from '../../src/actual/load.ts'
-import { asDependency } from '../../src/dependencies.ts'
-import { mermaidOutput } from '../../src/visualization/mermaid-output.ts'
+import { build } from '../../src/ideal/build.js'
+import { load as actualLoad } from '../../src/actual/load.js'
+import { asDependency } from '../../src/dependencies.js'
+import { mermaidOutput } from '../../src/visualization/mermaid-output.js'
 import type {
   Dependency,
   AddImportersDependenciesMap,
-} from '../../src/dependencies.ts'
+} from '../../src/dependencies.js'
 import { RollbackRemove } from '@nrz/rollback-remove'
 import { Monorepo } from '@nrz/workspaces'
-import { assertOptionalPeerProvisions } from '../fixtures/peer-provisions.ts'
-import type { Node } from '../../src/node.ts'
+import { assertOptionalPeerProvisions } from '../fixtures/peer-provisions.js'
+import type { Node } from '../../src/node.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

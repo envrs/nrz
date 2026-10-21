@@ -3,7 +3,7 @@ import {
   convertToSetCommand,
   convertToSetCommands,
   replaceDollarWithPercentPair,
-} from '../src/to-batch-syntax.ts'
+} from '../src/to-batch-syntax.js'
 
 t.test('replace $ expressions with % pair', function (t) {
   const assertReplacement = function (str: string, expect: string) {

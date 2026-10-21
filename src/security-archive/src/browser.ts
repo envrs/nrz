@@ -1,15 +1,15 @@
 import { asDepID, baseDepID, splitDepID } from '@nrz/dep-id/browser'
 import { error } from '@nrz/error-cause'
 import { defaultRegistryName } from '@nrz/spec/browser'
-import { asPackageReportData } from './types.ts'
+import { asPackageReportData } from './types.js'
 import type { JSONField, NodeLike } from '@nrz/types'
 import type {
   PackageReportData,
   SecurityArchiveLike,
-} from './types.ts'
+} from './types.js'
 import type { DepID } from '@nrz/dep-id'
 
-export * from './types.ts'
+export * from './types.js'
 
 export const npmRegistryURL = 'https://registry.npmjs.org/'
 

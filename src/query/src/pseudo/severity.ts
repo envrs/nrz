@@ -11,8 +11,8 @@ import {
   removeDanglingEdges,
   removeNode,
   removeQuotes,
-} from './helpers.ts'
-import type { ParserState } from '../types.ts'
+} from './helpers.js'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 export type SeverityKinds =

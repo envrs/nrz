@@ -1,5 +1,5 @@
 import t from 'tap'
-import { formatOptionsChange } from '../../src/lockfile/format-options-change.ts'
+import { formatOptionsChange } from '../../src/lockfile/format-options-change.js'
 
 t.test('renders one line per change', async t => {
   t.equal(

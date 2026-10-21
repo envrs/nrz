@@ -4,8 +4,8 @@ import { symlinkSync } from 'node:fs'
 import type { symlink } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 import type { PathScurry } from 'path-scurry'
-import type { Edge } from '../edge.ts'
-import { symlinkSyncMkdirp } from './symlink-sync.ts'
+import type { Edge } from '../edge.js'
+import { symlinkSyncMkdirp } from './symlink-sync.js'
 
 const clobberSymlink = async (
   target: string,

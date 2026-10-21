@@ -18,13 +18,13 @@ import type {
 import type { Monorepo } from '@nrz/workspaces'
 import { inspect } from 'node:util'
 import type { InspectOptions } from 'node:util'
-import { lockfileData } from './lockfile/save.ts'
-import type { OptionsChange } from './lockfile/types.ts'
-import { Edge } from './edge.ts'
-import { copyPackageMetadata, Node } from './node.ts'
-import type { NodeOptions } from './node.ts'
-import { resolveSaveType } from './resolve-save-type.ts'
-import type { PeerContext } from './ideal/types.ts'
+import { lockfileData } from './lockfile/save.js'
+import type { OptionsChange } from './lockfile/types.js'
+import { Edge } from './edge.js'
+import { copyPackageMetadata, Node } from './node.js'
+import type { NodeOptions } from './node.js'
+import { resolveSaveType } from './resolve-save-type.js'
+import type { PeerContext } from './ideal/types.js'
 
 const kCustomInspect = Symbol.for('nodejs.util.inspect.custom')
 

@@ -1,5 +1,5 @@
 import t from 'tap'
-import { getRawHeader, setRawHeader } from '../src/raw-header.ts'
+import { getRawHeader, setRawHeader } from '../src/raw-header.js'
 
 t.strictSame(
   getRawHeader(

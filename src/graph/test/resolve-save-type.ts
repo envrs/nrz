@@ -1,8 +1,8 @@
 import { Spec } from '@nrz/spec'
 import t from 'tap'
-import type { Edge } from '../src/edge.ts'
-import type { Node } from '../src/node.ts'
-import { resolveSaveType } from '../src/resolve-save-type.ts'
+import type { Edge } from '../src/edge.js'
+import type { Node } from '../src/node.js'
+import { resolveSaveType } from '../src/resolve-save-type.js'
 
 const node = {
   edgesOut: new Map(),

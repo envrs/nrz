@@ -1,6 +1,6 @@
 import type { Dispatcher } from 'undici'
-import type { CacheEntry } from './cache-entry.ts'
-import { getEncondedValue } from './string-encoding.ts'
+import type { CacheEntry } from './cache-entry.js'
+import { getEncondedValue } from './string-encoding.js'
 
 export const collectHeaders = (
   response: Dispatcher.ResponseData,

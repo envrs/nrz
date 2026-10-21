@@ -5,7 +5,7 @@ import * as os from 'node:os'
 import t from 'tap'
 import type { Test } from 'tap'
 import { gzipSync } from 'node:zlib'
-import { __CODE_SPLIT_SCRIPT_NAME } from '../src/unzip.ts'
+import { __CODE_SPLIT_SCRIPT_NAME } from '../src/unzip.js'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
@@ -16,7 +16,7 @@ import {
   hexOf,
   integrityOf,
   pkgTar,
-} from './fixtures/entry.ts'
+} from './fixtures/entry.js'
 
 const ENV = {
   NODE_OPTIONS: '--no-warnings --experimental-strip-types',

@@ -1,8 +1,8 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { registry } from '../../src/pseudo/registry.ts'
-import { getSimpleGraph, getAliasedGraph } from '../fixtures/graph.ts'
+import type { ParserState } from '../../src/types.js'
+import { registry } from '../../src/pseudo/registry.js'
+import { getSimpleGraph, getAliasedGraph } from '../fixtures/graph.js'
 
 t.test('selects nodes by registry', async t => {
   const getState = (query: string, graph = getSimpleGraph()) => {

@@ -1,7 +1,7 @@
 import t from 'tap'
 import type { MermaidOutputGraph } from '@nrz/graph'
-import type { ViewOptions } from '../src/view.ts'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { ViewOptions } from '../src/view.js'
+import type { LoadedConfig } from '../src/config/index.js'
 
 t.test('MermaidImageView with svg format', async t => {
   let capturedOpenPath = ''

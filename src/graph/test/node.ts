@@ -4,14 +4,14 @@ import type { SpecOptions } from '@nrz/spec'
 import { resolve } from 'node:path'
 import { inspect } from 'node:util'
 import t from 'tap'
-import { Edge } from '../src/edge.ts'
-import { getFlagNumFromNode } from '../src/lockfile/types.ts'
+import { Edge } from '../src/edge.js'
+import { getFlagNumFromNode } from '../src/lockfile/types.js'
 import {
   asNode,
   copyPackageMetadata,
   isNode,
   Node,
-} from '../src/node.ts'
+} from '../src/node.js'
 import type { Dist, GraphLike } from '@nrz/types'
 import { PathScurry } from 'path-scurry'
 

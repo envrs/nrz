@@ -18,10 +18,10 @@ import {
   unpackParallel,
   unpackSync,
   unpackToStoreSync,
-} from '../src/unpack.ts'
-import type { TarballFormat } from '../src/unpack.ts'
-import { findTarDir } from '../src/find-tar-dir.ts'
-import { makeTar } from './fixtures/make-tar.ts'
+} from '../src/unpack.js'
+import type { TarballFormat } from '../src/unpack.js'
+import { findTarDir } from '../src/find-tar-dir.js'
+import { makeTar } from './fixtures/make-tar.js'
 
 const pj = JSON.stringify({
   name: 'some-package',

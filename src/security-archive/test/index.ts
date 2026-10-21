@@ -5,15 +5,15 @@ import { joinDepIDTuple, baseDepID } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
 import type { SpecOptions } from '@nrz/spec'
 import type { NodeLike } from '@nrz/types'
-import { SecurityArchive, usesNpmRegistry } from '../src/index.ts'
+import { SecurityArchive, usesNpmRegistry } from '../src/index.js'
 import {
   getSimpleReportGraph,
   mirrorSpecOptions,
   newGraph,
   newNode,
-} from './fixtures/graph.ts'
-import { hangingFetch } from './fixtures/hanging-fetch.ts'
-import type { PackageReportData } from '../src/types.ts'
+} from './fixtures/graph.js'
+import { hangingFetch } from './fixtures/hanging-fetch.js'
+import type { PackageReportData } from '../src/types.js'
 
 const fooReport = {
   id: '99923218962',

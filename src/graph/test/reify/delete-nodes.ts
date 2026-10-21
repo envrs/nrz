@@ -2,7 +2,7 @@ import { joinDepIDTuple } from '@nrz/dep-id'
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import type { Diff } from '../../src/diff.ts'
+import type { Diff } from '../../src/diff.js'
 
 const removed: string[] = []
 const mockRemover = {

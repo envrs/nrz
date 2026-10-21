@@ -1,6 +1,6 @@
 import t from 'tap'
 import type { NormalizedManifest } from '@nrz/types'
-import { getPublishConfig } from '../src/publish-config.ts'
+import { getPublishConfig } from '../src/publish-config.js'
 
 const pc = (publishConfig: unknown) =>
   getPublishConfig({ publishConfig } as NormalizedManifest)

@@ -8,7 +8,7 @@ import pathModule, {
 } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
-import type { WhichOptions } from '../src/index.ts'
+import type { WhichOptions } from '../src/index.js'
 import { posix as isexePosix, win32 as isexeWin } from 'isexe'
 
 const isWindows = process.platform === 'win32'

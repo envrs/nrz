@@ -13,7 +13,7 @@ import { minimatch } from 'minimatch'
 import { basename, posix, resolve } from 'node:path'
 import type { Path } from 'path-scurry'
 import { PathScurry } from 'path-scurry'
-import { readPnpmWorkspacePackages } from './pnpm-workspace.ts'
+import { readPnpmWorkspacePackages } from './pnpm-workspace.js'
 
 /**
  * Check if an error (potentially wrapped by @nrz/error-cause) is

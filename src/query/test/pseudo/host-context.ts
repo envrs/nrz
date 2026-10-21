@@ -5,13 +5,13 @@ import type {
   HostContextsMap,
   ParserState,
   HostContextsMapResult,
-} from '../../src/types.ts'
+} from '../../src/types.js'
 import type { GraphLike, EdgeLike } from '@nrz/types'
-import { hostContext } from '../../src/pseudo/host.ts'
+import { hostContext } from '../../src/pseudo/host.js'
 import {
   getSimpleGraph,
   getMultiWorkspaceGraph,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test('host selector', async t => {
   // Helper function to convert GraphLike objects to HostContextsMapResult

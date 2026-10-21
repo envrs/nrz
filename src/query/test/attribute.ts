@@ -6,21 +6,21 @@ import {
   attribute,
   filterAttributes,
   getManifestPropertyValues,
-} from '../src/attribute.ts'
+} from '../src/attribute.js'
 import {
   getMissingNodeGraph,
   getSimpleGraph,
-} from './fixtures/graph.ts'
+} from './fixtures/graph.js'
 import {
   copyGraphSelectionState,
   getGraphSelectionState,
   selectorFixture,
-} from './fixtures/selector.ts'
-import type { TestCase } from './fixtures/types.ts'
+} from './fixtures/selector.js'
+import type { TestCase } from './fixtures/types.js'
 import type {
   GraphSelectionState,
   ParserState,
-} from '../src/types.ts'
+} from '../src/types.js'
 
 type ManifestLike = Record<string, any>
 

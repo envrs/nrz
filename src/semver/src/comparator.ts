@@ -2,7 +2,7 @@
 // comparator tuples, and instead just keep the parsed number arrays?
 import { syntaxError } from '@nrz/error-cause'
 import { fastSplit } from '@nrz/fast-split'
-import { Version } from './version.ts'
+import { Version } from './version.js'
 
 /** all comparators are expressed in terms of these operators */
 export type SimpleOperator = '' | '<' | '<=' | '>' | '>='

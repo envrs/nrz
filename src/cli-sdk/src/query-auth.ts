@@ -1,6 +1,6 @@
 import { getTokenByURL, registryKeys } from '@nrz/registry-client'
 import type { GetAuthHeader } from '@nrz/query'
-import type { LoadedConfig } from './config/index.ts'
+import type { LoadedConfig } from './config/index.js'
 
 /**
  * Returns a {@link GetAuthHeader} implementation that looks up

@@ -3,12 +3,12 @@ import * as os from 'node:os'
 import { posix, win32 } from 'node:path'
 import { inspect } from 'node:util'
 import t from 'tap'
-import { kCustomInspect } from '../src/index.ts'
+import { kCustomInspect } from '../src/index.js'
 import type {
   Scope,
   SpecOptions,
   Spec as SpecType,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 const { Spec } = await t.mockImport<typeof import('../src/index.ts')>(
   '../src/index.ts',

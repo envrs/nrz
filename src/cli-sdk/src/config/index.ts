@@ -42,7 +42,7 @@ import type { Jack, OptionsResults, Unwrap } from 'jackspeak'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { PathScurry } from 'path-scurry'
-import type { Commands, RecordField } from './definition.ts'
+import type { Commands, RecordField } from './definition.js'
 import {
   commands,
   definition,
@@ -51,10 +51,10 @@ import {
   isRecordField,
   recordFields,
   storeLinkers,
-} from './definition.ts'
-import { merge } from './merge.ts'
-import { cloneLayer, mergeLayers } from './merge-layers.ts'
-import { assertSpecAliases } from './spec-aliases.ts'
+} from './definition.js'
+import { merge } from './merge.js'
+import { cloneLayer, mergeLayers } from './merge-layers.js'
+import { assertSpecAliases } from './spec-aliases.js'
 export {
   commands,
   definition,

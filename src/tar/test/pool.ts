@@ -1,6 +1,6 @@
 import t from 'tap'
-import { cloneAvailable } from '../src/clonefile.ts'
-import { Pool } from '../src/pool.ts'
+import { cloneAvailable } from '../src/clonefile.js'
+import { Pool } from '../src/pool.js'
 
 import {
   lstatSync,
@@ -11,8 +11,8 @@ import {
 } from 'node:fs'
 import { resolve } from 'node:path'
 import { brotliCompressSync } from 'node:zlib'
-import { storeIndexPath } from '../src/store-index.ts'
-import { makeTar } from './fixtures/make-tar.ts'
+import { storeIndexPath } from '../src/store-index.js'
+import { makeTar } from './fixtures/make-tar.js'
 
 const p = new Pool()
 

@@ -2,8 +2,8 @@ import { error } from '@nrz/error-cause'
 import fs from 'node:fs'
 import { resolve } from 'node:path'
 import t from 'tap'
-import type { GitOptions } from '../src/index.ts'
-import { spawn } from '../src/spawn.ts'
+import type { GitOptions } from '../src/index.js'
+import { spawn } from '../src/spawn.js'
 
 t.test('no git', async t => {
   await t.rejects(spawn(['status'], { git: false }), {

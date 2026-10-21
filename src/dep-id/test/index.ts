@@ -16,9 +16,9 @@ import {
   resetCaches,
   joinExtra,
   splitExtra,
-} from '../src/index.ts'
-import { hydrate as browserHydrate } from '../src/browser.ts'
-import type { DepID } from '../src/index.ts'
+} from '../src/index.js'
+import { hydrate as browserHydrate } from '../src/browser.js'
+import type { DepID } from '../src/index.js'
 
 // there is no default registry any more; these cases still want one
 const defaultRegistry = 'https://registry.npmjs.org/'

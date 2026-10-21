@@ -1,8 +1,8 @@
 import t from 'tap'
 import type { Test } from 'tap'
 import { resolve } from 'node:path'
-import { command, views, usage } from '../../src/commands/publish.ts'
-import type { CommandResultSingle } from '../../src/commands/publish.ts'
+import { command, views, usage } from '../../src/commands/publish.js'
+import type { CommandResultSingle } from '../../src/commands/publish.js'
 import { PackageJson } from '@nrz/package-json'
 import { Monorepo } from '@nrz/workspaces'
 import {
@@ -11,7 +11,7 @@ import {
   registryBase,
   requestError,
 } from '@nrz/registry-client'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 interface MockResponse {
   statusCode?: number

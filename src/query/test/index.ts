@@ -1,11 +1,11 @@
 import t from 'tap'
-import { Query, walk } from '../src/index.ts'
+import { Query, walk } from '../src/index.js'
 import {
   getCycleGraph,
   getSimpleGraph,
   getSingleWorkspaceGraph,
-} from './fixtures/graph.ts'
-import { copyGraphSelectionState } from './fixtures/selector.ts'
+} from './fixtures/graph.js'
+import { copyGraphSelectionState } from './fixtures/selector.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import {
   asPackageReportData,
@@ -15,7 +15,7 @@ import type {
   ParsedSelectorToken,
   ParserState,
   QueryResponse,
-} from '../src/types.ts'
+} from '../src/types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 type TestCase = [string, string[]]

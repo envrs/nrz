@@ -3,7 +3,7 @@ import t from 'tap'
 import type {
   RunnerOptions,
   RunnerOptionsSync,
-} from '../src/index.ts'
+} from '../src/index.js'
 import {
   allSettled,
   allSettledSync,
@@ -16,7 +16,7 @@ import {
   raceSync,
   Runner,
   RunnerSync,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 RunnerSync
 

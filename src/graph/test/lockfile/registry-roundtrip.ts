@@ -7,11 +7,11 @@ import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import type { PackageInfoClient } from '@nrz/package-info'
-import { Graph } from '../../src/graph.ts'
-import { save } from '../../src/lockfile/save.ts'
-import { load as loadVirtual } from '../../src/lockfile/load.ts'
-import type { AddImportersDependenciesMap } from '../../src/dependencies.ts'
-import type { InstallOptions } from '../../src/install.ts'
+import { Graph } from '../../src/graph.js'
+import { save } from '../../src/lockfile/save.js'
+import { load as loadVirtual } from '../../src/lockfile/load.js'
+import type { AddImportersDependenciesMap } from '../../src/dependencies.js'
+import type { InstallOptions } from '../../src/install.js'
 
 // Reproduces nrz/nrz#1580: lockfile node/edge registry references
 // should not flip back to npm after a re-load and re-save when a custom

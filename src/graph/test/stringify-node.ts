@@ -1,5 +1,5 @@
 import t from 'tap'
-import { stringifyNode } from '../src/stringify-node.ts'
+import { stringifyNode } from '../src/stringify-node.js'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import type { NodeLike } from '@nrz/types'
 

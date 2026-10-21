@@ -1,5 +1,5 @@
-import { error, syntaxError, typeError } from '../src/index.ts'
-import type { ErrorCauseOptions } from '../src/index.ts'
+import { error, syntaxError, typeError } from '../src/index.js'
+import type { ErrorCauseOptions } from '../src/index.js'
 import t from 'tap'
 
 t.test('error types', async t => {

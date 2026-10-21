@@ -1,14 +1,14 @@
 import { update } from '@nrz/graph'
 import type { LinkSkillsResult } from '@nrz/graph'
 import { error } from '@nrz/error-cause'
-import { commandUsage } from '../config/usage.ts'
-import { saveAllowSkills } from '../allow-skills.ts'
-import { planSpecConfigPersist } from '../persist-spec-config.ts'
-import { asUnknownSpecPrefix } from '../require-registry.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import { lazyView } from '../view.ts'
-import type { Views } from '../view.ts'
-import type { InstallResult } from './install.ts'
+import { commandUsage } from '../config/usage.js'
+import { saveAllowSkills } from '../allow-skills.js'
+import { planSpecConfigPersist } from '../persist-spec-config.js'
+import { asUnknownSpecPrefix } from '../require-registry.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import { lazyView } from '../view.js'
+import type { Views } from '../view.js'
+import type { InstallResult } from './install.js'
 
 export const needsRegistry = true
 export const needsNpmRegistry = true

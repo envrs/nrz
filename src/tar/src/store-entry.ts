@@ -10,8 +10,8 @@ import {
 import { join, relative } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { rimrafSync } from 'rimraf'
-import { readStoreIndex, storeIndexPath } from './store-index.ts'
-import { storeLayout } from './unpack.ts'
+import { readStoreIndex, storeIndexPath } from './store-index.js'
+import { storeLayout } from './unpack.js'
 
 const noThrow = { throwIfNoEntry: false } as const
 

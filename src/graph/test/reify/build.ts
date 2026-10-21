@@ -9,8 +9,8 @@ import * as FS from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { Diff } from '../../src/diff.ts'
-import { actual } from '../../src/index.ts'
+import { Diff } from '../../src/diff.js'
+import { actual } from '../../src/index.js'
 
 const runs: RunOptions[] = []
 t.beforeEach(() => (runs.length = 0))

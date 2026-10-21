@@ -21,9 +21,9 @@ import type {
   BreadcrumbSpecificity,
   ModifierComparatorOptions,
   InternalModifierComparatorOptions,
-} from './types.ts'
+} from './types.js'
 
-export * from './types.ts'
+export * from './types.js'
 
 /**
  * The returned pseudo selector parameters object.

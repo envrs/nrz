@@ -1,14 +1,14 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { prerelease } from '../../src/pseudo/prerelease.ts'
+import type { ParserState } from '../../src/types.js'
+import { prerelease } from '../../src/pseudo/prerelease.js'
 import { parse } from '@nrz/semver'
 import {
   getSemverRichGraph,
   getSimpleGraph,
   newGraph,
   newNode,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 
 t.test(':prerelease pseudo-selector', async t => {
   const getState = (query: string, graph = getSemverRichGraph()) => {

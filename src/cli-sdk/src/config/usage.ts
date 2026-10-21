@@ -1,6 +1,6 @@
 import { jack } from 'jackspeak'
-import type { CommandUsage } from '../index.ts'
-import { commandAliases } from './definition.ts'
+import type { CommandUsage } from '../index.js'
+import { commandAliases } from './definition.js'
 
 const toArr = <T>(v: T | T[]): T[] => (Array.isArray(v) ? v : [v])
 

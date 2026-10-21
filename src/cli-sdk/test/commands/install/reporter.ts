@@ -5,8 +5,8 @@ import * as ink from 'ink'
 import { PassThrough } from 'node:stream'
 import { setTimeout } from 'node:timers/promises'
 import t from 'tap'
-import type { InstallResult } from '../../../src/commands/install.ts'
-import type { LoadedConfig } from '../../../src/config/index.ts'
+import type { InstallResult } from '../../../src/commands/install.js'
+import type { LoadedConfig } from '../../../src/config/index.js'
 
 let out = ''
 const stdout = Object.assign(new PassThrough(), { columns: 200 })

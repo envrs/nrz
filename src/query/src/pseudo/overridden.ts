@@ -1,5 +1,5 @@
-import type { ParserState } from '../types.ts'
-import { removeEdge, removeUnlinkedNodes } from './helpers.ts'
+import type { ParserState } from '../types.js'
+import { removeEdge, removeUnlinkedNodes } from './helpers.js'
 
 /**
  * :overridden Pseudo-Selector, matches only edges that have a truthy overridden property in their spec.

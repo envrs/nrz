@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PathScurry } from 'path-scurry'
-import type { Node } from '../node.ts'
+import type { Node } from '../node.js'
 
 /**
  * Make all the packages' bins executable.

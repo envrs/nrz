@@ -4,7 +4,7 @@ import {
   confirm,
   editQuery,
   interactive,
-} from '../src/skills-prompt.ts'
+} from '../src/skills-prompt.js'
 
 const tick = () => new Promise(r => setImmediate(r))
 

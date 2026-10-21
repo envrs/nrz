@@ -4,17 +4,17 @@ import t from 'tap'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { asDependency } from '../../src/dependencies.ts'
-import { Edge } from '../../src/edge.ts'
-import { Graph } from '../../src/graph.ts'
+} from '../../src/dependencies.js'
+import { asDependency } from '../../src/dependencies.js'
+import { Edge } from '../../src/edge.js'
+import { Graph } from '../../src/graph.js'
 import {
   compareByHasPeerDeps,
   compareByType,
   getNodeOrderedDependencies,
   getOrderedDependencies,
   isPeerType,
-} from '../../src/ideal/sorting.ts'
+} from '../../src/ideal/sorting.js'
 
 t.test('isPeerType', async t => {
   t.ok(isPeerType('peer'), 'should return true for peer')

@@ -5,7 +5,7 @@ import {
   defaultRegistries,
 } from '@nrz/spec'
 import t from 'tap'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { LoadedConfig } from '../src/config/index.js'
 
 const { planSpecConfigPersist, persistedEntries } =
   await t.mockImport<typeof import('../src/persist-spec-config.ts')>(

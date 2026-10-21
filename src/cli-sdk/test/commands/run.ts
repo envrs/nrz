@@ -1,8 +1,8 @@
 import { resolve } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
-import { command, usage, views } from '../../src/commands/run.ts'
-import { setupEnv } from '../fixtures/util.ts'
+import { command, usage, views } from '../../src/commands/run.js'
+import { setupEnv } from '../fixtures/util.js'
 import { unload } from '@nrz/nrz-json'
 
 setupEnv(t)

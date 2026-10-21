@@ -1,8 +1,8 @@
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import { basename } from 'node:path'
-import type { NrxOptions } from './index.ts'
-import { nrxInfo } from './info.ts'
-import { nrxList } from './list.ts'
+import type { NrxOptions } from './index.js'
+import { nrxInfo } from './info.js'
+import { nrxList } from './list.js'
 
 const keyMatch = (keys: string[], path: string): boolean => {
   if (!keys.length) return true

@@ -6,10 +6,10 @@ import type {
   AddImportersDependenciesMap,
   Dependency,
   RemoveImportersDependenciesMap,
-} from '../dependencies.ts'
-import type { ModifierActiveEntry } from '../modifiers.ts'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
+} from '../dependencies.js'
+import type { ModifierActiveEntry } from '../modifiers.js'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
 
 /**
  * A map of dependencies to be added to non-importer nodes.

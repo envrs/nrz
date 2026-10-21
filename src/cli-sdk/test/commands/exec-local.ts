@@ -6,9 +6,9 @@ import {
   command,
   usage,
   views,
-} from '../../src/commands/exec-local.ts'
-import type { ExecResult } from '../../src/exec-command.ts'
-import { setupEnv } from '../fixtures/util.ts'
+} from '../../src/commands/exec-local.js'
+import type { ExecResult } from '../../src/exec-command.js'
+import { setupEnv } from '../fixtures/util.js'
 
 setupEnv(t)
 

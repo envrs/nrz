@@ -7,15 +7,15 @@ import { Monorepo } from '@nrz/workspaces'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { Edge } from '../../src/edge.ts'
-import { Graph } from '../../src/graph.ts'
+import { Edge } from '../../src/edge.js'
+import { Graph } from '../../src/graph.js'
 import {
   lockfileData,
   save,
   saveHidden,
-} from '../../src/lockfile/save.ts'
-import { load } from '../../src/lockfile/load.ts'
-import { GraphModifier } from '../../src/modifiers.ts'
+} from '../../src/lockfile/save.js'
+import { load } from '../../src/lockfile/load.js'
+import { GraphModifier } from '../../src/modifiers.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

@@ -5,15 +5,15 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { Graph } from '../../src/graph.ts'
-import type { Node } from '../../src/node.ts'
+import { Graph } from '../../src/graph.js'
+import type { Node } from '../../src/node.js'
 import {
   discoverSkills,
   readFrontmatter,
   shipsSkills,
-} from '../../src/skills/discover.ts'
-import type { SkillsDir } from '../../src/skills/dirs.ts'
-import { readMounts } from '../../src/skills/mounts.ts'
+} from '../../src/skills/discover.js'
+import type { SkillsDir } from '../../src/skills/dirs.js'
+import { readMounts } from '../../src/skills/mounts.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

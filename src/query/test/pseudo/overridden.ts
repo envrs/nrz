@@ -1,12 +1,12 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
-import type { ParserState } from '../../src/types.ts'
-import { overridden } from '../../src/pseudo/overridden.ts'
+import type { ParserState } from '../../src/types.js'
+import { overridden } from '../../src/pseudo/overridden.js'
 import {
   getSimpleGraph,
   newGraph,
   newNode,
-} from '../fixtures/graph.ts'
+} from '../fixtures/graph.js'
 import { Spec } from '@nrz/spec/browser'
 import type { GraphLike, NodeLike } from '@nrz/types'
 import type { SpecOptions } from '@nrz/spec/browser'

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import t from 'tap'
-import { CacheEntry } from '../src/cache-entry.ts'
-import { collectHeaders, readBody } from '../src/response.ts'
+import { CacheEntry } from '../src/cache-entry.js'
+import { collectHeaders, readBody } from '../src/response.js'
 
 t.test('collectHeaders', t => {
   const h = collectHeaders({

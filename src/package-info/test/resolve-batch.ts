@@ -1,8 +1,8 @@
 import t from 'tap'
 import { Readable } from 'node:stream'
 import type { RegistryClient } from '@nrz/registry-client'
-import { fetchResolve } from '../src/resolve-batch.ts'
-import type { ResolveRecord } from '../src/resolve-batch.ts'
+import { fetchResolve } from '../src/resolve-batch.js'
+import type { ResolveRecord } from '../src/resolve-batch.js'
 
 const registry = 'https://registry.nrz.khulnasoft.com/acme/npm/'
 

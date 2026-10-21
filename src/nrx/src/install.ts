@@ -7,11 +7,11 @@ import { createHash } from 'node:crypto'
 import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
-import { dirExists } from './dir-exists.ts'
-import { doPrompt } from './do-prompt.ts'
-import type { PromptFn, NrxInfo, NrxOptions } from './index.ts'
-import { inferName } from './infer-name.ts'
-import { nrxInfo } from './info.ts'
+import { dirExists } from './dir-exists.js'
+import { doPrompt } from './do-prompt.js'
+import type { PromptFn, NrxInfo, NrxOptions } from './index.js'
+import { inferName } from './infer-name.js'
+import { nrxInfo } from './info.js'
 
 /**
  * Install a given package spec in the appropriate folder, if it's not

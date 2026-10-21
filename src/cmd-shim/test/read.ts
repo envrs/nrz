@@ -4,7 +4,7 @@ import type { RollbackRemove } from '@nrz/rollback-remove'
 import { renameSync, rmSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { cmdShim } from '../src/index.ts'
+import { cmdShim } from '../src/index.js'
 const {
   findCmdShim,
   findCmdShimIfExists,

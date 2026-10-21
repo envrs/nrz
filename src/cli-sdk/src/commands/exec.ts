@@ -4,12 +4,12 @@ import * as nrx from '@nrz/nrx'
 import { homedir } from 'node:os'
 import { env, platform } from 'node:process'
 import { createInterface } from 'node:readline/promises'
-import { commandUsage } from '../config/usage.ts'
-import type { ExecResult } from '../exec-command.ts'
-import { ExecCommand } from '../exec-command.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import { styleTextStdout } from '../output.ts'
-export { views } from '../exec-command.ts'
+import { commandUsage } from '../config/usage.js'
+import type { ExecResult } from '../exec-command.js'
+import { ExecCommand } from '../exec-command.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import { styleTextStdout } from '../output.js'
+export { views } from '../exec-command.js'
 
 export const needsRegistry = true
 export const needsNpmRegistry = true

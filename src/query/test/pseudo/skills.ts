@@ -1,9 +1,9 @@
 import t from 'tap'
 import postcssSelectorParser from 'postcss-selector-parser'
 import type { EdgeLike, NodeLike } from '@nrz/types'
-import type { HasSkills, ParserState } from '../../src/types.ts'
-import { skills } from '../../src/pseudo/skills.ts'
-import { getSimpleGraph } from '../fixtures/graph.ts'
+import type { HasSkills, ParserState } from '../../src/types.js'
+import { skills } from '../../src/pseudo/skills.js'
+import { getSimpleGraph } from '../fixtures/graph.js'
 
 const getState = (
   query: string,

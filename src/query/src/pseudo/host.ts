@@ -6,8 +6,8 @@ import {
   isStringNode,
   isTagNode,
 } from '@nrz/dss-parser'
-import { removeQuotes } from './helpers.ts'
-import type { ParserState } from '../types.ts'
+import { removeQuotes } from './helpers.js'
+import type { ParserState } from '../types.js'
 import type { PostcssNode } from '@nrz/dss-parser'
 
 /**

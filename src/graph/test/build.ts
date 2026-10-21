@@ -4,7 +4,7 @@ import t from 'tap'
 import type { Test } from 'tap'
 import { joinDepIDTuple } from '@nrz/dep-id'
 import type { DepID } from '@nrz/dep-id'
-import { build } from '../src/build.ts'
+import { build } from '../src/build.js'
 import { PackageJson } from '@nrz/package-json'
 import { PathScurry } from 'path-scurry'
 

@@ -8,8 +8,8 @@ import {
 import type { DepID } from '@nrz/dep-id'
 import { asError } from '@nrz/types'
 import type { NodeLike } from '@nrz/types'
-import type { Graph } from './graph.ts'
-import { hasSkills } from './skills/lazy.ts'
+import type { Graph } from './graph.js'
+import { hasSkills } from './skills/lazy.js'
 
 /**
  * One top-level selector of a query: the ids it matched, and its

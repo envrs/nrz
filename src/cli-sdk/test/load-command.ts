@@ -1,6 +1,6 @@
 import t from 'tap'
-import { loadCommand } from '../src/load-command.ts'
-import type { Commands } from '../src/config/definition.ts'
+import { loadCommand } from '../src/load-command.js'
+import type { Commands } from '../src/config/definition.js'
 
 t.test('loads a valid command', async t => {
   const command = await loadCommand('install')

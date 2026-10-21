@@ -19,13 +19,13 @@ import {
 import { error } from '@nrz/error-cause'
 import type { RollbackRemove } from '@nrz/rollback-remove'
 import { dirname, isAbsolute, relative } from 'node:path'
-import { convertToSetCommands } from './to-batch-syntax.ts'
+import { convertToSetCommands } from './to-batch-syntax.js'
 export {
   findCmdShim,
   findCmdShimIfExists,
   readCmdShim,
   readCmdShimIfExists,
-} from './read.ts'
+} from './read.js'
 
 const shebangExpr =
   /^#!\s*(?:\/usr\/bin\/env\s+(?:-S\s+)?((?:[^ \t=]+=[^ \t=]+\s+)*))?([^ \t]+)(.*)$/

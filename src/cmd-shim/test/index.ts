@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { resolve } from 'node:path'
 import t from 'tap'
-import { cmdShim, cmdShimIfExists } from '../src/index.ts'
+import { cmdShim, cmdShimIfExists } from '../src/index.js'
 
 const removed: string[] = []
 t.beforeEach(() => (removed.length = 0))

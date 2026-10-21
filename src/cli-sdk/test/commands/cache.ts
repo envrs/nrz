@@ -26,8 +26,8 @@ import { gzipSync } from 'node:zlib'
 import type { Test } from 'tap'
 import t from 'tap'
 import { Header } from 'tar'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import { drainer } from '../fixtures/drainer.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import { drainer } from '../fixtures/drainer.js'
 
 const logged: unknown[][] = []
 const stdout = (...a: unknown[]) => logged.push(a)

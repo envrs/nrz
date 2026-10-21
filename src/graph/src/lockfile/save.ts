@@ -16,20 +16,20 @@ import {
   getFlagNumFromNode,
   getBuildStateFromNode,
   LOCKFILE_VERSION,
-} from './types.ts'
+} from './types.js'
 import type { DepID } from '@nrz/dep-id'
 import type { SpecOptions } from '@nrz/spec'
-import type { Edge } from '../edge.ts'
-import type { Graph } from '../graph.ts'
-import type { Node } from '../node.ts'
+import type { Edge } from '../edge.js'
+import type { Graph } from '../graph.js'
+import type { Node } from '../node.js'
 import type {
   LockfileData,
   LockfileEdgeKey,
   LockfileEdges,
   LockfileEdgeValue,
   LockfileNode,
-} from './types.ts'
-import type { GraphModifier } from '../modifiers.ts'
+} from './types.js'
+import type { GraphModifier } from '../modifiers.js'
 import { error } from '@nrz/error-cause'
 
 export type SaveOptions = SpecOptions & {

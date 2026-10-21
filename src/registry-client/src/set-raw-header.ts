@@ -1,7 +1,7 @@
 import {
   getDecodedValue,
   getEncondedValue,
-} from './string-encoding.ts'
+} from './string-encoding.js'
 
 /**
  * Given a rawHeaders array of [key, value, key2, value2, ...],

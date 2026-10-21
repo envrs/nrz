@@ -2,7 +2,7 @@ import { unload } from '@nrz/nrz-json'
 import type { DepResults } from '@nrz/graph-run'
 import { resolve } from 'node:path'
 import t from 'tap'
-import type { Workspace } from '../src/index.ts'
+import type { Workspace } from '../src/index.js'
 import {
   asManifestWSConfig,
   asWSConfig,
@@ -11,7 +11,7 @@ import {
   resolveWSConfig,
   setNrzJsonOnly,
   splitNegatedPatterns,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 t.test('load some workspaces', async t => {
   const dir = t.testdir({

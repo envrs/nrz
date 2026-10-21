@@ -12,13 +12,13 @@ import {
 import { basename, dirname, posix, resolve, win32 } from 'node:path'
 import t from 'tap'
 import type { Test } from 'tap'
-import { linkFromStore } from '../src/link-tree.ts'
-import type { StoreLinkResult } from '../src/link-tree.ts'
-import { storeCopiedPath } from '../src/store-entry.ts'
-import { storeIndexPath } from '../src/store-index.ts'
-import type { StoreIndex } from '../src/store-index.ts'
-import { unpackToStoreSync } from '../src/unpack.ts'
-import { makeTar } from './fixtures/make-tar.ts'
+import { linkFromStore } from '../src/link-tree.js'
+import type { StoreLinkResult } from '../src/link-tree.js'
+import { storeCopiedPath } from '../src/store-entry.js'
+import { storeIndexPath } from '../src/store-index.js'
+import type { StoreIndex } from '../src/store-index.js'
+import { unpackToStoreSync } from '../src/unpack.js'
+import { makeTar } from './fixtures/make-tar.js'
 
 type LinkTree = typeof import('../src/link-tree.ts')
 

@@ -5,8 +5,8 @@ import { unload } from '@nrz/nrz-json'
 import { Monorepo } from '@nrz/workspaces'
 import { PathScurry } from 'path-scurry'
 import type { Test } from 'tap'
-import { load } from '../../src/actual/load.ts'
-import type { Graph } from '../../src/graph.ts'
+import { load } from '../../src/actual/load.js'
+import type { Graph } from '../../src/graph.js'
 
 const configData = {
   registry: 'https://registry.npmjs.org/',

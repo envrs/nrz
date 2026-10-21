@@ -2,7 +2,7 @@ import t from 'tap'
 import { normalizeRegistryKey } from '@nrz/registry-client'
 import type { Token } from '@nrz/registry-client'
 import { defaultRegistries } from '@nrz/spec'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 type Added = [string, Record<string, unknown>]
 

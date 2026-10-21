@@ -37,18 +37,18 @@ import type {
   PackageInfoClientExtractOptions,
   PackageInfoClientOptions,
   PackageInfoClientRequestOptions,
-} from '../src/index.ts'
+} from '../src/index.js'
 import { cacheKey } from '@nrz/registry-client'
 import { CacheEntry } from '@nrz/registry-client/cache-entry'
 import unzipMain from '@nrz/cache-unzip/unzip'
 // not exported: what the background revalidation child runs
-import { revalidateEntry } from '../../registry-client/src/revalidate-entry.ts'
+import { revalidateEntry } from '../../registry-client/src/revalidate-entry.js'
 import {
   PackageInfoClient,
   PACKUMENT_ACCEPT,
   resetCapabilities,
-} from '../src/index.ts'
-import { drainer } from './fixtures/drainer.ts'
+} from '../src/index.js'
+import { drainer } from './fixtures/drainer.js'
 
 t.saveFixture = true
 

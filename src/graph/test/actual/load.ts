@@ -12,11 +12,11 @@ import {
   getPathBasedId,
   asStoreConfigObject,
   verifyImporterNodeModules,
-} from '../../src/actual/load.ts'
-import { loadHidden } from '../../src/lockfile/load.ts'
-import { objectLikeOutput } from '../../src/visualization/object-like-output.ts'
-import { actualGraph } from '../fixtures/actual.ts'
-import { GraphModifier } from '../../src/modifiers.ts'
+} from '../../src/actual/load.js'
+import { loadHidden } from '../../src/lockfile/load.js'
+import { objectLikeOutput } from '../../src/visualization/object-like-output.js'
+import { actualGraph } from '../fixtures/actual.js'
+import { GraphModifier } from '../../src/modifiers.js'
 import type { Path } from 'path-scurry'
 import type { SpecOptions } from '@nrz/spec'
 

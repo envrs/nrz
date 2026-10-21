@@ -15,16 +15,16 @@ const inspect = (obj: unknown, opts?: InspectOptions) =>
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
 import type { Test } from 'tap'
-import { load } from '../../src/actual/load.ts'
+import { load } from '../../src/actual/load.js'
 import type {
   AddImportersDependenciesMap,
   RemoveImportersDependenciesMap,
-} from '../../src/dependencies.ts'
-import { asDependency } from '../../src/dependencies.ts'
-import { Edge } from '../../src/edge.ts'
-import { Graph } from '../../src/graph.ts'
-import { getImporterSpecs } from '../../src/ideal/get-importer-specs.ts'
-import { GraphModifier } from '../../src/modifiers.ts'
+} from '../../src/dependencies.js'
+import { asDependency } from '../../src/dependencies.js'
+import { Edge } from '../../src/edge.js'
+import { Graph } from '../../src/graph.js'
+import { getImporterSpecs } from '../../src/ideal/get-importer-specs.js'
+import { GraphModifier } from '../../src/modifiers.js'
 
 Object.assign(Spec.prototype, {
   [kCustomInspect](this: Spec) {

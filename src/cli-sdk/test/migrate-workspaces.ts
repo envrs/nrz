@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { LoadedConfig } from '../src/config/index.ts'
+import type { LoadedConfig } from '../src/config/index.js'
 
 const pkg = (name: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ name, version: '1.0.0', ...extra })

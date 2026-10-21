@@ -1,7 +1,7 @@
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
-import type { CIResult } from '../../src/commands/ci.ts'
-import { loadLazyView } from '../../src/view.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
+import type { CIResult } from '../../src/commands/ci.js'
+import { loadLazyView } from '../../src/view.js'
 
 const options = {}
 let log = ''

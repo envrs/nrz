@@ -2,7 +2,7 @@ import { PackageJson } from '@nrz/package-json'
 import type { Manifest } from '@nrz/types'
 import { resolve } from 'node:path'
 import t from 'tap'
-import type { NrxManifest, NrxOptions } from '../src/index.ts'
+import type { NrxManifest, NrxOptions } from '../src/index.js'
 
 const { nrxInfo } = await t.mockImport<
   typeof import('../src/info.ts')

@@ -2,7 +2,7 @@ import { PackageJson } from '@nrz/package-json'
 import { PathScurry } from 'path-scurry'
 import type { Test } from 'tap'
 import t from 'tap'
-import type { LoadedConfig } from '../../src/config/index.ts'
+import type { LoadedConfig } from '../../src/config/index.js'
 
 const mockCommand = (t: Test, mocks?: Record<string, any>) =>
   t.mockImport<typeof import('../../src/commands/config.ts')>(

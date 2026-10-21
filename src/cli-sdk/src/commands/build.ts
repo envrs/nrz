@@ -1,9 +1,9 @@
 import { build } from '@nrz/graph'
 import type { BuildResult, Node } from '@nrz/graph'
 import { error } from '@nrz/error-cause'
-import { commandUsage } from '../config/usage.ts'
-import type { CommandFn, CommandUsage } from '../index.ts'
-import type { Views } from '../view.ts'
+import { commandUsage } from '../config/usage.js'
+import type { CommandFn, CommandUsage } from '../index.js'
+import type { Views } from '../view.js'
 import { isErrorWithCause } from '@nrz/types'
 
 const skippedMessage = (

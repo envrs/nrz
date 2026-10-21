@@ -1,8 +1,8 @@
 import { error } from '@nrz/error-cause'
 import { asPostcssNodeWithChildren } from '@nrz/dss-parser'
-import { removeDanglingEdges, removeNode } from './helpers.ts'
-import { parseInternals } from './spec.ts'
-import type { ParserState } from '../types.ts'
+import { removeDanglingEdges, removeNode } from './helpers.js'
+import { parseInternals } from './spec.js'
+import type { ParserState } from '../types.js'
 
 /**
  * Given a set of changed file paths and a package location

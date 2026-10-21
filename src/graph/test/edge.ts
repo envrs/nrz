@@ -2,8 +2,8 @@ import { Spec, kCustomInspect } from '@nrz/spec'
 import type { SpecOptions } from '@nrz/spec'
 import { inspect } from 'node:util'
 import t from 'tap'
-import { Edge } from '../src/edge.ts'
-import { Node } from '../src/node.ts'
+import { Edge } from '../src/edge.js'
+import { Node } from '../src/node.js'
 import type { GraphLike } from '@nrz/types'
 
 t.cleanSnapshot = s =>

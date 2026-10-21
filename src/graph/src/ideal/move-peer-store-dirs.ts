@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { rename } from 'node:fs/promises'
 import type { PathScurry } from 'path-scurry'
 import type { RollbackRemove } from '@nrz/rollback-remove'
-import type { PeerStoreMove } from './canonicalize-peer-ids.ts'
-import type { Node } from '../node.ts'
+import type { PeerStoreMove } from './canonicalize-peer-ids.js'
+import type { Node } from '../node.js'
 
 type Staged = {
   node: Node

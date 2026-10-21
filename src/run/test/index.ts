@@ -9,8 +9,8 @@ import {
   isRunResult,
   npmConfigUserAgent,
   run,
-} from '../src/index.ts'
-import * as nodeGypUtils from '../src/node-gyp.ts'
+} from '../src/index.js'
+import * as nodeGypUtils from '../src/node-gyp.js'
 
 const isPosix = process.platform !== 'win32'
 const esc = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`

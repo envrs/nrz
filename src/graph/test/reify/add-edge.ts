@@ -6,9 +6,9 @@ import { rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { PathScurry } from 'path-scurry'
 import t from 'tap'
-import { Edge } from '../../src/edge.ts'
-import { Node } from '../../src/node.ts'
-import { addEdge } from '../../src/reify/add-edge.ts'
+import { Edge } from '../../src/edge.js'
+import { Node } from '../../src/node.js'
+import { addEdge } from '../../src/reify/add-edge.js'
 import type { GraphLike } from '@nrz/types'
 
 const mockRemover = {
