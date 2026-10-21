@@ -14,8 +14,14 @@ const workspaces = {
   '.': {
     entry,
     // Used to download fixtures in a bash script
-    ignoreDependencies: ['@nrz/benchmark'],
-    ignore: ['coverage-map.js'],
+    ignoreDependencies: [
+      '@nrz/benchmark',
+      'eslint-import-resolver-typescript',
+      'eslint-plugin-import',
+      'eslint-plugin-jsdoc',
+      'globals',
+    ],
+    ignore: ['coverage-map.js', 'eslint.config.mjs'],
   },
   'src/cli-sdk': {
     entry: [...entry, 'src/commands/*.ts'],
@@ -40,8 +46,8 @@ export default {
     './infra/cli-benchmarks/fixtures/**',
     './www/**',
   ],
-  ignoreBinaries: ['hyperfine', 'xvn', 'sleep'],
-  eslint: ['eslint.config.mjs'],
+  ignoreBinaries: ['hyperfine', 'xvn', 'sleep', 'tap'],
+  eslint: false,
   workspaces: Object.fromEntries(
     getWorkspaces().map(ws => {
       const key = relative(process.cwd(), ws.dir) || '.'
