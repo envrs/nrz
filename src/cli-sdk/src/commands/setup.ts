@@ -184,7 +184,9 @@ export const command: CommandFn<SetupResult> = async conf => {
           { code: 'ECONFIG' },
         )
       }
-      account = await ask('nrz.khulnasoft.com account or organization slug: ')
+      account = await ask(
+        'nrz.khulnasoft.com account or organization slug: ',
+      )
       if (!account) {
         throw error('No account slug provided.', { code: 'ECONFIG' })
       }

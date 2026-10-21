@@ -1,7 +1,8 @@
 ---
 title: npm
 description:
-  Configure npm for your nrz.khulnasoft.com registries, and publish to main.
+  Configure npm for your nrz.khulnasoft.com registries, and publish to
+  main.
 sidebar:
   label: npm
   order: 2
@@ -51,8 +52,8 @@ Drop the `@acme:registry` line if you only want the mirror, or the
 npm install abbrev
 ```
 
-Resolves through `https://registry.nrz.khulnasoft.com/acme/npm/`. To move an
-existing project onto the mirror, keep `package-lock.json` and
+Resolves through `https://registry.nrz.khulnasoft.com/acme/npm/`. To
+move an existing project onto the mirror, keep `package-lock.json` and
 reinstall. npm's `replace-registry-host` (on by default) fetches
 locked `registry.npmjs.org` URLs from your configured registry:
 
@@ -135,9 +136,10 @@ the registry requires an interactive confirmation for writes made with
 a personal token.
 
 A **service token** skips the prompt, which is how you publish from
-CI. Create one at [nrz.khulnasoft.com → Tokens](https://www.nrz.khulnasoft.com) by choosing
-_This is a service token_, with the `package:write` scope. Nothing
-else in this guide changes — it is a drop-in replacement for
+CI. Create one at
+[nrz.khulnasoft.com → Tokens](https://www.nrz.khulnasoft.com) by
+choosing _This is a service token_, with the `package:write` scope.
+Nothing else in this guide changes — it is a drop-in replacement for
 `NRZ_TOKEN`. See [CI & automation](/registry/publishing/ci).
 
 ## Log in instead of using a token
@@ -174,12 +176,12 @@ npm view @acme/my-package                                   # inspect a package
 ## Gotchas
 
 - **Trailing slashes matter.**
-  `//registry.nrz.khulnasoft.com/acme/npm/:_authToken` must match the registry URL
-  exactly, slash included.
+  `//registry.nrz.khulnasoft.com/acme/npm/:_authToken` must match the
+  registry URL exactly, slash included.
 - **Use `${VAR}`, not `$VAR`.** Only the braced form is expanded.
 - One auth line per registry. A host-wide
-  `//registry.nrz.khulnasoft.com/:_authToken=${NRZ_TOKEN}` does work for npm, but
-  it is not portable to bun, so prefer the explicit per-registry lines
-  above.
+  `//registry.nrz.khulnasoft.com/:_authToken=${NRZ_TOKEN}` does work
+  for npm, but it is not portable to bun, so prefer the explicit
+  per-registry lines above.
 - **Never commit a literal token.** Keep `${NRZ_TOKEN}` in the file
   and the real value in your environment.

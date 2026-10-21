@@ -233,7 +233,10 @@ t.test('get', async t => {
       ['get', '@darcy:registry'],
       mockOptions,
     )
-    t.strictSame(result, 'https://registry.nrz.khulnasoft.com/darcy/main/')
+    t.strictSame(
+      result,
+      'https://registry.nrz.khulnasoft.com/darcy/main/',
+    )
   })
 
   t.test('dot-prop non-existent registry', async t => {

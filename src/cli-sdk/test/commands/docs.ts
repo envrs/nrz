@@ -269,65 +269,71 @@ t.test('git+ prefix stripped from repository url', async t => {
   t.strictSame(fromUrlCalls, ['https://github.com/user/repo'])
 })
 
-t.test('fallback to nrz.khulnasoft.com when no repository', async t => {
-  mockManifest = {
-    name: 'no-repo-pkg',
-  }
-
-  const config = {
-    positionals: ['no-repo-pkg'],
-    get: () => undefined,
-    options: {
-      projectRoot: '/test/project',
-      packageJson: {
-        read: () => ({}),
-      },
-    },
-  } as unknown as LoadedConfig
-
-  const result = await Command.command(config)
-
-  t.strictSame(
-    result,
-    {
+t.test(
+  'fallback to nrz.khulnasoft.com when no repository',
+  async t => {
+    mockManifest = {
       name: 'no-repo-pkg',
-      url: 'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
-    },
-    'opens default nrz.khulnasoft.com URL',
-  )
-  t.equal(
-    openedUrl,
-    'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
-    'opens default nrz.khulnasoft.com URL',
-  )
-})
+    }
 
-t.test('fallback to nrz.khulnasoft.com when hosted-git-info fails', async t => {
-  mockManifest = {
-    name: 'unknown-host-pkg',
-    repository: 'https://unknown-git-host.com/user/repo',
-  }
-
-  mockFromUrlResult = null
-
-  const config = {
-    positionals: ['unknown-host-pkg'],
-    get: () => undefined,
-    options: {
-      projectRoot: '/test/project',
-      packageJson: {
-        read: () => ({}),
+    const config = {
+      positionals: ['no-repo-pkg'],
+      get: () => undefined,
+      options: {
+        projectRoot: '/test/project',
+        packageJson: {
+          read: () => ({}),
+        },
       },
-    },
-  } as unknown as LoadedConfig
+    } as unknown as LoadedConfig
 
-  const result = await Command.command(config)
+    const result = await Command.command(config)
 
-  t.strictSame(result, {
-    name: 'unknown-host-pkg',
-    url: 'https://nrz.khulnasoft.com/explore/npm/unknown-host-pkg/overview',
-  })
-})
+    t.strictSame(
+      result,
+      {
+        name: 'no-repo-pkg',
+        url: 'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
+      },
+      'opens default nrz.khulnasoft.com URL',
+    )
+    t.equal(
+      openedUrl,
+      'https://nrz.khulnasoft.com/explore/npm/no-repo-pkg/overview',
+      'opens default nrz.khulnasoft.com URL',
+    )
+  },
+)
+
+t.test(
+  'fallback to nrz.khulnasoft.com when hosted-git-info fails',
+  async t => {
+    mockManifest = {
+      name: 'unknown-host-pkg',
+      repository: 'https://unknown-git-host.com/user/repo',
+    }
+
+    mockFromUrlResult = null
+
+    const config = {
+      positionals: ['unknown-host-pkg'],
+      get: () => undefined,
+      options: {
+        projectRoot: '/test/project',
+        packageJson: {
+          read: () => ({}),
+        },
+      },
+    } as unknown as LoadedConfig
+
+    const result = await Command.command(config)
+
+    t.strictSame(result, {
+      name: 'unknown-host-pkg',
+      url: 'https://nrz.khulnasoft.com/explore/npm/unknown-host-pkg/overview',
+    })
+  },
+)
 
 t.test('error when no manifest found', async t => {
   mockManifest = undefined

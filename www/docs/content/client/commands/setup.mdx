@@ -8,24 +8,26 @@ Usage:
 
 <Code code="$ nrz setup [<account>]" title="Terminal" lang="bash" />
 
-Configure the registry aliases for your nrz.khulnasoft.com account so that
-`nrz install` and `nrx` work out of the box.
+Configure the registry aliases for your nrz.khulnasoft.com account so
+that `nrz install` and `nrx` work out of the box.
 
 The `npm` registry alias has no built-in URL, so a fresh project can't
 resolve bare specifiers (like `nrz install express`) until a registry
 is configured. `nrz setup` is the guided way to do that: sign up or
-log in at [https://www.nrz.khulnasoft.com](https://www.nrz.khulnasoft.com) first, then run the
-wizard.
+log in at
+[https://www.nrz.khulnasoft.com](https://www.nrz.khulnasoft.com)
+first, then run the wizard.
 
 ## What it does
 
-1. Prompts for your nrz.khulnasoft.com account (or organization) slug if not
-   passed as an argument.
+1. Prompts for your nrz.khulnasoft.com account (or organization) slug
+   if not passed as an argument.
 2. Stages the two registry aliases every account is provisioned with:
-   - `npm` → `https://registry.nrz.khulnasoft.com/<account>/npm/` (the default
+   - `npm` → `https://registry.nrz.khulnasoft.com/<account>/npm/` (the
+     default
      [bare-spec alias](/client/registries#bare-specs-and---default-registry-alias))
-   - `main` → `https://registry.nrz.khulnasoft.com/<account>/main/` (your
-     account's primary private registry)
+   - `main` → `https://registry.nrz.khulnasoft.com/<account>/main/`
+     (your account's primary private registry)
 3. Optionally authenticates against those registries via the browser
    web-login flow. A single token covers every registry on your
    account, so the browser opens once and the token it returns is

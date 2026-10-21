@@ -1,7 +1,8 @@
 ---
 title: pnpm
 description:
-  Configure pnpm for your nrz.khulnasoft.com registries, and publish to main.
+  Configure pnpm for your nrz.khulnasoft.com registries, and publish
+  to main.
 sidebar:
   label: pnpm
   order: 3
@@ -81,9 +82,9 @@ now lives in `pnpm-workspace.yaml`. pnpm before 11.10 ignores
 Unlike npm, yarn, bun and deno, pnpm **deliberately ignores `${...}`
 placeholders** in a repository `.npmrc` for registry, proxy and
 credential values. A file containing
-`//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}` sends no
-`Authorization` header at all — you get a `401` that looks like a bad
-token, with no warning explaining why.
+`//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}`
+sends no `Authorization` header at all — you get a `401` that looks
+like a bad token, with no warning explaining why.
 
 This is a supply-chain fix (a malicious repo could otherwise redirect
 your token to a registry it controls), landed in **pnpm 11.5.3**, so
@@ -193,8 +194,8 @@ Two flags you will probably want:
 - `--dry-run` — pack and report without uploading.
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
-token** skips the prompt and is what you want in CI; see
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run.
+A **service token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
 ## Log in
@@ -210,7 +211,8 @@ to `.npmrc`.
 
 `pnpm token` is not implemented in pnpm — it reports
 `Not implemented in pnpm. Use the npm CLI directly`. Manage tokens at
-[nrz.khulnasoft.com](https://www.nrz.khulnasoft.com) or with `npm token`.
+[nrz.khulnasoft.com](https://www.nrz.khulnasoft.com) or with
+`npm token`.
 
 ## Gotchas
 

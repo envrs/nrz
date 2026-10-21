@@ -180,8 +180,8 @@ operators): see [REFERENCE.md](REFERENCE.md).
 Canonical docs — deep-link the section that matches the query
 (verified anchors; don't invent others):
 
-| Query topic                               | Link                                                         |
-| ----------------------------------------- | ------------------------------------------------------------ |
+| Query topic                               | Link                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
 | syntax, composition, anything structural  | <https://docs.nrz.khulnasoft.com/cli/selectors/>                         |
 | malware / typosquats / obfuscation        | <https://docs.nrz.khulnasoft.com/cli/security#malware-detection>         |
 | CVEs / CWEs / severity                    | <https://docs.nrz.khulnasoft.com/cli/security#vulnerability-detection>   |

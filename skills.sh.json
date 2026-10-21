@@ -4,16 +4,12 @@
     {
       "title": "nrz registry",
       "description": "Move a repository, its CI and its coding agents onto a nrz.khulnasoft.com registry.",
-      "skills": [
-        "nrz-registry-migration"
-      ]
+      "skills": ["nrz-registry-migration"]
     },
     {
       "title": "nrz client",
       "description": "Query, filter and security-audit a project's dependencies with the nrz CLI.",
-      "skills": [
-        "dss-query"
-      ]
+      "skills": ["dss-query"]
     }
   ]
 }

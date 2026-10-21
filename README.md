@@ -10,8 +10,8 @@
 
 **Develop. Run. Distribute.**
 
-This is the source monorepo for the [nrz](https://www.nrz.khulnasoft.com) package
-manager.
+This is the source monorepo for the
+[nrz](https://www.nrz.khulnasoft.com) package manager.
 
 ### Documentation
 

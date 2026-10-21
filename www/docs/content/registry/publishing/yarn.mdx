@@ -1,7 +1,8 @@
 ---
 title: yarn
 description:
-  Configure Yarn for your nrz.khulnasoft.com registries, and publish to main.
+  Configure Yarn for your nrz.khulnasoft.com registries, and publish
+  to main.
 sidebar:
   label: yarn
   order: 4
@@ -108,8 +109,8 @@ present in your lockfile; run "yarn install" to update the lockfile
 ```
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
-token** skips the prompt and is what you want in CI; see
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run.
+A **service token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
 You can also target the registry from `package.json` instead of
@@ -224,8 +225,9 @@ is the current release; there is no Yarn 5.
   writing nested `npmRegistries[...]` keys. The file is written
   correctly — the message is just wrong.
 - Yarn blocks plain `http://` registries unless listed in
-  `unsafeHttpWhitelist`. Not an issue for `https://registry.nrz.khulnasoft.com/`,
-  but it will bite you against a local registry.
+  `unsafeHttpWhitelist`. Not an issue for
+  `https://registry.nrz.khulnasoft.com/`, but it will bite you against
+  a local registry.
 - Scope keys in `npmScopes` omit the leading `@`.
 
 ## Yarn Classic (1.x)

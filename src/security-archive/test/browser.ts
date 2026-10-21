@@ -234,7 +234,9 @@ t.test('usesNpmRegistry', async t => {
   t.equal(
     usesNpmRegistry(
       nodeWith(joinDepIDTuple(['registry', 'npm', 'foo@1.0.0']), {
-        registries: { npm: 'https://registry.nrz.khulnasoft.com/acct/npm' },
+        registries: {
+          npm: 'https://registry.nrz.khulnasoft.com/acct/npm',
+        },
       }),
     ),
     true,

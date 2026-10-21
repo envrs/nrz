@@ -93,15 +93,23 @@ t.test('preserves path for path-scoped registry', async t => {
     },
   })
   await cmd({
-    options: { registry: 'https://registry.nrz.khulnasoft.com/luke/' },
+    options: {
+      registry: 'https://registry.nrz.khulnasoft.com/luke/',
+    },
     positionals: ['add'],
   } as LoadedConfig)
   await cmd({
-    options: { registry: 'https://registry.nrz.khulnasoft.com/luke/' },
+    options: {
+      registry: 'https://registry.nrz.khulnasoft.com/luke/',
+    },
     positionals: ['rm'],
   } as LoadedConfig)
   t.strictSame(pathLog, [
-    ['add', 'https://registry.nrz.khulnasoft.com/luke', 'Bearer tok123'],
+    [
+      'add',
+      'https://registry.nrz.khulnasoft.com/luke',
+      'Bearer tok123',
+    ],
     ['delete', 'https://registry.nrz.khulnasoft.com/luke'],
   ])
 })

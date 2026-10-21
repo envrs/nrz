@@ -25,7 +25,8 @@ curl -fsSL https://install.nrz.khulnasoft.com | bash
 
 ### Configure a registry
 
-Sign up or log in at [nrz.khulnasoft.com](https://www.nrz.khulnasoft.com), then run the
+Sign up or log in at
+[nrz.khulnasoft.com](https://www.nrz.khulnasoft.com), then run the
 onboarding wizard:
 
 ```bash

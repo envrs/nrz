@@ -1,7 +1,8 @@
 ---
 title: deno
 description:
-  Configure Deno for your nrz.khulnasoft.com registries, and publish to main.
+  Configure Deno for your nrz.khulnasoft.com registries, and publish
+  to main.
 sidebar:
   label: deno
   order: 6
@@ -216,9 +217,10 @@ unless you keep a `package.json` too.
   registries.
 - Trailing slashes must match between the registry URL and the auth
   line.
-- A host-wide `//registry.nrz.khulnasoft.com/:_authToken=${NRZ_TOKEN}` also works
-  in deno and covers both registries, but the explicit per-registry
-  lines above stay portable if you later add bun to the project.
+- A host-wide `//registry.nrz.khulnasoft.com/:_authToken=${NRZ_TOKEN}`
+  also works in deno and covers both registries, but the explicit
+  per-registry lines above stay portable if you later add bun to the
+  project.
 - **Registry and auth settings go in `.npmrc`; the age gate goes in
   `deno.json`.** `deno.json` has no registry or token field, so the
   two halves of this setup live in different files.

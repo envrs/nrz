@@ -196,12 +196,7 @@
     "schemas": {
       "SearchResult": {
         "type": "object",
-        "required": [
-          "id",
-          "url",
-          "type",
-          "content"
-        ],
+        "required": ["id", "url", "type", "content"],
         "properties": {
           "id": {
             "type": "string"
@@ -211,11 +206,7 @@
             "description": "Site-relative URL of the page, with a #fragment for heading and text hits."
           },
           "type": {
-            "enum": [
-              "page",
-              "heading",
-              "text"
-            ]
+            "enum": ["page", "heading", "text"]
           },
           "content": {
             "type": "string",
@@ -232,17 +223,11 @@
       "Error": {
         "description": "Returned with a 404 by any /api path that is not listed here.",
         "type": "object",
-        "required": [
-          "error"
-        ],
+        "required": ["error"],
         "properties": {
           "error": {
             "type": "object",
-            "required": [
-              "code",
-              "message",
-              "hint"
-            ],
+            "required": ["code", "message", "hint"],
             "properties": {
               "code": {
                 "type": "string",

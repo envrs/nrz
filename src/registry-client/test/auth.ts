@@ -150,7 +150,11 @@ t.test('setToken preserves path', async t => {
   )
   t.strictSame(checkLog(getKC('')), [
     ['load'],
-    ['set', 'https://registry.nrz.khulnasoft.com/luke', 'Bearer luketoken'],
+    [
+      'set',
+      'https://registry.nrz.khulnasoft.com/luke',
+      'Bearer luketoken',
+    ],
     ['save'],
   ])
 })
@@ -228,7 +232,8 @@ t.test('getToken with path-scoped registry', async t => {
     typeof import('../src/auth.ts')
   >('../src/auth.ts', mocks)
   process.env.NRZ_TOKEN = 'luketoken'
-  process.env.NRZ_REGISTRY = 'https://registry.nrz.khulnasoft.com/luke/'
+  process.env.NRZ_REGISTRY =
+    'https://registry.nrz.khulnasoft.com/luke/'
   t.equal(
     await getToken('https://registry.nrz.khulnasoft.com/luke/', ''),
     'Bearer luketoken',
@@ -280,7 +285,10 @@ t.test(
       'https://registry.nrz.khulnasoft.com/luke/',
       'Bearer luke-oidc',
     )
-    setRuntimeToken('https://registry.nrz.khulnasoft.com/nrz/', 'Bearer nrz-oidc')
+    setRuntimeToken(
+      'https://registry.nrz.khulnasoft.com/nrz/',
+      'Bearer nrz-oidc',
+    )
     t.equal(runtimeTokens.size, 2)
     t.equal(
       await getToken('https://registry.nrz.khulnasoft.com/luke/', ''),
@@ -304,7 +312,10 @@ t.test('getTokenByURL longest-prefix match', async t => {
     'https://registry.nrz.khulnasoft.com/luke/',
     'Bearer luke-token',
   )
-  setRuntimeToken('https://registry.nrz.khulnasoft.com/nrz/', 'Bearer nrz-token')
+  setRuntimeToken(
+    'https://registry.nrz.khulnasoft.com/nrz/',
+    'Bearer nrz-token',
+  )
 
   // Request URL under /luke/ → luke-token
   t.equal(
@@ -316,7 +327,10 @@ t.test('getTokenByURL longest-prefix match', async t => {
   )
   // Request URL under /nrz/ → nrz-token
   t.equal(
-    await getTokenByURL('https://registry.nrz.khulnasoft.com/nrz/@scope/pkg', ''),
+    await getTokenByURL(
+      'https://registry.nrz.khulnasoft.com/nrz/@scope/pkg',
+      '',
+    ),
     'Bearer nrz-token',
   )
   clearRuntimeTokens()
@@ -357,7 +371,8 @@ t.test('getTokenByURL prefers env registry with path', async t => {
   >('../src/auth.ts', mocks)
   clearRuntimeTokens()
   process.env.NRZ_TOKEN = 'env-path-token'
-  process.env.NRZ_REGISTRY = 'https://registry.nrz.khulnasoft.com/luke/'
+  process.env.NRZ_REGISTRY =
+    'https://registry.nrz.khulnasoft.com/luke/'
   t.equal(
     await getTokenByURL(
       'https://registry.nrz.khulnasoft.com/luke/@scope/pkg',
@@ -446,21 +461,31 @@ t.test('getTokenByURL NRZ_REGISTRY without NRZ_TOKEN', async t => {
   >('../src/auth.ts', mocks)
   const { NRZ_TOKEN } = process.env
   delete process.env.NRZ_TOKEN
-  process.env.NRZ_REGISTRY = 'https://registry.nrz.khulnasoft.com/luke/'
+  process.env.NRZ_REGISTRY =
+    'https://registry.nrz.khulnasoft.com/luke/'
   t.teardown(() => {
     delete process.env.NRZ_REGISTRY
     delete process.env.NRZ_TOKEN_https_registry_nrz_io_luke
     if (NRZ_TOKEN) process.env.NRZ_TOKEN = NRZ_TOKEN
   })
-  getKC('').set('https://registry.nrz.khulnasoft.com', 'Bearer kc-origin')
+  getKC('').set(
+    'https://registry.nrz.khulnasoft.com',
+    'Bearer kc-origin',
+  )
   t.equal(
-    await getTokenByURL('https://registry.nrz.khulnasoft.com/luke/pkg', ''),
+    await getTokenByURL(
+      'https://registry.nrz.khulnasoft.com/luke/pkg',
+      '',
+    ),
     'Bearer kc-origin',
     'does not shadow a shorter key',
   )
   process.env.NRZ_TOKEN_https_registry_nrz_io_luke = 'luke-env'
   t.equal(
-    await getTokenByURL('https://registry.nrz.khulnasoft.com/luke/pkg', ''),
+    await getTokenByURL(
+      'https://registry.nrz.khulnasoft.com/luke/pkg',
+      '',
+    ),
     'Bearer luke-env',
     'NRZ_TOKEN_<key> for NRZ_REGISTRY',
   )

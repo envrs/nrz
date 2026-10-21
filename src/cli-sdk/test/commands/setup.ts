@@ -278,8 +278,10 @@ t.test('interactive: prompt account, auth, add alias', async t => {
   t.strictSame(
     Object.fromEntries(stored),
     {
-      'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer from-login',
-      'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer from-login',
+      'https://registry.nrz.khulnasoft.com/acme/npm':
+        'Bearer from-login',
+      'https://registry.nrz.khulnasoft.com/acme/main':
+        'Bearer from-login',
       'https://partner.example.com': 'Bearer from-login',
     },
     'login token stored for both account registries',
@@ -343,7 +345,8 @@ t.test('interactive: unknown account slug', async t => {
   await t.rejects(
     mod.command(makeConf({}, added)),
     {
-      message: /No nrz.khulnasoft.com account or organization named "nope"/,
+      message:
+        /No nrz.khulnasoft.com account or organization named "nope"/,
       cause: { code: 'ECONFIG' },
     },
     'names the slug rather than the HTTP failure',
@@ -382,7 +385,8 @@ t.test(
   async t => {
     const added: Added[] = []
     const { mod, kcWrites } = await loadSetup([], undefined, {
-      'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main',
+      'https://registry.nrz.khulnasoft.com/acme/main':
+        'Bearer existing-main',
     })
     await mod.command(
       makeConf({ yes: true, positionals: ['acme'] }, added),
@@ -402,7 +406,8 @@ t.test(
   async t => {
     const added: Added[] = []
     const { mod, kcWrites } = await loadSetup([], undefined, {
-      'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer existing-npm',
+      'https://registry.nrz.khulnasoft.com/acme/npm':
+        'Bearer existing-npm',
     })
     await mod.command(
       makeConf({ yes: true, positionals: ['acme'] }, added),
@@ -425,7 +430,8 @@ t.test(
       ['n', 'n'],
       undefined,
       {
-        'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main',
+        'https://registry.nrz.khulnasoft.com/acme/main':
+          'Bearer existing-main',
       },
     )
     await mod.command(
@@ -445,8 +451,10 @@ t.test(
 t.test('--yes keeps differing npm and main tokens', async t => {
   const added: Added[] = []
   const { mod, kcWrites } = await loadSetup([], undefined, {
-    'https://registry.nrz.khulnasoft.com/acme/npm': 'Bearer stale-npm',
-    'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer fresh-main',
+    'https://registry.nrz.khulnasoft.com/acme/npm':
+      'Bearer stale-npm',
+    'https://registry.nrz.khulnasoft.com/acme/main':
+      'Bearer fresh-main',
   })
   await mod.command(
     makeConf({ yes: true, positionals: ['acme'] }, added),
@@ -461,7 +469,10 @@ t.test(
     const { mod } = await loadSetup(
       [],
       undefined,
-      { 'https://registry.nrz.khulnasoft.com/acme/main': 'Bearer existing-main' },
+      {
+        'https://registry.nrz.khulnasoft.com/acme/main':
+          'Bearer existing-main',
+      },
       Object.assign(new Error('EACCES'), { code: 'EACCES' }),
     )
     await t.rejects(

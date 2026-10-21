@@ -2,12 +2,13 @@
 name: nrz-registry-migration
 description:
   Moves a JavaScript repository (single package or monorepo) onto a
-  nrz.khulnasoft.com registry. Routes installs through the account's npm mirror
-  and private `main` registry, handles the lockfile, and sets up auth
-  for npm, pnpm, yarn, bun, deno and the nrz CLI on laptops, CI,
-  Vercel and coding-agent sandboxes. Use when the user wants to switch
-  a repo or pipeline to registry.nrz.khulnasoft.com, set up nrz.khulnasoft.com tokens, or fix
-  401s or missing auth after switching.
+  nrz.khulnasoft.com registry. Routes installs through the account's
+  npm mirror and private `main` registry, handles the lockfile, and
+  sets up auth for npm, pnpm, yarn, bun, deno and the nrz CLI on
+  laptops, CI, Vercel and coding-agent sandboxes. Use when the user
+  wants to switch a repo or pipeline to registry.nrz.khulnasoft.com,
+  set up nrz.khulnasoft.com tokens, or fix 401s or missing auth after
+  switching.
 ---
 
 # Migrate a repository to the nrz registry
@@ -37,10 +38,11 @@ it with the user's.
 
 Each account has two registries:
 
-- `https://registry.nrz.khulnasoft.com/acme/npm/`: npm mirror. Make it the default
-  registry. Always needs a token, even for public packages.
-- `https://registry.nrz.khulnasoft.com/acme/main/`: the account's own packages.
-  Map the scope to it.
+- `https://registry.nrz.khulnasoft.com/acme/npm/`: npm mirror. Make it
+  the default registry. Always needs a token, even for public
+  packages.
+- `https://registry.nrz.khulnasoft.com/acme/main/`: the account's own
+  packages. Map the scope to it.
 
 Accounts
 ([sign up](https://docs.nrz.khulnasoft.com/registry.md#sign-up),
@@ -119,9 +121,10 @@ alone sends no credentials.
   - `env "pnpm_config_//registry.nrz.khulnasoft.com/acme/npm/:_authToken=$NRZ_TOKEN" pnpm install --frozen-lockfile`
     (pnpm 11.6.0+; one var per registry URL);
   - a step appending
-    `//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}` and the same
-    `main` line to user-level `~/.npmrc` with a quoted heredoc
-    (`<<'EOF'` keeps `${NRZ_TOKEN}` literal; pnpm expands it there);
+    `//registry.nrz.khulnasoft.com/acme/npm/:_authToken=${NRZ_TOKEN}`
+    and the same `main` line to user-level `~/.npmrc` with a quoted
+    heredoc (`<<'EOF'` keeps `${NRZ_TOKEN}` literal; pnpm expands it
+    there);
   - `PNPM_CONFIG_NPMRC_AUTH_FILE=<auth file outside the repo>`.
 - nrz: per-registry
   `NRZ_TOKEN_<registry URL, trailing / dropped, each run of non-alphanumerics → _>`,

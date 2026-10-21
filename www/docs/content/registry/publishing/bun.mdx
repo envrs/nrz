@@ -1,7 +1,8 @@
 ---
 title: bun
 description:
-  Configure bun for your nrz.khulnasoft.com registries, and publish to main.
+  Configure bun for your nrz.khulnasoft.com registries, and publish to
+  main.
 sidebar:
   label: bun
   order: 5
@@ -117,18 +118,19 @@ Add `--access public` for a package anyone can install, and
 `--dry-run` to preview.
 
 With a personal token, every publish returns a one-time-password
-challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run. A **service
-token** skips the prompt and is what you want in CI; see
+challenge with a `nrz.khulnasoft.com` URL — open it, approve, re-run.
+A **service token** skips the prompt and is what you want in CI; see
 [CI & automation](/registry/publishing/ci).
 
 ## Gotchas
 
 - **Never omit the trailing slash.** In bun 1.4, a registry URL that
   has a path and no trailing slash **silently loses its last path
-  segment** — `https://registry.nrz.khulnasoft.com/acme/npm` resolves against
-  `https://registry.nrz.khulnasoft.com/acme/`, and you get confusing 401s or 404s.
-  This affects `bunfig.toml`, `.npmrc` and `[install.scopes]` alike.
-  Our URLs all have paths, so this matters every time.
+  segment** — `https://registry.nrz.khulnasoft.com/acme/npm` resolves
+  against `https://registry.nrz.khulnasoft.com/acme/`, and you get
+  confusing 401s or 404s. This affects `bunfig.toml`, `.npmrc` and
+  `[install.scopes]` alike. Our URLs all have paths, so this matters
+  every time.
 - **`$NRZ_TOKEN` in `bunfig.toml`, `${NRZ_TOKEN}` in `.npmrc`.**
   Getting this backwards produces a confusing `401` with a token that
   "looks" configured. An unset variable is sent as a literal string
@@ -142,8 +144,8 @@ token** skips the prompt and is what you want in CI; see
   registry in `bunfig.toml` (or as `registry=` in `.npmrc`) so the
   token travels with it.
 - **Auth paths must match exactly.** A host-wide
-  `//registry.nrz.khulnasoft.com/:_authToken=...` works in npm and deno but
-  **not** in bun — bun needs the full registry path, trailing slash
-  included.
+  `//registry.nrz.khulnasoft.com/:_authToken=...` works in npm and
+  deno but **not** in bun — bun needs the full registry path, trailing
+  slash included.
 - bun has no `login` command. Authentication comes from `bunfig.toml`,
   `.npmrc`, or the environment.

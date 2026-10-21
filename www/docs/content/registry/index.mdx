@@ -7,9 +7,9 @@ sidebar:
 
 ## Sign Up
 
-You need a nrz.khulnasoft.com account to publish, and also to **install** through
-your account's `npm` mirror: the mirror requires a token, even for
-public npm packages.
+You need a nrz.khulnasoft.com account to publish, and also to
+**install** through your account's `npm` mirror: the mirror requires a
+token, even for public npm packages.
 
 For a team, invite each developer
 ([Members & Access Control](/registry/access#inviting-members)); each
@@ -96,7 +96,8 @@ instructions for your account.
 
 <TabItem label="nrz">
 
-If you're setting up a nrz.khulnasoft.com account for the first time, start with
+If you're setting up a nrz.khulnasoft.com account for the first time,
+start with
 [`nrz setup`](/client/registries#getting-started-with-nrz-setup) — it
 authenticates and configures your account's `npm` and `main` registry
 aliases in one step:
@@ -129,9 +130,9 @@ Alternatively, configure a project manually:
 
 2. **Set up the nrz.khulnasoft.com npm mirror**
 
-   Change your default registry to your nrz.khulnasoft.com mirror. This updates
-   your `nrz.json` file to use the mirror for all packages in the
-   current project:
+   Change your default registry to your nrz.khulnasoft.com mirror.
+   This updates your `nrz.json` file to use the mirror for all
+   packages in the current project:
 
    ```bash
    nrz config set registry=https://registry.nrz.khulnasoft.com/acme/npm/ \
@@ -144,7 +145,8 @@ Alternatively, configure a project manually:
    nrz login
    ```
 
-   Then reinstall your dependencies from the nrz.khulnasoft.com mirror:
+   Then reinstall your dependencies from the nrz.khulnasoft.com
+   mirror:
 
    ```bash
    nrz install
@@ -160,9 +162,9 @@ Alternatively, configure a project manually:
 
 1. **Set up the nrz.khulnasoft.com npm mirror**
 
-   Change your default registry to your nrz.khulnasoft.com mirror. This updates
-   your `.npmrc` file to use the mirror for all npm packages in the
-   current project:
+   Change your default registry to your nrz.khulnasoft.com mirror.
+   This updates your `.npmrc` file to use the mirror for all npm
+   packages in the current project:
 
    ```bash
    npm config set registry https://registry.nrz.khulnasoft.com/acme/npm/ --location=project
@@ -209,9 +211,9 @@ Alternatively, configure a project manually:
 
 1. **Set up the nrz.khulnasoft.com npm mirror**
 
-   Change your default registry to your nrz.khulnasoft.com mirror. This updates
-   your `.npmrc` file to use the mirror for all npm packages in the
-   current project:
+   Change your default registry to your nrz.khulnasoft.com mirror.
+   This updates your `.npmrc` file to use the mirror for all npm
+   packages in the current project:
 
    ```bash
    pnpm config set registry https://registry.nrz.khulnasoft.com/acme/npm/ --location=project
@@ -273,9 +275,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
 
 1. **Set up the nrz.khulnasoft.com npm mirror**
 
-   Change your default registry to your nrz.khulnasoft.com mirror. This updates
-   your project's `.yarnrc.yml` file to use the mirror for all npm
-   packages:
+   Change your default registry to your nrz.khulnasoft.com mirror.
+   This updates your project's `.yarnrc.yml` file to use the mirror
+   for all npm packages:
 
    ```bash
    yarn config set npmRegistryServer "https://registry.nrz.khulnasoft.com/acme/npm/"
@@ -287,8 +289,8 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
    yarn npm login --web-login --always-auth
    ```
 
-   Then to switch all your dependencies to the nrz.khulnasoft.com mirror, delete
-   your `yarn.lock` and reinstall:
+   Then to switch all your dependencies to the nrz.khulnasoft.com
+   mirror, delete your `yarn.lock` and reinstall:
 
    ```bash
    rm -rf yarn.lock
@@ -326,9 +328,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
 
    To authenticate Bun with your registries, first create an
    authentication token from your account's
-   [Tokens page](https://www.nrz.khulnasoft.com/tokens/acme) and define an
-   environment variable. If you're using a `.env` file, define the
-   token there:
+   [Tokens page](https://www.nrz.khulnasoft.com/tokens/acme) and
+   define an environment variable. If you're using a `.env` file,
+   define the token there:
 
    ```ini
    NRZ_TOKEN=<your token>
@@ -347,18 +349,19 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
 2. **Set up the nrz.khulnasoft.com npm mirror**
 
    Create (or edit) `bunfig.toml` in your project root and point the
-   default registry at your nrz.khulnasoft.com mirror. Use a `$NRZ_TOKEN`
-   placeholder for the token instead of a literal value — bun expands
-   `$VAR` references from the environment at request time, so this
-   file is safe to commit:
+   default registry at your nrz.khulnasoft.com mirror. Use a
+   `$NRZ_TOKEN` placeholder for the token instead of a literal value —
+   bun expands `$VAR` references from the environment at request time,
+   so this file is safe to commit:
 
    ```toml
    [install]
    registry = { url = "https://registry.nrz.khulnasoft.com/acme/npm/", token = "$NRZ_TOKEN" }
    ```
 
-   Then to switch all your dependencies to the nrz.khulnasoft.com mirror, delete
-   your `bun.lock` and `node_modules` folder and reinstall:
+   Then to switch all your dependencies to the nrz.khulnasoft.com
+   mirror, delete your `bun.lock` and `node_modules` folder and
+   reinstall:
 
    ```bash
    rm -rf bun.lock node_modules
@@ -368,9 +371,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
 3. **Set up your private `@acme` scope**
 
    Your private scope lives in a separate registry. Add it under
-   `[install.scopes]` in `bunfig.toml`. nrz.khulnasoft.com tokens are scoped to
-   your account rather than to a specific registry, so the same
-   `$NRZ_TOKEN` works here too:
+   `[install.scopes]` in `bunfig.toml`. nrz.khulnasoft.com tokens are
+   scoped to your account rather than to a specific registry, so the
+   same `$NRZ_TOKEN` works here too:
 
    ```toml
    [install.scopes.acme]
@@ -393,10 +396,10 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
 1. **Set up the nrz.khulnasoft.com npm mirror**
 
    Create (or edit) `.npmrc` in your project root and point the
-   default registry at your nrz.khulnasoft.com mirror. Reference the token via
-   `${NRZ_TOKEN}` rather than a literal value — deno expands `${VAR}`
-   references in `.npmrc` from the environment, so this file is safe
-   to commit:
+   default registry at your nrz.khulnasoft.com mirror. Reference the
+   token via `${NRZ_TOKEN}` rather than a literal value — deno expands
+   `${VAR}` references in `.npmrc` from the environment, so this file
+   is safe to commit:
 
    ```bash
    cat >> .npmrc <<'EOF'
@@ -405,9 +408,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
    EOF
    ```
 
-   Since there's no `deno login`, create a token from the nrz.khulnasoft.com
-   dashboard instead, then put it in a `.env` file (make sure `.env`
-   is in your `.gitignore`):
+   Since there's no `deno login`, create a token from the
+   nrz.khulnasoft.com dashboard instead, then put it in a `.env` file
+   (make sure `.env` is in your `.gitignore`):
 
    ```bash
    echo "NRZ_TOKEN=<your token>" >> .env
@@ -416,9 +419,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
    `NRZ_TOKEN` is just a name: deno uses it only through the
    `${NRZ_TOKEN}` lines in `.npmrc`.
 
-   Then to switch all your dependencies to the nrz.khulnasoft.com mirror, delete
-   your `deno.lock` and `node_modules` folder and reinstall, passing
-   `--env-file` so the token in `.env` is loaded:
+   Then to switch all your dependencies to the nrz.khulnasoft.com
+   mirror, delete your `deno.lock` and `node_modules` folder and
+   reinstall, passing `--env-file` so the token in `.env` is loaded:
 
    ```bash
    rm -rf deno.lock node_modules
@@ -438,9 +441,9 @@ These instructions are for yarn 2+ ("Berry"), the version you get from
    EOF
    ```
 
-   nrz.khulnasoft.com tokens are scoped to your account rather than to a specific
-   registry, so the same `NRZ_TOKEN` works here too. Now you can
-   install packages from your private `@acme` scope with
+   nrz.khulnasoft.com tokens are scoped to your account rather than to
+   a specific registry, so the same `NRZ_TOKEN` works here too. Now
+   you can install packages from your private `@acme` scope with
    `deno install --env-file`.
 
    `deno publish` targets [JSR](https://jsr.io) only, but `deno pack`
