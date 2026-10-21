@@ -307,7 +307,7 @@ ${s('bold', 'COMMON FLAGS')}
   ${s('green', '-a, --all')}                      List all commands, bins & flags
 
 Learn more: https://${s('bold', 'nrz.khulnasoft.com')}
-Get support: https://${s('bold', 'nrz.community')}
+Get support: https://${s('bold', 'nrz.khulnasoft.com')}
 
 ${s('dim', `This is not the full usage information, run \`nrz -a\` for more.`)}
 `
@@ -441,7 +441,7 @@ ${s('bold', 'FLAGS')}
 ${flagsSection}
 
 Learn more: https://${s('bold', 'nrz.khulnasoft.com')}
-Get support: https://${s('bold', 'nrz.community')}
+Get support: https://${s('bold', 'nrz.khulnasoft.com')}
 
 ${s('dim', `Run \`nrz help <command>\` for detailed information about a specific command.`)}`
 }

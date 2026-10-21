@@ -1,5 +1,6 @@
 import type { NormalizedManifest } from '@nrz/types'
 import { create as tarCreate, list as tarList } from 'tar'
+import type { ReadEntry } from 'tar'
 import { minimatch } from 'minimatch'
 import { error } from '@nrz/error-cause'
 import * as ssri from 'ssri'
@@ -385,8 +386,9 @@ export const packTarball = async (
     let unpackedSize = 0
     const files: string[] = []
     await new Promise<void>((resolve, reject) => {
-      const stream = tarList({
-        onentry: entry => {
+      const stream = tarList({})
+      stream
+        .on('entry', (entry: ReadEntry) => {
           if (entry.type === 'File') {
             unpackedSize += entry.size
             // Remove the package/ prefix for cleaner file listing
@@ -396,9 +398,7 @@ export const packTarball = async (
               files.push(cleanPath)
             }
           }
-        },
-      })
-      stream
+        })
         .on('end', () => resolve())
         .on('error', reject)
         .write(tarballData)

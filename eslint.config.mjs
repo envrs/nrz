@@ -255,18 +255,7 @@ export default [
     files: [`**/test/**/*${extGlobs.all}`],
     rules: {
       // tap handles these floating promises
-      '@typescript-eslint/no-floating-promises': [
-        'error',
-        {
-          allowForKnownSafeCalls: ['test', 'skip', 'todo'].map(
-            name => ({
-              name,
-              from: 'package',
-              package: 'tap',
-            }),
-          ),
-        },
-      ],
+      '@typescript-eslint/no-floating-promises': 'off',
       ...unsafeRules('off'),
       // this is helpful and not really dangerous in tests
       '@typescript-eslint/no-non-null-assertion': 'off',
