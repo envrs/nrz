@@ -56,7 +56,7 @@ published as `@nrz/*`, the built nrz CLI itself is published as `nrz`.
 - Agent skills published from this repo live in root `skills/<name>/`,
   or in a workspace whose package ships them
   (`src/query/skills/dss-query`, mounted by #1540). List each in
-  `.claude-plugin/plugin.json` `skills` (how `nrx skills add nrz/nrz`
+  `.claude-plugin/plugin.json` `skills` (how `nrx skills add khulnasoft/nrz`
   finds workspace ones) and in `skills.sh.json`. Root ones also need a
   `!/skills/<name>/` line in `.gitignore` (`/skills/*` is gitignored
   for #1540 mounts) and an entry in `www/docs/src/lib/skills.ts`;

@@ -4,7 +4,7 @@
 
 ![nrz Version](https://img.shields.io/npm/v/nrz?logo=npm&label=Version)
 ![Package Downloads](https://img.shields.io/npm/dm/nrz?logo=npm&label=Downloads)
-![GitHub Branch Status](https://img.shields.io/github/checks-status/nrz/nrz/main?logo=github&label=GitHub)
+![GitHub Branch Status](https://img.shields.io/github/checks-status/khulnasoft/nrz/main?logo=github&label=GitHub)
 ![Discord Server Status](https://img.shields.io/discord/1093366081067954178?logo=discord&label=Discord)
 [![Socket Security Status](https://socket.dev/api/badge/npm/package/nrz)](https://socket.dev/npm/package/nrz)
 
@@ -55,7 +55,7 @@ commands and workspace-specific guidance.
 ### Contributors
 
 <a href="https://github.com/khulnasoft/nrz/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=nrz/nrz" />
+  <img src="https://contrib.rocks/image?repo=khulnasoft/nrz" />
 </a>
 
 ### Licenses

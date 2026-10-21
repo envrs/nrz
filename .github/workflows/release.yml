@@ -261,15 +261,15 @@ jobs:
             Steps to merge:
 
             ```bash
-            gh pr ready -R nrz/nrz release
+            gh pr ready -R khulnasoft/nrz release
             ```
 
             ```bash
-            gh pr review -R nrz/nrz --approve release
+            gh pr review -R khulnasoft/nrz --approve release
             ```
 
             ```bash
-            gh pr merge -R nrz/nrz --rebase release
+            gh pr merge -R khulnasoft/nrz --rebase release
             ```
 
   publish:

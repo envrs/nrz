@@ -1,4 +1,4 @@
-# nrz/nrz Monorepo Structure
+# khulnasoft/nrz Monorepo Structure
 
 The https://github.com/khulnasoft/nrz repository is a monorepo,
 meaning that it's organized in such a way that subfolders located in

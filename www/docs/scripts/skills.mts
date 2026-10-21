@@ -1,5 +1,5 @@
 // The agent skills this repo publishes live in its root skills/ folder,
-// the layout `nrx skills add nrz/nrz` (skills.sh) installs from.
+// the layout `nrx skills add khulnasoft/nrz` (skills.sh) installs from.
 // Copy them into public/skills so the docs serve each one at
 // /skills/<name>/SKILL.md, where src/lib/skills.ts reads it at build.
 import { cpSync, lstatSync, readdirSync, rmSync } from 'node:fs'

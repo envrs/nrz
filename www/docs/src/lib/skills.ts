@@ -5,7 +5,7 @@ import { frontmatter } from 'fumadocs-core/content/md/frontmatter'
 const tree = 'https://github.com/khulnasoft/nrz/tree/main'
 
 const install = (name: string) =>
-  `nrx skills add nrz/nrz -- --skill ${name}`
+  `nrx skills add khulnasoft/nrz -- --skill ${name}`
 
 // skills live in the repo's skills/, where `nrx skills add` finds them; scripts/skills.mts
 // copies them into public/, which serves them as-is. read at build time for llms.txt and llms-full.txt
