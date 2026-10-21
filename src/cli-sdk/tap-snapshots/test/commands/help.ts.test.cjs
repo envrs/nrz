@@ -86,7 +86,7 @@ FLAGS
   -y,    --yes                        Automatically accept prompts
 
 Learn more: https://nrz.khulnasoft.com
-Get support: https://nrz.community
+Get support: https://nrz.khulnasoft.com
 
 Run \`nrz help <command>\` for detailed information about a specific command.
 `
@@ -122,7 +122,7 @@ COMMON FLAGS
   -a, --all                      List all commands, bins & flags
 
 Learn more: https://nrz.khulnasoft.com
-Get support: https://nrz.community
+Get support: https://nrz.khulnasoft.com
 
 This is not the full usage information, run \`nrz -a\` for more.
 

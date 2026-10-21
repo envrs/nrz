@@ -7,7 +7,11 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/xdg"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": {
+    "name": "KhulnaSoft, Ltd",
+    "email": "support@khulnasoft.com.com",
+    "url": "http://nrz.khulnasoft.com"
+  },
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@types/node": "catalog:",
@@ -37,21 +41,24 @@
     "extends": "../../tap-config.yaml"
   },
   "prettier": "../../.prettierrc.js",
-  "module": "./src/index.ts",
+  "module": "./dist/index.js",
   "type": "module",
   "exports": {
     "./package.json": "./package.json",
     ".": {
       "import": {
-        "default": "./src/index.ts"
+        "default": "./dist/index.js"
       }
     }
   },
   "files": [
     "dist"
   ],
-  "bugs": {
-    "url": "https://github.com/khulnasoft/nrz/issues"
-  },
+  "bugs": [
+    {
+      "type": "link",
+      "url": "https://github.com/khulnasoft/nrz/issues"
+    }
+  ],
   "homepage": "https://github.com/khulnasoft/nrz/tree/main/src/xdg#readme"
 }
