@@ -15,14 +15,15 @@
   },
   "dependencies": {
     "@nrz/cli-sdk": "workspace:*",
-    "@nrz/xdg": "workspace:*"
+    "@nrz/xdg": "workspace:*",
+    "esbuild": "^0.25.0"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "prettier": "catalog:",
-    "tap": "catalog:",
+    "tap": "^21.8.0",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
   },
