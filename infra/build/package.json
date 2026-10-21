@@ -23,7 +23,7 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "prettier": "catalog:",
-    "tap": "^21.8.0",
+    "tap": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
   },
