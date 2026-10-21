@@ -84,6 +84,7 @@ const docs = defineDocs({
     }),
     postprocess: {
       includeProcessedMarkdown: {
+        // @ts-expect-error - fumadocs types don't include stringify option
         stringify: stringifyComponent,
         headingIds: false,
         // layout wrappers (Aside, Tabs, Steps, CardGrid…) keep only their content

@@ -82,16 +82,23 @@ app.converter.addUnknownSymbolResolver(ref =>
 
 // fumadocs requires a frontmatter title on every page
 app.renderer.on(MarkdownPageEvent.END, page => {
-  const { name, parent } = page.model
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  const { name, parent } = page.model as {
+    name?: string
+    parent?: unknown
+    url?: string
+  }
   const title =
     !parent ? 'API Reference'
-    : page.url.endsWith('/reference.md') ? 'Reference'
-    : name
+    : (page.url as string).endsWith('/reference.md') ? 'Reference'
+    : (name ?? '')
   // jackspeak's option types are anonymous objects that print as `object & object & …` (~55 of them)
-  const contents = (page.contents ?? '').replace(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+  const contents = (page.contents as string).replace(
     /(`?)object\1(?: & (`?)object\2)+/g,
     '…',
   )
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   page.contents = `---\ntitle: ${JSON.stringify(title)}\n---\n\n${contents}`
 })
 

@@ -124,15 +124,20 @@ export const SearchDialog = ({
 }: SearchDialogProps) => {
   const router = useRouter()
   const { setOpenMobile } = useSidebar()
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   const { search, setSearch, query } = useDocsSearch({ client })
   const [selected, setSelected] = useState('')
   const navigated = useRef(false)
-  const [shown, setShown] = useState(query.data)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  const [shown, setShown] = useState(query.data ?? [])
 
   // results arrive after the keystroke, so cmdk can't auto-select them; select the top hit ourselves
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
   if (query.data !== shown) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     setShown(query.data)
     setSelected(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       Array.isArray(query.data) ? (query.data[0]?.id ?? '') : '',
     )
   }
@@ -184,12 +189,14 @@ export const SearchDialog = ({
           <div className="text-muted-foreground flex h-12 items-center gap-3 px-4 [&_svg]:size-4 [&_svg]:shrink-0">
             <SearchIcon aria-hidden />
             <CommandPrimitive.Input
-              value={search}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+              value={search as string}
               onValueChange={setSearch}
               placeholder="Search documentation"
               className="md:text-body text-foreground placeholder:text-muted-foreground h-full min-w-0 flex-1 bg-transparent text-base outline-hidden"
             />
-            {query.isLoading && (
+            {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
+            {(query.isLoading as boolean) && (
               // appears only if a search outlasts 300ms, so fast responses never flash it
               <span
                 role="status"
@@ -229,8 +236,10 @@ export const SearchDialog = ({
               ))}
             </CommandList>
           )}
+          {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
           {search && (!!query.error || Array.isArray(query.data)) && (
             <CommandList className="max-h-[min(26rem,60vh)] border-t p-2">
+              {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
               {query.error ?
                 <p className="text-muted-foreground py-8 text-center text-sm">
                   Search is unavailable right now.
@@ -239,9 +248,11 @@ export const SearchDialog = ({
                   No results found.
                 </CommandEmpty>
               }
+              {/* eslint-disable-next-line @typescript-eslint/no-unsafe-member-access */}
               {Array.isArray(query.data) &&
                 // ponytail: renders the top 10 pages only; add "show more" if people ask for deeper results
-                byPage(query.data)
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                byPage(query.data as SortedResult[])
                   .slice(0, MAX_PAGES)
                   .map(group => (
                     <CommandGroup

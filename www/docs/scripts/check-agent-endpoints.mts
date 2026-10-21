@@ -24,12 +24,14 @@ for (const path of ['/', '/client/auth']) {
     assert.equal(md.status, 200)
     assert.match(type(md), /^text\/markdown/)
     assert.ok(varies(md), 'markdown response has Vary: Accept')
-    assert.match(await md.text(), /^# \S/)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    assert.match((await md.text()) as string, /^# \S/)
 
     const html = await get(path, 'text/html')
     assert.equal(html.status, 200)
     assert.match(type(html), /^text\/html/)
-    assert.match(await html.text(), /<html/i)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    assert.match((await html.text()) as string, /<html/i)
   })
 }
 
@@ -38,8 +40,10 @@ for (const path of ['/no-such-page', '/no-such-page.md']) {
     const res = await get(path, 'text/markdown')
     assert.equal(res.status, 404)
     assert.match(type(res), /^text\/markdown/)
-    const body = await res.text()
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    const body = (await res.text()) as string
     assert.ok(body.length >= 20)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     assert.match(body, /\/llms\.txt\)/)
   })
 }
@@ -118,7 +122,8 @@ void test('unknown /api paths are json 404s', async () => {
 })
 
 void test('/ has Organization and SoftwareApplication JSON-LD', async () => {
-  const html = await (await get('/', 'text/html')).text()
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+  const html = (await (await get('/', 'text/html')).text()) as string
   const script =
     /<script type="application\/ld\+json">([^<]*)<\/script>/.exec(
       html,
@@ -149,8 +154,9 @@ void test('/api/search is a deprecated alias of /api/v1/search', async () => {
 })
 
 void test('/llms.txt links the OpenAPI spec', async () => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   assert.match(
-    await (await get('/llms.txt')).text(),
+    (await (await get('/llms.txt')).text()) as string,
     /\/openapi\.json\)/,
   )
 })

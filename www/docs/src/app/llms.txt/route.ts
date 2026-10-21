@@ -38,7 +38,8 @@ ${skills.map(s => `- [${s.name}](${abs(s.url)}): ${s.description} Install: \`${s
 export const GET = async () =>
   new Response(
     intro +
-      (await llms(source).index())
+      llms(source)
+        .index()
         .split('\n')
         .filter(line => !line.includes('_media'))
         .slice(1) // fumadocs' own `# Docs` heading

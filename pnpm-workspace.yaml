@@ -3,6 +3,12 @@ packages:
   - 'infra/**'
   - 'www/**'
 
+allowBuilds:
+  esbuild: true
+  node-pty: false
+  unrs-resolver: false
+  vue-demi: false
+
 catalog:
   '@eslint/js': '^9.39.0'
   '@types/node': '^22.0.0'
