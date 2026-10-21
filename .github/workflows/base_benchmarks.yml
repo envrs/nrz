@@ -35,7 +35,7 @@ jobs:
           check-latest: true
 
       - name: Setup nrz
-        uses: nrz/setup-nrz@v1
+        uses: khulnasoft/setup-nrz@main
 
       - name: Install Dependencies with known good version of nrz
         run: nrz install
