@@ -280,12 +280,19 @@ t.test('named registry', t => {
 t.test('unnamed registry', t => {
   t.equal(
     String(
-      hydrate(`${delimiter}http://nrz.khulnasoft.com${delimiter}x@1.2.3`, 'x'),
+      hydrate(
+        `${delimiter}http://nrz.khulnasoft.com${delimiter}x@1.2.3`,
+        'x',
+      ),
     ),
     'x@registry:http://nrz.khulnasoft.com#x@1.2.3',
   )
   t.equal(
-    String(hydrate(`${delimiter}http://nrz.khulnasoft.com${delimiter}x@1.2.3`)),
+    String(
+      hydrate(
+        `${delimiter}http://nrz.khulnasoft.com${delimiter}x@1.2.3`,
+      ),
+    ),
     'x@registry:http://nrz.khulnasoft.com#x@1.2.3',
   )
   t.end()

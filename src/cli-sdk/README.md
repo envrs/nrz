@@ -19,5 +19,5 @@ process.argv.splice(2, 0, 'install')
 await nrz()
 ```
 
-Visit [docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com) to see the full
-documentation.
+Visit [docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com) to
+see the full documentation.

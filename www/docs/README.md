@@ -1,7 +1,8 @@
 # @nrz/docs
 
-The source for [docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com), built with Next.js
-and fumadocs. Pages live in `content/`.
+The source for
+[docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com), built with
+Next.js and fumadocs. Pages live in `content/`.
 
 ```bash
 xvn dev            # local dev server on http://localhost:3000

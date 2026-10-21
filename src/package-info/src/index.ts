@@ -473,12 +473,10 @@ export class PackageInfoClient {
 
   async getTarPool() {
     if (this.#tarPool) return this.#tarPool
-    this.#tarPoolPromise ??= import('@nrz/tar').then(
-      ({ Pool }) => {
-        this.#tarPool = new Pool()
-        return this.#tarPool
-      },
-    )
+    this.#tarPoolPromise ??= import('@nrz/tar').then(({ Pool }) => {
+      this.#tarPool = new Pool()
+      return this.#tarPool
+    })
     return this.#tarPoolPromise
   }
 

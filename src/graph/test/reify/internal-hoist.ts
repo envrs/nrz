@@ -380,10 +380,7 @@ t.test(
     )
     t.strictSame(
       readdirSync(
-        resolve(
-          projectRoot,
-          'node_modules/.nrz/node_modules/@nrz',
-        ),
+        resolve(projectRoot, 'node_modules/.nrz/node_modules/@nrz'),
       ),
       ['foo'],
     )

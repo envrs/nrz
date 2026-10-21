@@ -14,11 +14,7 @@ import {
   isVariant,
   VARIANTS,
 } from '@nrz/infra-build'
-import type {
-  Bin,
-  Variant,
-  VariantOptions,
-} from '@nrz/infra-build'
+import type { Bin, Variant, VariantOptions } from '@nrz/infra-build'
 
 // only bundle the nrz binary since that is all we test
 export const Bins = ['nrz'] as const

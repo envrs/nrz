@@ -24,9 +24,7 @@ t.test('renderMermaidSvg decodes #64; to @', async t => {
   const { renderMermaidSvg } =
     await import('../src/render-mermaid.ts')
 
-  const svg = renderMermaidSvg(
-    'graph TD\n  A["#64;nrz/foo"] --> B',
-  )
+  const svg = renderMermaidSvg('graph TD\n  A["#64;nrz/foo"] --> B')
   t.ok(
     svg.includes('@nrz/foo'),
     'should decode #64; to @ in SVG output',

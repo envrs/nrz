@@ -65,16 +65,17 @@ nrz build
 
 ## Documentation
 
-Visit [docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com/cli) for guides, migration
-instructions, configuration, and the complete command reference.
+Visit [docs.nrz.khulnasoft.com](https://docs.nrz.khulnasoft.com/cli)
+for guides, migration instructions, configuration, and the complete
+command reference.
 
 ## Community
 
 Report bugs in
 [GitHub Issues](https://github.com/khulnasoft/nrz/issues), ask
 questions and share ideas in
-[GitHub Discussions](https://github.com/khulnasoft/nrz/discussions), or
-chat with the community on
+[GitHub Discussions](https://github.com/khulnasoft/nrz/discussions),
+or chat with the community on
 [Discord](https://discord.com/invite/qdbXTqxZzZ). Please follow the
 [Code of Conduct](https://github.com/khulnasoft/nrz/blob/main/CODE_OF_CONDUCT.md)
 in all community spaces.

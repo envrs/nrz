@@ -39,7 +39,11 @@ t.test('read and write a project config', async t => {
   const dir = t.testdir({
     'nrz.json':
       JSON.stringify(
-        { config: { registry: 'https://registry.nrz.khulnasoft.com/' } },
+        {
+          config: {
+            registry: 'https://registry.nrz.khulnasoft.com/',
+          },
+        },
         null,
         '\t',
       ) + '\n',
@@ -51,7 +55,10 @@ t.test('read and write a project config', async t => {
 
   t.equal(conf, await Config.load(dir + '/a/b'), 'load is memoized')
   t.equal(conf.parse(), conf, 'parsing a second time is no-op')
-  t.equal(conf.get('registry'), 'https://registry.nrz.khulnasoft.com/')
+  t.equal(
+    conf.get('registry'),
+    'https://registry.nrz.khulnasoft.com/',
+  )
   t.equal(conf.projectRoot, dir)
   await conf.addConfigToFile('project', { cache: dir + '/cache' })
   clearEnv()
@@ -102,7 +109,11 @@ t.test('read and write a user config', async t => {
     xdg: {
       'nrz.json':
         JSON.stringify(
-          { config: { registry: 'https://registry.nrz.khulnasoft.com/' } },
+          {
+            config: {
+              registry: 'https://registry.nrz.khulnasoft.com/',
+            },
+          },
           null,
           '\t',
         ) + '\n',
@@ -126,7 +137,10 @@ t.test('read and write a user config', async t => {
     },
   })
   const conf = await Config.load(dir + '/a/b')
-  t.equal(conf.get('registry'), 'https://registry.nrz.khulnasoft.com/')
+  t.equal(
+    conf.get('registry'),
+    'https://registry.nrz.khulnasoft.com/',
+  )
   t.equal(conf.projectRoot, dir)
   await conf.addConfigToFile('user', { cache: dir + '/cache' })
   clearEnv()

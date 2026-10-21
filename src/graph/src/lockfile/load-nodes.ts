@@ -1,9 +1,5 @@
 import { error } from '@nrz/error-cause'
-import {
-  asDepID,
-  splitDepID,
-  splitExtra,
-} from '@nrz/dep-id/browser'
+import { asDepID, splitDepID, splitExtra } from '@nrz/dep-id/browser'
 import {
   getBooleanFlagsFromNum,
   getBuildStateFromNum,

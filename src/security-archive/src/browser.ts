@@ -1,8 +1,4 @@
-import {
-  asDepID,
-  baseDepID,
-  splitDepID,
-} from '@nrz/dep-id/browser'
+import { asDepID, baseDepID, splitDepID } from '@nrz/dep-id/browser'
 import { error } from '@nrz/error-cause'
 import { defaultRegistryName } from '@nrz/spec/browser'
 import { asPackageReportData } from './types.ts'

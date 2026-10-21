@@ -16,10 +16,10 @@ that are involved in a given install.
 
 ## Overview
 
-The `@nrz/graph` workspace models a project's dependency
-relationships and drives npm-compatible installs by computing how
-`node_modules` should be structured. It exposes a public API through
-`src/index.ts` that re-exports core types and workflows.
+The `@nrz/graph` workspace models a project's dependency relationships
+and drives npm-compatible installs by computing how `node_modules`
+should be structured. It exposes a public API through `src/index.ts`
+that re-exports core types and workflows.
 
 At a glance:
 
@@ -39,8 +39,7 @@ At a glance:
 
 - Importers: Root-level nodes used as starting points of the graph.
   The `mainImporter` is the project root (its `package.json`), and the
-  remaining importers are workspaces discovered by
-  `@nrz/workspaces`.
+  remaining importers are workspaces discovered by `@nrz/workspaces`.
 - Hidden Lockfile: A performance optimization stored at
   `node_modules/.nrz-lock.json` mirroring the current on-disk state to
   accelerate subsequent loads of the Actual graph.
@@ -292,12 +291,11 @@ to the filesystem.
   semantics
 - `@nrz/semver`: Semantic version parsing/comparison
 - `@nrz/satisfies`: Check if a DepID satisfies a Spec
-- `@nrz/package-info`: Fetch remote manifests and artifacts
-  (registry, git, tarball)
+- `@nrz/package-info`: Fetch remote manifests and artifacts (registry,
+  git, tarball)
 - `@nrz/package-json`: Read and cache local `package.json` files
 - `@nrz/workspaces`: Monorepo workspace discovery and grouping
-- `@nrz/rollback-remove`: Safe file removal with rollback
-  capability
+- `@nrz/rollback-remove`: Safe file removal with rollback capability
 - `@nrz/nrz-json`: Load `nrz.json` configuration (modifiers, etc.)
 
 ## References

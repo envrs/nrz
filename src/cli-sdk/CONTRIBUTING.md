@@ -11,8 +11,8 @@ in one place!
 
 But it must come along with ruthless repeated refactoring. Whenever
 possible, certainly before considering a feature "done", create a new
-workspace or add the functionality to an existing `@nrz/*` library
-in this project.
+workspace or add the functionality to an existing `@nrz/*` library in
+this project.
 
 _Only_ the following sorts of functionality belong here in the cli
 project directly:

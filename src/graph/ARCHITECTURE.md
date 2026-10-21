@@ -4,8 +4,8 @@ title: '@nrz/graph Architecture'
 
 # @nrz/graph Architecture
 
-This document provides an architectural overview of the
-`@nrz/graph` library for new team members.
+This document provides an architectural overview of the `@nrz/graph`
+library for new team members.
 
 ## Overview
 

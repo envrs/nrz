@@ -69,11 +69,10 @@ the actual byte length of the response body.
 Tarball entries with an `integrity` header, gzipped or not, are also
 passed to that child with the global store root (the `storeRoot`
 option, default `storeRoot(cache)`, i.e. `<cache>/store/v1`, also at
-`@nrz/registry-client/store-root`), so it can explode them there
-when `NRZ_STORE_LINKER` enables the store.
-`queueForStore(key, integrity)` queues an already cached tarball (a
-`cachedBody()` hit) the same way: exploded when the store is on, else
-un-gzipped.
+`@nrz/registry-client/store-root`), so it can explode them there when
+`NRZ_STORE_LINKER` enables the store. `queueForStore(key, integrity)`
+queues an already cached tarball (a `cachedBody()` hit) the same way:
+exploded when the store is on, else un-gzipped.
 
 ## Proxies
 
@@ -115,8 +114,7 @@ this check, if desired.
 Note that the integrity provided to `cache.fetch()` or `cache.set()`
 does _not_ typically match the calculated integrity of the object
 being cached. Typically, the integrity is related to the body of the
-response that a `@nrz/registry-client.CacheEntry` object
-represents.
+response that a `@nrz/registry-client.CacheEntry` object represents.
 
 ## Usage
 

@@ -1,8 +1,5 @@
 import { save } from '@nrz/nrz-json'
-import {
-  migratableWSConfig,
-  resolveWSConfig,
-} from '@nrz/workspaces'
+import { migratableWSConfig, resolveWSConfig } from '@nrz/workspaces'
 import type { WorkspaceConfigSource } from '@nrz/workspaces'
 import type { LoadedConfig } from './config/index.ts'
 import { stderr } from './output.ts'

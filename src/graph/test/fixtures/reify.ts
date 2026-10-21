@@ -13,10 +13,7 @@ import type {
   PackageInfoClientRequestOptions,
   Resolution,
 } from '@nrz/package-info'
-import {
-  asNormalizedManifest,
-  normalizeManifest,
-} from '@nrz/types'
+import { asNormalizedManifest, normalizeManifest } from '@nrz/types'
 import type { Manifest } from '@nrz/types'
 import {
   existsSync,

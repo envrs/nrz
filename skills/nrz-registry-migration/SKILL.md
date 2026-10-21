@@ -12,10 +12,10 @@ description:
 
 # Migrate a repository to the nrz registry
 
-Docs index: [llms.txt](https://docs.nrz.khulnasoft.com/llms.txt). Every docs page
-is Markdown at its URL + `.md`; read the linked page before editing
-config. Examples use the account slug `acme`; replace it with the
-user's.
+Docs index: [llms.txt](https://docs.nrz.khulnasoft.com/llms.txt).
+Every docs page is Markdown at its URL + `.md`; read the linked page
+before editing config. Examples use the account slug `acme`; replace
+it with the user's.
 
 ## Rules
 
@@ -42,7 +42,8 @@ Each account has two registries:
 - `https://registry.nrz.io/acme/main/`: the account's own packages.
   Map the scope to it.
 
-Accounts ([sign up](https://docs.nrz.khulnasoft.com/registry.md#sign-up),
+Accounts
+([sign up](https://docs.nrz.khulnasoft.com/registry.md#sign-up),
 [tokens](https://docs.nrz.khulnasoft.com/registry/tokens.md#personal-and-service-tokens)):
 invite each developer, who logs in (or creates a personal token). CI,
 Vercel and each agent sandbox get their own `package:read` service
@@ -172,9 +173,9 @@ Details:
 
 ## Troubleshooting
 
-| Symptom                                                     | Cause                                                                                                                    |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `401` / `No authorization header was set`                   | token not reaching the tool (step 4): pnpm `${NRZ_TOKEN}` in a project `.npmrc`, or secret unset in that job             |
-| `EOTP` when publishing from CI                              | personal token; use a service token                                                                                      |
-| nrz still fetches from `registry.npmjs.org`                 | kept `nrz-lock.json` (step 3)                                                                                            |
+| Symptom                                                     | Cause                                                                                                                                |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `401` / `No authorization header was set`                   | token not reaching the tool (step 4): pnpm `${NRZ_TOKEN}` in a project `.npmrc`, or secret unset in that job                         |
+| `EOTP` when publishing from CI                              | personal token; use a service token                                                                                                  |
+| nrz still fetches from `registry.npmjs.org`                 | kept `nrz-lock.json` (step 3)                                                                                                        |
 | pnpm 12 `no version found for the latest tag` on the mirror | mirror bug on pnpm 12: [pnpm guide](https://docs.nrz.khulnasoft.com/registry/publishing/pnpm.md) pins `pnpm@11.26.0` (confirm first) |

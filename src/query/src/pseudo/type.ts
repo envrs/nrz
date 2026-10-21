@@ -1,8 +1,5 @@
 import { splitDepID } from '@nrz/dep-id/browser'
-import {
-  asPostcssNodeWithChildren,
-  asTagNode,
-} from '@nrz/dss-parser'
+import { asPostcssNodeWithChildren, asTagNode } from '@nrz/dss-parser'
 import { removeDanglingEdges, removeNode } from './helpers.ts'
 import type { ParserState } from '../types.ts'
 

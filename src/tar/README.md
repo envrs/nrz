@@ -11,8 +11,8 @@ or raw) into a specified folder.
 ## Overview
 
 If you are unpacking anything other than npm packages, in precisely
-the way that [nrz](https://nrz.khulnasoft.com) does, then this is probably not
-what you're looking for.
+the way that [nrz](https://nrz.khulnasoft.com) does, then this is
+probably not what you're looking for.
 
 For a very complete and battle-tested generic tar implementation in
 JavaScript, see [node-tar](http://npm.im/tar).

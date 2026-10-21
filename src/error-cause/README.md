@@ -333,8 +333,7 @@ appropriate, and should be added to this list over time.
 - `found` - The actual value, which was not wanted.
 - `max` - A maximum value, which was exceeded.
 - `min` - A minimum value, which was not met.
-- `response` - An HTTP response or
-  `@nrz/registry-client.CacheEntry`
+- `response` - An HTTP response or `@nrz/registry-client.CacheEntry`
 - `url` - A string or URL object
 - `repository` - String git repository remote
 - `version` - string or `@nrz/semver.Version`

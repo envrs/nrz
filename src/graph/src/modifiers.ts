@@ -1,7 +1,4 @@
-import {
-  parseBreadcrumb,
-  specificitySort,
-} from '@nrz/dss-breadcrumb'
+import { parseBreadcrumb, specificitySort } from '@nrz/dss-breadcrumb'
 import { error } from '@nrz/error-cause'
 import { Spec } from '@nrz/spec'
 import {

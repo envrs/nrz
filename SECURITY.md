@@ -7,8 +7,8 @@ pre-release versions (`-rc`, etc.) are not supported.
 
 ## Reporting a Vulnerability
 
-Email [security@khulnasoft.com](mailto:security@khulnasoft.com). Do not open a public
-issue.
+Email [security@khulnasoft.com](mailto:security@khulnasoft.com). Do
+not open a public issue.
 
 Include the affected version, impact, and steps to reproduce.
 

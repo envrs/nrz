@@ -1,8 +1,7 @@
 # Agent Guide to the nrz Monorepo
 
 nrz monorepo. Workspaces in `src/*`, `infra/*`, `www/*`. Workspaces
-published as `@nrz/*`, the built nrz CLI itself is published as
-`nrz`.
+published as `@nrz/*`, the built nrz CLI itself is published as `nrz`.
 
 ## Workspaces
 
@@ -57,12 +56,11 @@ published as `@nrz/*`, the built nrz CLI itself is published as
 - Agent skills published from this repo live in root `skills/<name>/`,
   or in a workspace whose package ships them
   (`src/query/skills/dss-query`, mounted by #1540). List each in
-  `.claude-plugin/plugin.json` `skills` (how
-  `nrx skills add nrz/nrz` finds workspace ones) and in
-  `skills.sh.json`. Root ones also need a `!/skills/<name>/` line in
-  `.gitignore` (`/skills/*` is gitignored for #1540 mounts) and an
-  entry in `www/docs/src/lib/skills.ts`; `www/docs` copies them into
-  `public/skills` at prebuild/predev.
+  `.claude-plugin/plugin.json` `skills` (how `nrx skills add nrz/nrz`
+  finds workspace ones) and in `skills.sh.json`. Root ones also need a
+  `!/skills/<name>/` line in `.gitignore` (`/skills/*` is gitignored
+  for #1540 mounts) and an entry in `www/docs/src/lib/skills.ts`;
+  `www/docs` copies them into `public/skills` at prebuild/predev.
 
 ## Development
 

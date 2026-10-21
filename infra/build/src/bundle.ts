@@ -17,9 +17,7 @@ import type { Bin } from './bins.ts'
 import { EOL } from 'node:os'
 
 export const CLI = dirname(
-  createRequire(import.meta.url).resolve(
-    '@nrz/cli-sdk/package.json',
-  ),
+  createRequire(import.meta.url).resolve('@nrz/cli-sdk/package.json'),
 )
 
 const WORKSPACE_DIR = resolve(CLI, '..')

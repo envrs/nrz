@@ -1,13 +1,13 @@
 # nrz/nrz Monorepo Structure
 
-The https://github.com/khulnasoft/nrz repository is a monorepo, meaning
-that it's organized in such a way that subfolders located in `src/*`,
-`infra/*` and `www/*` are workspaces. Workspaces are individual
-packages, sometimes these packages are published to a public registry
-to be reused on their own like in the case of our monorepo the
-workspaces located at `src/*` are published to the npm registry so
-that they can be reused by different projects and the extended
-community of nrz users.
+The https://github.com/khulnasoft/nrz repository is a monorepo,
+meaning that it's organized in such a way that subfolders located in
+`src/*`, `infra/*` and `www/*` are workspaces. Workspaces are
+individual packages, sometimes these packages are published to a
+public registry to be reused on their own like in the case of our
+monorepo the workspaces located at `src/*` are published to the npm
+registry so that they can be reused by different projects and the
+extended community of nrz users.
 
 You can read resources such as https://monorepo.tools/ to understand
 more about monorepos and how to work with them.
@@ -27,12 +27,12 @@ Following is a list of each workspace along with a brief description:
 - src/dss-breadcrumb, `@nrz/dss-breadcrumb` - A library to parse
   Dependency Selector Syntax queries into an object that can be used
   for interactive matching items
-- src/dep-id, `@nrz/dep-id` - An unique id to represent each Node
-  of our Graph data structure
+- src/dep-id, `@nrz/dep-id` - An unique id to represent each Node of
+  our Graph data structure
 - src/dot-prop, `@nrz/dot-prop` - Our fork of
   https://www.npmjs.com/package/dot-prop
-- src/error-cause, `@nrz/error-cause` - Standardize error messages
-  for our application
+- src/error-cause, `@nrz/error-cause` - Standardize error messages for
+  our application
 - src/fast-split, `@nrz/fast-split` - an optimized String.split()
   replacement
 - src/git, `@nrz/git` - A utility for spawning git
@@ -43,32 +43,31 @@ Following is a list of each workspace along with a brief description:
 - src/keychain - `@nrz/keychain` - Implements a secure way to store
   authorizaton tokens to access registries
 - src/output, `@nrz/output` - CLI output formatting
-- src/package-info, `@nrz/package-info` - Retrieve package
-  information
-- src/package-json, `@nrz/package-json` - Helper module to read
-  from and write to `package.json` files
+- src/package-info, `@nrz/package-info` - Retrieve package information
+- src/package-json, `@nrz/package-json` - Helper module to read from
+  and write to `package.json` files
 - src/query/, `@nrz/query` - The query language implementation
 - src/registry-client/, `@nrz/registry-client` - A fetch client to
   interact with remote registries
 - src/run, `@nrz/run` - Command execution
-- src/satisfies, `@nrz/satisfies` - How we compare DepID to see if
-  it satisfies a given Spec
-- src/security-archive, `@nrz/security-archive` - A custom cache
-  for security data fetched from Socket.dev APIs
+- src/satisfies, `@nrz/satisfies` - How we compare DepID to see if it
+  satisfies a given Spec
+- src/security-archive, `@nrz/security-archive` - A custom cache for
+  security data fetched from Socket.dev APIs
 - src/semver, `@nrz/semver` - A library for parsing, validating &
   comparing Semantic Versions
-- src/spec, `@nrz/spec` - Parses package specifiers, this defines
-  our Spec class which is heavily used in our Graph and adjancent
+- src/spec, `@nrz/spec` - Parses package specifiers, this defines our
+  Spec class which is heavily used in our Graph and adjancent
   libraries
 - src/tar, `@nrz/tar` - A library for unpacking JavaScript package
   tarballs into a folder
 - src/types, `@nrz/types` - Common types to the entire application
-- src/url-open, `@nrz/url-open` - Helper to open a given URL in a
-  OS default browser
+- src/url-open, `@nrz/url-open` - Helper to open a given URL in a OS
+  default browser
 - src/nrx, `@nrz/nrx` - Implements the logic for the `nrz exec`
   command
-- src/workspaces, `@nrz/workspaces` - Loads and handles workspaces,
-  a primary feature of JavaScript package managers
+- src/workspaces, `@nrz/workspaces` - Loads and handles workspaces, a
+  primary feature of JavaScript package managers
 - src/xdg, `@nrz/xdg` - Manages common OS locations to store config
   files and other types of data
 
@@ -133,8 +132,8 @@ xvn format
 You MUST run the linter before completing your task. To run the code
 linter for a given workspace, make sure you're in the appropriate
 folder for the workspace you're currently working on, for example to
-lint code on the `@nrz/semver` workspace navigate to the
-`src/semver` folder and then run the command:
+lint code on the `@nrz/semver` workspace navigate to the `src/semver`
+folder and then run the command:
 
 ```bash
 xvn lint
@@ -153,8 +152,8 @@ workflow defined below.
 If you're working on improving the current code coverage for a given
 workspace, make sure you're in the appropriate folder for the
 workspace you're currently working on, for example to get code
-coverage on the `@nrz/semver` workspace navigate to the
-`src/semver` folder and then run the command:
+coverage on the `@nrz/semver` workspace navigate to the `src/semver`
+folder and then run the command:
 
 ```bash
 xvn test --coverage-report=text-lcov
@@ -168,8 +167,8 @@ suite.
 
 To run the type checker for a given workspace, make sure you're in the
 appropriate folder for the workspace you're currently working on, for
-example to check types on the `@nrz/semver` workspace navigate to
-the `src/semver` folder and then run the command:
+example to check types on the `@nrz/semver` workspace navigate to the
+`src/semver` folder and then run the command:
 
 ```bash
 xvn posttest

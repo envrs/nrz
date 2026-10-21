@@ -80,8 +80,7 @@ can set the `gitShallow` option to `true` or `false` respectively.
 Fetch a representation of all of the named references in a given
 repository. The resulting doc is intentionally somewhat
 packument-like, so that git semver ranges can be applied using the
-same [`@nrz/pick-manifest`](http://npm.im/@nrz/pick-manifest)
-logic.
+same [`@nrz/pick-manifest`](http://npm.im/@nrz/pick-manifest) logic.
 
 The resulting object looks like:
 
@@ -161,8 +160,8 @@ no value is found, it will return `undefined`.
   - `minTimeout`: Defaults to `opts.fetchRetryMintimeout` or 1000
 - `git` Path to the `git` binary to use. Will look up the first `git`
   in the `PATH` if not specified.
-- `spec` The [`@nrz/spec`](http://npm.im/@nrz/spec) specifier
-  object for the thing being fetched (if relevant).
+- `spec` The [`@nrz/spec`](http://npm.im/@nrz/spec) specifier object
+  for the thing being fetched (if relevant).
 - `fakePlatform` set to a fake value of `process.platform` to use.
   (Just for testing `win32` behavior on Unix, and vice versa.)
 - `cwd` The current working dir for the git command. Particularly for

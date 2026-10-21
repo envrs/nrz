@@ -1,8 +1,5 @@
 import type { Cache } from '@nrz/cache'
-import {
-  readStoreIndex,
-  storeIndexPath,
-} from '@nrz/tar/store-index'
+import { readStoreIndex, storeIndexPath } from '@nrz/tar/store-index'
 import { unpackToStoreSync } from '@nrz/tar/unpack'
 import { integrityHex, tarballFormat } from '@nrz/types'
 import type { Integrity, TarballFormat } from '@nrz/types'

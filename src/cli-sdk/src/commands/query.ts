@@ -73,8 +73,7 @@ export const usage: CommandUsage = () =>
           'Query all direct project dependencies with a "build" script',
       },
       [`'[name^="@nrz"]'`]: {
-        description:
-          'Query packages with names starting with "@nrz"',
+        description: 'Query packages with names starting with "@nrz"',
       },
       [`'*:license(copyleft) --expect-results=0'`]: {
         description: 'Errors if a copyleft licensed package is found',

@@ -46,11 +46,11 @@
     "knip": "knip --no-config-hints",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
-    "xvn": "./scripts/bins/xvn",
-    "xvnx": "./scripts/bins/xvnx",
-    "nrz": "./scripts/bins/nrz",
     "nrx": "./scripts/bins/nrx",
-    "nrxl": "./scripts/bins/nrxl"
+    "nrxl": "./scripts/bins/nrxl",
+    "nrz": "./scripts/bins/nrz",
+    "xvn": "./scripts/bins/xvn",
+    "xvnx": "./scripts/bins/xvnx"
   },
   "prettier": "./.prettierrc.js",
   "type": "module",

@@ -65,8 +65,8 @@ this repository and its corresponding license:
 
 #### Reusable Client Internals (`src/*`)
 
-| Workspace Name                                     | License                                               | Downloads                                                                         |
-| -------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Workspace Name                                  | License                                               | Downloads                                                                      |
+| ----------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
 | [@nrz/cache](./src/cache)                       | [BSD-2-Clause-Patent](./src/cache/LICENSE)            | ![NPM Downloads](https://img.shields.io/npm/dm/@nrz/cache?logo=npm)            |
 | [@nrz/cache-unzip](./src/cache-unzip)           | [BSD-2-Clause-Patent](./src/cache-unzip/LICENSE)      | ![NPM Downloads](https://img.shields.io/npm/dm/@nrz/cache-unzip?logo=npm)      |
 | [@nrz/cli-sdk](./src/cli-sdk)                   | [BSD-2-Clause-Patent](./src/cli-sdk/LICENSE)          | ![NPM Downloads](https://img.shields.io/npm/dm/@nrz/cli-sdk?logo=npm)          |
@@ -108,16 +108,16 @@ this repository and its corresponding license:
 
 #### Infrastructure (`infra/*`)
 
-| Workspace Name                           | License                                           | Downloads                                                               |
-| ---------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------- |
-| [@nrz/benchmark](./infra/benchmark)   | [BSD-2-Clause-Patent](./infra/benchmark/LICENSE)  | N/A                                                                     |
-| [@nrz/infra-build](./infra/build)     | [BSD-2-Clause-Patent](./infra/build/LICENSE)      | N/A                                                                     |
-| [nrz](./infra/cli)                       | [BSD-2-Clause-Patent](./infra/cli/LICENSE)        | ![NPM Downloads](https://img.shields.io/npm/dm/nrz?logo=npm)            |
+| Workspace Name                        | License                                           | Downloads                                                            |
+| ------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| [@nrz/benchmark](./infra/benchmark)   | [BSD-2-Clause-Patent](./infra/benchmark/LICENSE)  | N/A                                                                  |
+| [@nrz/infra-build](./infra/build)     | [BSD-2-Clause-Patent](./infra/build/LICENSE)      | N/A                                                                  |
+| [nrz](./infra/cli)                    | [BSD-2-Clause-Patent](./infra/cli/LICENSE)        | ![NPM Downloads](https://img.shields.io/npm/dm/nrz?logo=npm)         |
 | [@nrz/cli-js](./infra/cli-js)         | [BSD-2-Clause-Patent](./infra/cli-js/LICENSE)     | ![NPM Downloads](https://img.shields.io/npm/dm/@nrz/cli-js?logo=npm) |
-| [@nrz/smoke-test](./infra/smoke-test) | [BSD-2-Clause-Patent](./infra/smoke-test/LICENSE) | N/A                                                                     |
+| [@nrz/smoke-test](./infra/smoke-test) | [BSD-2-Clause-Patent](./infra/smoke-test/LICENSE) | N/A                                                                  |
 
 #### Documentation (`www/*`)
 
-| Workspace Name             | License                                   |
-| -------------------------- | ----------------------------------------- |
+| Workspace Name          | License                                   |
+| ----------------------- | ----------------------------------------- |
 | [@nrz/docs](./www/docs) | [BSD-2-Clause-Patent](./www/docs/LICENSE) |
