@@ -39,7 +39,7 @@ export const loadCommand = async <T>(
   command: Commands[keyof Commands] | undefined,
 ): Promise<Command<T>> => {
   try {
-    return (await import(`./commands/${command}.ts`)) as Command<T>
+    return (await import(`./commands/${command}.js`)) as Command<T>
   } catch (e) {
     throw error('Could not load command', {
       found: command,

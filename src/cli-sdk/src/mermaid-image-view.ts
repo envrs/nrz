@@ -33,7 +33,7 @@ export class MermaidImageView extends ViewClass<MermaidOutputGraph> {
 
     // Dynamic import to avoid loading render-mermaid eagerly
     const { renderMermaidToFile, renderMermaidToPng } =
-      await import('./render-mermaid.ts')
+      await import('./render-mermaid.js')
 
     if (this.format === 'png') {
       stderr(`Generating PNG image...`)

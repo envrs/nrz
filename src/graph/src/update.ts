@@ -171,7 +171,7 @@ export const update = async (
 
   // after the try: a link failure must not roll back the update
   if (!allowSkills) return result
-  const { linkSkills } = await import('./skills/index.ts')
+  const { linkSkills } = await import('./skills/index.js')
   result.skills = await linkSkills({
     ...options,
     graph: result.graph,

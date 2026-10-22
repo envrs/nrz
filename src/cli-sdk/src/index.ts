@@ -122,7 +122,7 @@ const run = async () => {
 
   if (nrz.command === 'registry') {
     const { dispatchRegistry } =
-      await import('./commands/registry.ts')
+      await import('./commands/registry.js')
     await dispatchRegistry(nrz)
   }
 

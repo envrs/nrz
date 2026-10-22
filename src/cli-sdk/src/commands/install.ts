@@ -219,7 +219,7 @@ export const views = {
   },
   human: lazyView(
     async () =>
-      (await import('./install/reporter.ts')).InstallReporter,
+      (await import('./install/reporter.js')).InstallReporter,
   ),
 } as const satisfies Views<InstallResult>
 

@@ -2,7 +2,7 @@ import type { HasSkills } from '@nrz/query'
 import { isNode } from '../node.js'
 import type * as Skills from './index.js'
 
-const load = () => import('./index.ts')
+const load = () => import('./index.js')
 
 /** `listSkills`, loading the skills code on first use. */
 export const listSkills: typeof Skills.listSkills = async o =>

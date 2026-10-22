@@ -386,7 +386,7 @@ export const install = async (
 
   // after the try: a link failure must not roll back the install
   if (!allowSkills) return result
-  const { linkSkills } = await import('./skills/index.ts')
+  const { linkSkills } = await import('./skills/index.js')
   result.skills = await linkSkills({
     ...options,
     graph: result.graph,

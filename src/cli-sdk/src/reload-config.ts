@@ -15,6 +15,6 @@ export const reloadConfig = async (
     /* c8 ignore next */
   } catch {}
 
-  const { Config } = await import('./config/index.ts')
+  const { Config } = await import('./config/index.js')
   return Config.load(folder, process.argv, true)
 }
