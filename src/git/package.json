@@ -7,7 +7,7 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/git"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
     "@types/promise-retry": "^1.1.6",
     "@nrz/error-cause": "workspace:*",

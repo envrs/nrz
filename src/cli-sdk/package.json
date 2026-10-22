@@ -7,7 +7,7 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/cli-sdk"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2",
     "@nrz/config": "workspace:*",

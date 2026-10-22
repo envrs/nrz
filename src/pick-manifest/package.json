@@ -7,7 +7,7 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/pick-manifest"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
     "@nrz/error-cause": "workspace:*",
     "@nrz/semver": "workspace:*",

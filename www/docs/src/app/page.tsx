@@ -50,7 +50,7 @@ const org = {
   contactPoint: {
     '@type': 'ContactPoint',
     contactType: 'customer support',
-    email: 'support@khulnasoft.com.com',
+    email: 'support@khulnasoft.com',
   },
   sameAs: [
     'https://github.com/khulnasoft',

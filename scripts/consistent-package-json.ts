@@ -341,7 +341,7 @@ const fixPackage = async (ws: Workspace, config: WorkspaceConfig) => {
   }
 
   ws.pj.author =
-    'KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)'
+    'KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)'
 
   await fixEngines(ws)
   await fixCatalogs(ws, config)

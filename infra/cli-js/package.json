@@ -1,13 +1,13 @@
 {
   "name": "@nrz/cli-js",
   "description": "The nrz CLI",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "infra/cli-js"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "devDependencies": {
     "@nrz/infra-build": "workspace:*"
   },

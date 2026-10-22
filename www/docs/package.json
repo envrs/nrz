@@ -7,7 +7,7 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "www/docs"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "dependencies": {
     "@mdx-js/react": "^3.1.1",
     "@types/mdx": "^2.0.14",

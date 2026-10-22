@@ -60,7 +60,7 @@ project may be further defined and clarified by project maintainers.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior
 may be reported by contacting the project team at
-[support@khulnasoft.com.com](mailto:support@khulnasoft.com.com). All
+[support@khulnasoft.com](mailto:support@khulnasoft.com). All
 complaints will be reviewed and investigated and will result in a
 response that is deemed necessary and appropriate to the
 circumstances. The project team is obligated to maintain

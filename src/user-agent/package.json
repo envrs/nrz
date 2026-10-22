@@ -7,7 +7,7 @@
     "url": "git+https://github.com/khulnasoft/nrz.git",
     "directory": "src/user-agent"
   },
-  "author": "KhulnaSoft, Ltd <support@khulnasoft.com.com> (http://nrz.khulnasoft.com)",
+  "author": "KhulnaSoft, Ltd <support@khulnasoft.com> (http://nrz.khulnasoft.com)",
   "devDependencies": {
     "@eslint/js": "catalog:",
     "@types/node": "catalog:",
